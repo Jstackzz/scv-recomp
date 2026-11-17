@@ -1,0 +1,16 @@
+# game files and everything made from them: never in the repository
+/game/
+/orig/
+*.iso
+*.xex
+*.xexp
+*.cpk
+sc5/generated/default/
+sc5/out/
+# toolchains and builds
+/external/
+/build/
+/dist/
+out/
+__pycache__/
+*.log

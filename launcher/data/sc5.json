@@ -1,0 +1,98 @@
+{
+  "id": "sc5",
+  "title": "Soulcalibur V",
+  "short": "SCV",
+  "edition": "Xbox 360, World",
+  "title_id": "4E4D083D",
+  "media_id": "165FAD4F",
+  "default_exe": "sc5.exe",
+  "xex_sha1": "dfe4d5e1e9198bc9df6db46ddf2bdf2a5cbf3f80",
+  "xex_version": "0.0.0.2",
+  "disc_name": "Soulcalibur V (World).iso",
+  "disc_sha1": "43dbb40b9ef4e5a651623ada40ed4eb2066017d5",
+  "title_update": {
+    "name": "Title Update 1",
+    "package": "TU_174Q21T_0000008000000.0000000000082",
+    "xexp_sha1": "47a09662fd3fe376d283208fcd8a31eee819c736",
+    "from_version": "0.0.0.2",
+    "to_version": "0.0.1.2",
+    "files": {
+      "default.xexp": "47a09662fd3fe376d283208fcd8a31eee819c736",
+      "patch.cpk": "0b2b9d30ce56c02fafa91a0f4fbdaeb23d441a93"
+    }
+  },
+  "modes": [
+    {
+      "id": "versus",
+      "name": "Versus",
+      "description": "One-on-one fight, best of three rounds by default. Pick your character here or on the game's own select screen.",
+      "online": true,
+      "ranked": true,
+      "roster": "characters",
+      "character_select": "launcher",
+      "rounds": [1, 3, 5],
+      "default_rounds": 3
+    },
+    {
+      "id": "sparring",
+      "name": "Online Practice",
+      "description": "Practice with a friend through a lobby's code: no timer, health refills, nobody is knocked out, and BACK in the game goes back to character select. Nothing is recorded.",
+      "online": true,
+      "ranked": false,
+      "lobby_only": true,
+      "roster": "characters",
+      "character_select": "launcher",
+      "rounds": [1],
+      "default_rounds": 1
+    },
+    {
+      "id": "practice",
+      "name": "Practice",
+      "description": "Offline training on this PC.",
+      "online": false,
+      "ranked": false,
+      "roster": "characters",
+      "character_select": "launcher",
+      "rounds": [1],
+      "default_rounds": 1
+    }
+  ],
+  "rosters": {
+    "characters": [
+      {"id": "Patroklos", "name": "Patroklos", "game_id": 18},
+      {"id": "Pyrrha", "name": "Pyrrha", "game_id": 16},
+      {"id": "ZWEI", "name": "Z.W.E.I.", "game_id": 14},
+      {"id": "Viola", "name": "Viola", "game_id": 15},
+      {"id": "Natsu", "name": "Natsu", "game_id": 20},
+      {"id": "Xiba", "name": "Xiba", "game_id": 21},
+      {"id": "Leixia", "name": "Leixia", "game_id": 22},
+      {"id": "AeonCalcos", "name": "Aeon Calcos", "game_id": 23},
+      {"id": "Siegfried", "name": "Siegfried", "game_id": 3},
+      {"id": "Nightmare", "name": "Nightmare", "game_id": 6},
+      {"id": "Ivy", "name": "Ivy", "game_id": 4},
+      {"id": "Tira", "name": "Tira", "game_id": 10},
+      {"id": "Mitsurugi", "name": "Mitsurugi", "game_id": 0},
+      {"id": "Hilde", "name": "Hilde", "game_id": 11},
+      {"id": "Astaroth", "name": "Astaroth", "game_id": 7},
+      {"id": "Voldo", "name": "Voldo", "game_id": 2},
+      {"id": "Cervantes", "name": "Cervantes", "game_id": 8},
+      {"id": "Raphael", "name": "Raphael", "game_id": 9},
+      {"id": "Maxi", "name": "Maxi", "game_id": 1},
+      {"id": "Yoshimitsu", "name": "Yoshimitsu", "game_id": 24},
+      {"id": "Ezio", "name": "Ezio Auditore", "game_id": 31},
+      {"id": "AlphaPatroklos", "name": "Alpha Patroklos", "game_id": 19, "secret": true},
+      {"id": "PyrrhaOmega", "name": "Pyrrha Omega", "game_id": 17, "secret": true},
+      {"id": "Algol", "name": "Algol", "game_id": 12, "secret": true},
+      {"id": "Elysium", "name": "Elysium", "game_id": 25, "secret": true},
+      {"id": "EdgeMaster", "name": "Edge Master", "game_id": 5, "secret": true},
+      {"id": "Kilik", "name": "Kilik", "game_id": 26, "secret": true}
+    ]
+  },
+  "not_playable": [
+    {"name": "Dampierre", "game_id": 13, "note": "downloadable character: only with the player's own DLC package, picked in the game"}
+  ],
+  "notes": "Soulcalibur V's roster on the Xbox 360 and the PlayStation 3. Ezio Auditore is the guest character of both versions. Elysium, Edge Master and Kilik borrow other fighting styles; Devil Jin is only a fighting style for created characters, not on the select screen. game_id is the game's own character id, as its result lines name the fighters (\"3.0\": Siegfried in his first costume). Dampierre is downloadable content: never unlocked for everyone, so the launcher does not offer him; a player who has the package picks him on the game's own select screen.",
+  "sources": [
+    "https://en.wikipedia.org/wiki/Soulcalibur_V"
+  ]
+}

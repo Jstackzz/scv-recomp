@@ -1,0 +1,3 @@
+// The launcher's file icon (Explorer, shortcuts, the taskbar until Qt sets the window's): the SC5 Online emblem
+// (launcher/tools/make_art.py)
+IDI_ICON1 ICON "sc5.ico"

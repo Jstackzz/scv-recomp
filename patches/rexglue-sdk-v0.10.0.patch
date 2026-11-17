@@ -1,0 +1,1551 @@
+diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
+index d9a64eb..3809bbd 100644
+--- a/cmake/rexglue_install.cmake
++++ b/cmake/rexglue_install.cmake
+@@ -192,6 +192,11 @@ install(EXPORT rexglueTargets
+ # Windows: HKCU\Software\Kitware\CMake\Packages\rexglue  (REG_SZ, value name = MD5 hash)
+ # Unix:    ~/.cmake/packages/rexglue/<hash>               (file containing prefix path)
+ install(CODE [[
++  # REXGLUE_NO_PACKAGE_REGISTRY in the environment: a project's private SDK copy, which other projects on the
++  # same machine must not find through the registry
++  if(DEFINED ENV{REXGLUE_NO_PACKAGE_REGISTRY})
++    message(STATUS "Not registered in the CMake user package registry (REXGLUE_NO_PACKAGE_REGISTRY)")
++  else()
+     # Normalize path casing on Windows before hashing to avoid duplicate entries
+     if(CMAKE_HOST_WIN32)
+         string(TOLOWER "${CMAKE_INSTALL_PREFIX}" _reg_key)
+@@ -214,4 +219,5 @@ install(CODE [[
+     endif()
+     message(STATUS "Registered rexglue in CMake user package registry")
+     message(STATUS "  -> ${CMAKE_INSTALL_PREFIX}")
++  endif()
+ ]])
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index da8e432..e636672 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -12,7 +12,9 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <chrono>
+ #include <cstring>
++#include <deque>
+ #include <functional>
+ #include <memory>
+ #include <mutex>
+@@ -120,6 +122,9 @@ class CommandProcessor {
+ 
+   void UpdateWritePointer(uint32_t value);
+ 
++  // see system::IGraphicsSystem::SkipDrawsFromNow (any thread)
++  void SkipDrawsFromNow(bool skip);
++
+   void ExecutePacket(uint32_t ptr, uint32_t count);
+ 
+   bool is_paused() const { return paused_; }
+@@ -230,6 +235,16 @@ class CommandProcessor {
+   // Shared memexport readback enable state with backend legacy-flag override support.
+   bool IsReadbackMemexportEnabled(bool legacy_backend_flag) const;
+ 
++  // Between SkipDrawsFromNow's marks: the commands are of frames nobody sees. The backends skip
++  // their swaps and their draws to full-size render targets, and count here what they skipped.
++  bool skipping_draws() const { return skipping_draws_; }
++  struct SkippedDraws {
++    uint32_t runs = 0, swaps = 0, draws = 0, resolves = 0;
++    uint32_t vblanks = 0;  // vertical blanks given at once (see ExecutePacketType3_WAIT_REG_MEM)
++    uint32_t kept = 0, kept_width = 0, kept_height = 0;  // draws done, the largest target's size
++  };
++  SkippedDraws skipped_;
++
+   memory::Memory* memory_ = nullptr;
+   system::KernelState* kernel_state_ = nullptr;
+   GraphicsSystem* graphics_system_ = nullptr;
+@@ -278,6 +293,18 @@ class CommandProcessor {
+   const char* legacy_readback_memexport_cvar_name_ = nullptr;
+ 
+  private:
++  // the write index to execute up to: the next SkipDrawsFromNow mark, if it comes first (the marks
++  // at the read index switch skipping_draws_ first)
++  uint32_t SkipMarkedEnd(uint32_t write_ptr_index);
++  void SetSkippingDraws(bool skip);
++
++  // marks not reached yet: a ring index (dwords), and whether skipping starts or ends there
++  std::mutex skip_marks_mutex_;
++  std::deque<std::pair<uint32_t, bool>> skip_marks_;
++  std::atomic<bool> skip_marks_waiting_{false};
++  bool skipping_draws_ = false;
++  std::chrono::steady_clock::time_point skipped_logged_;
++
+   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
+   reg::DC_LUT_PWL_DATA gamma_ramp_pwl_rgb_[128][3] = {};
+   uint32_t gamma_ramp_rw_component_ = 0;
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index 96d362b..f20365b 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -365,7 +365,20 @@ class D3D12CommandProcessor : public CommandProcessor {
+                                   uint32_t normalized_color_mask);
+   bool UpdateBindings(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader,
+                       ID3D12RootSignature* root_signature, bool shared_memory_is_uav);
+-  bool IssueCopy_ReadbackResolvePath();
++  bool IssueCopy_ReadbackResolvePath(bool copy);
++  // A pass, here: the draws since the last resolve. Notes a draw of the pass: done, dropped while its
++  // pipeline was still being created (and what it sampled, see IssueCopy), or skipped in a frame
++  // nobody sees (skipping_draws, see IsSkippedTarget).
++  enum class PassDraw { kDone, kDropped, kSkipped };
++  void NotePassDraw(PassDraw draw, const Shader* vertex_shader, const Shader* pixel_shader);
++  // In frames nobody sees: whether the render target the registers describe is one whose draws are
++  // skipped (and whose passes' resolves copy nothing): the screen's size, not the small textures a
++  // game paints and keeps.
++  bool IsSkippedTarget() const;
++  // Whether the resolve the registers describe would copy into guest memory what the pass's dropped
++  // draws should have drawn: every draw of the pass was dropped, or a dropped one sampled memory the
++  // copy writes. Logs each resolve it holds back.
++  bool IsResolveOfDroppedDraws();
+   bool IssueDraw_MemexportReadbackFullPath(uint32_t total_size);
+   bool IssueDraw_MemexportReadbackFastPath(uint32_t total_size);
+ 
+@@ -760,6 +773,14 @@ class D3D12CommandProcessor : public CommandProcessor {
+ 
+   // Temporary storage for memexport stream constants used in the draw.
+   std::vector<draw_util::MemExportRange> memexport_ranges_;
++
++  // The current pass (NotePassDraw): draws done and dropped, whether a resolve has ended it, and the
++  // physical base addresses of the textures its dropped draws sampled.
++  uint32_t pass_draws_done_ = 0;
++  uint32_t pass_draws_dropped_ = 0;
++  uint32_t pass_draws_skipped_ = 0;
++  bool pass_resolved_ = false;
++  std::vector<uint32_t> pass_dropped_draw_textures_;
+ };
+ 
+ }  // namespace rex::graphics::d3d12
+diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
+index cd7693a..25fbe3f 100644
+--- a/include/rex/graphics/d3d12/render_target_cache.h
++++ b/include/rex/graphics/d3d12/render_target_cache.h
+@@ -74,10 +74,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+ 
+   // Performs the resolve to a shared memory area according to the current
+   // register values, and also clears the render targets if needed. Must be in a
+-  // frame for calling.
++  // frame for calling. Without `copy` only the clearing is done.
+   bool Resolve(const memory::Memory& memory, D3D12SharedMemory& shared_memory,
+                D3D12TextureCache& texture_cache, uint32_t& written_address_out,
+-               uint32_t& written_length_out);
++               uint32_t& written_length_out, bool copy = true);
+ 
+   // For host render targets.
+ 
+diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
+index ac6b056..a9785b4 100644
+--- a/include/rex/graphics/graphics_system.h
++++ b/include/rex/graphics/graphics_system.h
+@@ -77,6 +77,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   void SetInterruptCallback(uint32_t callback, uint32_t user_data) override;
+   void DispatchInterruptCallback(uint32_t source, uint32_t cpu);
+ 
++  void SkipDrawsFromNow(bool skip) override;
++  void HoldVblanks(int periods) override;
++  // A vertical blank now, besides the timer's (frames nobody sees wait for no display: the
++  // command processor's thread, see CommandProcessor::skipping_draws)
++  void VblankNow() { MarkVblank(); }
++
+   virtual void ClearCaches();
+   virtual void InvalidateGpuMemory();
+ 
+@@ -119,6 +125,8 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   uint32_t interrupt_callback_data_ = 0;
+ 
+   std::atomic<bool> vsync_worker_running_;
++  // blanks still to leave out (HoldVblanks)
++  std::atomic<int> vblanks_held_{0};
+   system::object_ref<system::XHostThread> vsync_worker_thread_;
+ 
+   RegisterFile register_file_;
+diff --git a/include/rex/kernel/xboxkrnl/rtl.h b/include/rex/kernel/xboxkrnl/rtl.h
+index 540f698..2445560 100644
+--- a/include/rex/kernel/xboxkrnl/rtl.h
++++ b/include/rex/kernel/xboxkrnl/rtl.h
+@@ -18,6 +18,10 @@ namespace rex::kernel::xboxkrnl {
+ struct X_RTL_CRITICAL_SECTION;
+ 
+ void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t cs_ptr);
++
++// mk9-rollback: hook(guest address) for every critical section entered (null: none). A function,
++// not the variable: the runtime DLL exports its functions only
++void SetCriticalSectionHook(void (*hook)(uint32_t cs_ptr));
+ X_STATUS xeRtlInitializeCriticalSectionAndSpinCount(X_RTL_CRITICAL_SECTION* cs, uint32_t cs_ptr,
+                                                     uint32_t spin_count);
+ 
+diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
+index d54df86..3f36c87 100644
+--- a/include/rex/system/interfaces/graphics.h
++++ b/include/rex/system/interfaces/graphics.h
+@@ -79,6 +79,19 @@ class IGraphicsSystem {
+     (void)blocking;
+   }
+ 
++  // Rollback netplay runs frames again and shows only the last: true starts frames nobody sees at
++  // the commands the guest has given the GPU so far, false ends them there. The GPU skips their
++  // swaps and their draws to full-size render targets (small ones are drawn: games paint textures
++  // they keep that way), and their waits for the vertical blank get one at once. Call while the
++  // guest gives the GPU nothing (its rendering idle).
++  virtual void SkipDrawsFromNow(bool skip) { (void)skip; }
++
++  // Netplay keeping two games even: the next `periods` vertical blanks are left out (each comes a period late), so the
++  // display shows its frame once more and a game that paces its frames by the blank runs that many frames fewer: a
++  // frame really held back. A sleep in the game's frame is not: a game whose main thread runs ahead of its GPU makes the
++  // time up with the frames after it. Any thread.
++  virtual void HoldVblanks(int periods) { (void)periods; }
++
+   // One-shot convenience for callers that don't care about the split.
+   X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
+                  ui::WindowedAppContext* app_context, bool with_presentation) {
+diff --git a/include/rex/thread.h b/include/rex/thread.h
+index 30b207d..484d82b 100644
+--- a/include/rex/thread.h
++++ b/include/rex/thread.h
+@@ -118,6 +118,12 @@ void Sleep(std::chrono::duration<Rep, Period> duration) {
+   Sleep(std::chrono::duration_cast<std::chrono::microseconds>(duration));
+ }
+ 
++// Sleeps the current thread for about the given duration (a few tenths of a millisecond over at most), whatever
++// resolution Windows gives this process's timers: Sleep(1 ms) wakes 1-2 ms late at the 1 ms resolution a process asks
++// for with timeBeginPeriod, and 15.6 ms late when Windows 11 gives it a coarse one (its window not in front, battery
++// saving). A high resolution timer for all but the last half millisecond, then a yield. For threads that keep time.
++void SleepPrecise(std::chrono::microseconds duration);
++
+ enum class SleepResult {
+   kSuccess,
+   kAlerted,
+diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
+index a7ab6b3..c120291 100644
+--- a/include/rex/ui/imgui_dialog.h
++++ b/include/rex/ui/imgui_dialog.h
+@@ -39,6 +39,10 @@ class ImGuiDialog {
+ 
+   void Draw();
+ 
++  // Whether the UI repaints continuously while this dialog is open (for input and animation). A dialog
++  // that changes only with the guest output needs none: every guest frame repaints the UI anyway.
++  virtual bool RepaintsContinuously() const { return true; }
++
+  protected:
+   ImGuiDialog(ImGuiDrawer* imgui_drawer);
+ 
+diff --git a/include/rex/ui/overlay/achievement_toast.h b/include/rex/ui/overlay/achievement_toast.h
+index 7642601..d841f5f 100644
+--- a/include/rex/ui/overlay/achievement_toast.h
++++ b/include/rex/ui/overlay/achievement_toast.h
+@@ -35,6 +35,10 @@ class AchievementToastDialog : public AchievementNotificationDialog {
+   // Thread-safe: safe to call from any thread, including guest threads.
+   void Push(const rex::system::AchievementEvent& event) override;
+ 
++  // Open for the whole run (a toast can come any time), it animates with the guest's frames, which repaint
++  // the UI anyway: asking for continuous repaint kept the presenter painting as fast as it could all along.
++  bool RepaintsContinuously() const override { return false; }
++
+  protected:
+   void OnDraw(ImGuiIO& io) override;
+ 
+diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
+index afb4a30..09fab46 100644
+--- a/include/rex/ui/presenter.h
++++ b/include/rex/ui/presenter.h
+@@ -13,6 +13,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <chrono>
+ #include <climits>
+ #include <cmath>
+ #include <condition_variable>
+@@ -188,6 +189,17 @@ class Presenter {
+       std::function<void(bool is_responsible, bool statically_from_ui_thread)>;
+   static void FatalErrorHostGpuLossCallback(bool is_responsible, bool statically_from_ui_thread);
+ 
++  // Every presentation to the host so far, by any presenter and thread: the rate a frame counter overlay
++  // (one hooking Present) shows, against the guest's own frames.
++  static uint64_t PresentCount();
++  // Since the last call: how many guest frames reached a present, how long they waited for it after the
++  // guest output refresh made them ready, in all and at most (milliseconds).
++  static void TakePresentWaits(uint64_t& frames, double& total_ms, double& longest_ms);
++  // What the player's screen got, whatever the game's frame tops did: the gaps between the first presents of
++  // successive guest frames, so far (never reset; take differences). `frames`: gaps counted, `over_25`: those
++  // over 25 ms (a 60 Hz screen showed a frame again), `over_50`: over 50 ms, `longest_ms`: the longest.
++  static void ShownGaps(uint64_t& frames, uint64_t& over_25, uint64_t& over_50, double& longest_ms);
++
+   class GuestOutputRefreshContext {
+    public:
+     GuestOutputRefreshContext(const GuestOutputRefreshContext& context) = delete;
+@@ -971,6 +983,10 @@ class Presenter {
+   // with paint_mode_mutex_ held in this case, and guest output consumption
+   // happens as part of painting.
+   std::mutex guest_output_mailbox_consumer_mutex_;
++  // When each image became the ready one (written by the refresh before it publishes the image), and the
++  // ready time of an image a paint acquired new, until a present shows it (the painting thread's).
++  std::array<std::chrono::steady_clock::time_point, kGuestOutputMailboxSize> guest_output_ready_time_{};
++  std::chrono::steady_clock::time_point new_guest_output_ready_time_{};
+ 
+   std::array<GuestOutputProperties, kGuestOutputMailboxSize> guest_output_properties_;
+   // Accessible only by refreshing, whether the last refresh contained an image
+diff --git a/src/codegen/builders/system.cpp b/src/codegen/builders/system.cpp
+index b2d70f5..74143ce 100644
+--- a/src/codegen/builders/system.cpp
++++ b/src/codegen/builders/system.cpp
+@@ -147,16 +147,6 @@ bool build_dcbtst(BuilderContext& ctx) {
+   return true;
+ }
+ 
+-bool build_dcbz(BuilderContext& ctx) {
+-  // Compute EA, align to 32-byte cache line, apply physical offset
+-  ctx.print("\t{} = (", ctx.ea());
+-  if (ctx.insn.operands[0] != 0)
+-    ctx.print("{}.u32 + ", ctx.r(ctx.insn.operands[0]));
+-  ctx.println("{}.u32) & ~31;", ctx.r(ctx.insn.operands[1]));
+-  ctx.println("\tmemset((void*)REX_RAW_ADDR({}), 0, 32);", ctx.ea());
+-  return true;
+-}
+-
+ bool build_dcbzl(BuilderContext& ctx) {
+   // Compute EA, align to 128-byte cache line, apply physical offset
+   ctx.print("\t{} = (", ctx.ea());
+@@ -167,6 +157,13 @@ bool build_dcbzl(BuilderContext& ctx) {
+   return true;
+ }
+ 
++bool build_dcbz(BuilderContext& ctx) {
++  // The Xbox 360's CPU has no short cache line: dcbz clears the whole 128-byte line, as dcbz128 does (Xenia
++  // Canary 72ce130). Games clear memory with "dcbz; addi rX,rX,128" loops; a 32-byte clear leaves three
++  // quarters of every line as it was (Soulcalibur V then never leaves its boot sequence).
++  return build_dcbzl(ctx);
++}
++
+ bool build_dcbst(BuilderContext& ctx) {
+   // Hint instruction, access violation callback handlers take care of this on write
+   (void)ctx;
+diff --git a/src/core/filesystem_win.cpp b/src/core/filesystem_win.cpp
+index c5a2c5d..854cb82 100644
+--- a/src/core/filesystem_win.cpp
++++ b/src/core/filesystem_win.cpp
+@@ -122,21 +122,32 @@ class Win32FileHandle : public FileHandle {
+   bool Read(size_t file_offset, void* buffer, size_t buffer_length,
+             size_t* out_bytes_read) override {
+     *out_bytes_read = 0;
+-    OVERLAPPED overlapped;
+-    overlapped.Pointer = (PVOID)file_offset;
+-    overlapped.hEvent = NULL;
+-    DWORD bytes_read = 0;
+-    BOOL read = ReadFile(handle_, buffer, (DWORD)buffer_length, &bytes_read, &overlapped);
+-    if (read) {
+-      *out_bytes_read = bytes_read;
+-      return true;
+-    } else {
+-      if (GetLastError() == ERROR_NOACCESS) {
+-        REXLOG_WARN(
+-            "Win32FileHandle::Read(..., {}, 0x{:X}, ...) returned "
+-            "ERROR_NOACCESS. Read-only memory?",
+-            buffer, buffer_length);
++    for (int attempt = 0;; attempt++) {
++      OVERLAPPED overlapped{};
++      overlapped.Pointer = (PVOID)file_offset;
++      overlapped.hEvent = NULL;
++      DWORD bytes_read = 0;
++      BOOL read = ReadFile(handle_, buffer, (DWORD)buffer_length, &bytes_read, &overlapped);
++      if (read) {
++        *out_bytes_read = bytes_read;
++        return true;
++      }
++      if (GetLastError() != ERROR_NOACCESS) return false;
++      // mk9-rollback: guest pages a write watcher keeps read-only (the game's rollback): the
++      // kernel fails ReadFile into them instead of faulting, so each page takes a user-mode write
++      // first (the watcher lets it through) and the read goes again
++      if (attempt < 8) {
++        const uintptr_t begin = reinterpret_cast<uintptr_t>(buffer);
++        for (uintptr_t a = begin; a < begin + buffer_length; a = (a | 0xFFF) + 1) {
++          volatile uint8_t* b = reinterpret_cast<volatile uint8_t*>(a);
++          *b = *b;
++        }
++        continue;
+       }
++      REXLOG_WARN(
++          "Win32FileHandle::Read(..., {}, 0x{:X}, ...) returned "
++          "ERROR_NOACCESS. Read-only memory?",
++          buffer, buffer_length);
+       return false;
+     }
+   }
+diff --git a/src/core/logging.cpp b/src/core/logging.cpp
+index 1645848..36a3f27 100644
+--- a/src/core/logging.cpp
++++ b/src/core/logging.cpp
+@@ -44,6 +44,11 @@ REXCVAR_DEFINE_BOOL(log_verbose, false, "Log", "Enable verbose logging (sets lev
+ 
+ REXCVAR_DEFINE_BOOL(log_noisy, false, "Log", "Enable noisy/high-frequency log macros");
+ 
++REXCVAR_DEFINE_BOOL(log_throttle_repeats, true, "Log",
++                    "Write a repeated warning or error (the same text but for its numbers) the first "
++                    "8 times, then at the 16th, 32nd, 64th ... time with the count: every line is a "
++                    "flushed write, and some are logged by threads that hold locks the game waits on");
++
+ REXCVAR_DEFINE_INT32(log_flush_interval, 0, "Log", "Periodic flush interval in seconds (0 = off)")
+     .range(0, 60)
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+@@ -131,10 +136,89 @@ spdlog::level::level_enum ResolveCategoryLevel(const std::string& name) {
+   return g_config.default_level;
+ }
+ 
++// A logger that lets a repeated warning or error through the first 8 times and then at the 16th, 32nd,
++// 64th ... (with the count), and everything below warnings as ever. The logger's sinks flush every line
++// (flush_level), so a message logged per frame or per interrupt was a file write each time, 75 a second
++// from the GPU interrupt alone (a stub's warning, under the global lock that every kernel call of the
++// game's threads takes) and a few a frame from the GPU thread in some scenes. Two lines are the same
++// when they come from the same category and read the same but for their numbers (decimal digits, and hex
++// words of 6 or more digits: addresses, register dumps).
++class ThrottledLogger final : public spdlog::logger {
++ public:
++  ThrottledLogger(std::string name, std::vector<spdlog::sink_ptr>::iterator begin,
++                  std::vector<spdlog::sink_ptr>::iterator end)
++      : spdlog::logger(std::move(name), begin, end), enabled_(REXCVAR_GET(log_throttle_repeats)) {}
++
++ protected:
++  void sink_it_(const spdlog::details::log_msg& msg) override {
++    if (!enabled_ || msg.level < spdlog::level::warn || msg.level >= spdlog::level::off) {
++      spdlog::logger::sink_it_(msg);
++      return;
++    }
++    const std::string_view text(msg.payload.data(), msg.payload.size());
++    uint64_t key = 14695981039346656037ull;  // FNV-1a
++    auto mix = [&key](unsigned char c) { key = (key ^ c) * 1099511628211ull; };
++    for (char c : std::string_view(msg.logger_name.data(), msg.logger_name.size()))
++      mix(static_cast<unsigned char>(c));
++    // the text without its numbers: decimal digits, and the hex words of an address (0x82E80968) or a register dump
++    // ("880000FC 18E3B052": 6 or more hex digits, at least one of them a number)
++    for (size_t i = 0; i < text.size();) {
++      const auto is_hex = [&text](size_t at) {
++        return at < text.size() && std::isxdigit(static_cast<unsigned char>(text[at]));
++      };
++      if (is_hex(i)) {
++        size_t end = i;
++        bool number = false;
++        while (is_hex(end)) {
++          number |= text[end] >= '0' && text[end] <= '9';
++          ++end;
++        }
++        if (end - i >= 6 && number) {
++          mix('#');
++        } else {
++          for (size_t k = i; k < end; ++k) {
++            if (text[k] < '0' || text[k] > '9') mix(static_cast<unsigned char>(text[k]));
++          }
++        }
++        i = end;
++      } else {
++        mix(static_cast<unsigned char>(text[i]));
++        ++i;
++      }
++    }
++    uint32_t count;
++    {
++      std::lock_guard lock(g_repeat_mutex);
++      auto it = g_repeat_counts.find(key);
++      if (it == g_repeat_counts.end()) {
++        if (g_repeat_counts.size() >= 4096) {  // a flood of different lines: nothing to throttle by
++          spdlog::logger::sink_it_(msg);
++          return;
++        }
++        it = g_repeat_counts.emplace(key, 0).first;
++      }
++      count = ++it->second;
++    }
++    if (count <= 8) {
++      spdlog::logger::sink_it_(msg);
++    } else if ((count & (count - 1)) == 0) {
++      const std::string again_text = fmt::format("{} [the same line {} times so far]", text, count);
++      spdlog::details::log_msg again(msg.time, msg.source, msg.logger_name, msg.level, again_text);
++      again.thread_id = msg.thread_id;
++      spdlog::logger::sink_it_(again);
++    }
++  }
++
++ private:
++  bool enabled_;
++  static inline std::mutex g_repeat_mutex;
++  static inline std::unordered_map<uint64_t, uint32_t> g_repeat_counts;
++};
++
+ // Create a logger and register it
+ std::shared_ptr<spdlog::logger> CreateCategoryLogger(const std::string& name) {
+   auto sinks = BuildCategorySinks(name);
+-  auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
++  auto logger = std::make_shared<ThrottledLogger>(name, sinks.begin(), sinks.end());
+   logger->set_level(ResolveCategoryLevel(name));
+   logger->flush_on(g_config.flush_level);
+   spdlog::register_logger(logger);
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+index 9ac8d15..609cc88 100644
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -192,6 +192,10 @@ void SyncMemory() {
+   __sync_synchronize();
+ }
+ 
++void SleepPrecise(std::chrono::microseconds duration) {
++  Sleep(duration);
++}
++
+ void Sleep(std::chrono::microseconds duration) {
+   timespec rqtp = DurationToTimeSpec(duration);
+   timespec rmtp = {};
+diff --git a/src/core/threading_win.cpp b/src/core/threading_win.cpp
+index 896dfec..df62205 100644
+--- a/src/core/threading_win.cpp
++++ b/src/core/threading_win.cpp
+@@ -101,6 +101,35 @@ void Sleep(std::chrono::microseconds duration) {
+   }
+ }
+ 
++namespace {
++// one high resolution timer for each thread that keeps time with SleepPrecise
++struct PreciseTimer {
++  HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
++  ~PreciseTimer() {
++    if (handle)
++      CloseHandle(handle);
++  }
++};
++}  // namespace
++
++void SleepPrecise(std::chrono::microseconds duration) {
++  using Clock = std::chrono::steady_clock;
++  const auto end = Clock::now() + duration;
++  thread_local PreciseTimer timer;
++  if (duration.count() > 800) {
++    const auto nap = duration - std::chrono::microseconds(500);
++    LARGE_INTEGER due;
++    due.QuadPart = -static_cast<LONGLONG>(nap.count()) * 10;  // 100 ns units, relative
++    if (timer.handle && SetWaitableTimerEx(timer.handle, &due, 0, nullptr, nullptr, nullptr, 0)) {
++      WaitForSingleObject(timer.handle, INFINITE);
++    } else {
++      ::Sleep(static_cast<DWORD>(nap.count() / 1000));
++    }
++  }
++  while (Clock::now() < end)
++    SwitchToThread();
++}
++
+ SleepResult AlertableSleep(std::chrono::microseconds duration) {
+   if (SleepEx(static_cast<DWORD>(duration.count() / 1000), TRUE) == WAIT_IO_COMPLETION) {
+     return SleepResult::kAlerted;
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index a744375..6eb72c3 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -239,7 +239,7 @@ void CommandProcessor::WorkerThreadMain() {
+     assert_true(read_ptr_index_ != write_ptr_index);
+ 
+     // Execute. Note that we handle wraparound transparently.
+-    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
++    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, SkipMarkedEnd(write_ptr_index));
+ 
+     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
+     //     that many indices.
+@@ -332,6 +332,61 @@ void CommandProcessor::UpdateWritePointer(uint32_t value) {
+   write_ptr_index_event_->Set();
+ }
+ 
++// The guest writes no commands meanwhile (see IGraphicsSystem::SkipDrawsFromNow), so the write index
++// now is where its last frame ends: the worker has not passed it, and stops there to switch.
++void CommandProcessor::SkipDrawsFromNow(bool skip) {
++  uint32_t write_ptr_index = write_ptr_index_.load();
++  if (write_ptr_index == 0xBAADF00D) {
++    return;
++  }
++  std::lock_guard<std::mutex> lock(skip_marks_mutex_);
++  skip_marks_.emplace_back(write_ptr_index, skip);
++  skip_marks_waiting_ = true;
++}
++
++uint32_t CommandProcessor::SkipMarkedEnd(uint32_t write_ptr_index) {
++  if (!skip_marks_waiting_) {
++    return write_ptr_index;
++  }
++  std::lock_guard<std::mutex> lock(skip_marks_mutex_);
++  while (!skip_marks_.empty() && skip_marks_.front().first == read_ptr_index_) {
++    SetSkippingDraws(skip_marks_.front().second);
++    skip_marks_.pop_front();
++  }
++  skip_marks_waiting_ = !skip_marks_.empty();
++  if (skip_marks_.empty()) {
++    return write_ptr_index;
++  }
++  // how far ahead of the read index the mark and the write index are, around the ring
++  uint32_t ring_dwords = primary_buffer_size_ / sizeof(uint32_t);
++  uint32_t mark = skip_marks_.front().first;
++  uint32_t to_mark = (mark + ring_dwords - read_ptr_index_) % ring_dwords;
++  uint32_t to_write = (write_ptr_index + ring_dwords - read_ptr_index_) % ring_dwords;
++  return to_mark < to_write ? mark : write_ptr_index;
++}
++
++void CommandProcessor::SetSkippingDraws(bool skip) {
++  if (skip == skipping_draws_) {
++    return;
++  }
++  skipping_draws_ = skip;
++  if (skip) {
++    ++skipped_.runs;
++    return;
++  }
++  auto now = std::chrono::steady_clock::now();
++  if (now - skipped_logged_ < std::chrono::seconds(10)) {
++    return;
++  }
++  REXGPU_INFO(
++      "Frames nobody sees, {} runs of them: {} swaps, {} draws and {} resolves skipped, {} "
++      "vertical blanks given at once; {} draws done (targets up to {}x{})",
++      skipped_.runs, skipped_.swaps, skipped_.draws, skipped_.resolves, skipped_.vblanks,
++      skipped_.kept, skipped_.kept_width, skipped_.kept_height);
++  skipped_logged_ = now;
++  skipped_ = {};
++}
++
+ uint32_t CommandProcessor::ReadRegisterValue(uint32_t index) const {
+   if (index < RegisterFile::kRegisterCount) {
+     return register_file_->values[index];
+@@ -990,6 +1045,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+   bool is_memory = (wait_info & 0x10) != 0;
+ 
+   bool matched = false;
++  uint32_t vblanks_now = 0;
+   do {
+     uint32_t value = 0;
+     if (is_memory) {
+@@ -1030,6 +1086,15 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+         break;
+     }
+     if (!matched) {
++      // Frames nobody sees wait for no display. A game paces its swaps by the vertical blank (the
++      // flip of one swap's image happens at a blank, in the guest's interrupt, and the next frame
++      // waits here for it), so these get the blank at once instead of the timer's next.
++      if (skipping_draws_ && vblanks_now < 3) {
++        ++vblanks_now;
++        ++skipped_.vblanks;
++        graphics_system_->VblankNow();
++        continue;
++      }
+       // Wait.
+       if (wait >= 0x100) {
+         PrepareForWait();
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 19874a5..5d48b23 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -1897,6 +1897,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+   vertex_buffers_in_sync_[0] = 0;
+   vertex_buffers_in_sync_[1] = 0;
+ 
++  // A frame nobody sees (see IssueDraw) gives the presenter nothing to show, but ends.
++  if (skipping_draws()) {
++    ++skipped_.swaps;
++    EndSubmission(true);
++    return;
++  }
++
+   if (!graphics_system_)
+     return;
+   ui::Presenter* presenter = graphics_system_->presenter();
+@@ -2327,6 +2334,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
+   bool memexport_used = memexport_used_vertex || memexport_used_pixel;
+ 
++  // A frame nobody sees draws nothing to the screen's targets; memory it exports is written still.
++  if (skipping_draws() && !memexport_used) {
++    if (IsSkippedTarget()) {
++      ++skipped_.draws;
++      NotePassDraw(PassDraw::kSkipped, nullptr, nullptr);
++      return true;
++    }
++    draw_util::Scissor scissor;
++    draw_util::GetScissor(regs, scissor);
++    ++skipped_.kept;
++    skipped_.kept_width = std::max(skipped_.kept_width, scissor.extent[0]);
++    skipped_.kept_height = std::max(skipped_.kept_height, scissor.extent[1]);
++  }
++
+   if (!BeginSubmission(true)) {
+     return false;
+   }
+@@ -2400,6 +2421,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   }
+   if (REXCVAR_GET(async_shader_compilation) &&
+       pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
++    NotePassDraw(PassDraw::kDropped, vertex_shader, pixel_shader);
+     return true;
+   }
+ 
+@@ -2694,6 +2716,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+     }
+   }
+ 
++  NotePassDraw(PassDraw::kDone, nullptr, nullptr);
++
+   if (memexport_used) {
+     // Make sure this memexporting draw is ordered with other work using shared
+     // memory as a UAV.
+@@ -2877,19 +2901,105 @@ bool D3D12CommandProcessor::IssueCopy() {
+   if (!BeginSubmission(true)) {
+     return false;
+   }
++  // Draws dropped while their pipelines were being created (async_shader_compilation) left EDRAM
++  // without what they would have drawn. On the screen that is gone a frame later, but a resolve copies
++  // it into guest memory, where it stays for as long as the game keeps that memory, and a texture the
++  // game draws from itself and resolves over again keeps it for good: Mortal Kombat 9 draws its
++  // fighters' damage textures that way, and a pass dropped whole at a fight's first hit copied the last
++  // frame's image (the arena and the HUD) from EDRAM into one, which the fighter then wore in stripes
++  // for the rest of the fight. Such a resolve copies nothing; the destination keeps its last contents.
++  // Nor does a resolve of a pass whose draws a frame nobody sees skipped (see IssueDraw): EDRAM does
++  // not hold what they would have drawn either.
++  bool copy = !pass_draws_skipped_ && !IsResolveOfDroppedDraws();
++  if (pass_draws_skipped_) {
++    ++skipped_.resolves;
++  }
++  pass_resolved_ = true;
+   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
+   if (readback_mode == ReadbackResolveMode::kDisabled) {
+     uint32_t written_address, written_length;
+     return render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
+-                                         written_address, written_length);
++                                         written_address, written_length, copy);
++  }
++  return IssueCopy_ReadbackResolvePath(copy);
++}
++
++void D3D12CommandProcessor::NotePassDraw(PassDraw draw, const Shader* vertex_shader,
++                                         const Shader* pixel_shader) {
++  if (pass_resolved_) {
++    pass_resolved_ = false;
++    pass_draws_done_ = 0;
++    pass_draws_dropped_ = 0;
++    pass_draws_skipped_ = 0;
++    pass_dropped_draw_textures_.clear();
++  }
++  if (draw == PassDraw::kDone) {
++    ++pass_draws_done_;
++    return;
++  }
++  if (draw == PassDraw::kSkipped) {
++    ++pass_draws_skipped_;
++    return;
++  }
++  ++pass_draws_dropped_;
++  for (const Shader* shader : {vertex_shader, pixel_shader}) {
++    if (!shader) {
++      continue;
++    }
++    for (const Shader::TextureBinding& binding : shader->texture_bindings()) {
++      uint32_t base = uint32_t(register_file_->GetTextureFetch(binding.fetch_constant).base_address)
++                      << 12;
++      if (base) {
++        pass_dropped_draw_textures_.push_back(base & 0x1FFFFFFF);
++      }
++    }
+   }
+-  return IssueCopy_ReadbackResolvePath();
+ }
+ 
+-bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
++// The screen's targets are at least 640x320 (its own image, half-size copies, shadows); the
++// textures Mortal Kombat 9 paints its fighters' blood and damage into are 128 to 512 square.
++bool D3D12CommandProcessor::IsSkippedTarget() const {
++  draw_util::Scissor scissor;
++  draw_util::GetScissor(*register_file_, scissor);
++  return scissor.extent[0] >= 640 && scissor.extent[1] >= 320;
++}
++
++bool D3D12CommandProcessor::IsResolveOfDroppedDraws() {
++  if (!pass_draws_dropped_) {
++    return false;
++  }
++  draw_util::ResolveInfo resolve_info;
++  bool fixed_16_truncated = render_target_cache_->IsFixed16TruncatedToMinus1To1();
++  if (!draw_util::GetResolveInfo(*register_file_, *memory_,
++                                 texture_cache_->draw_resolution_scale_x(),
++                                 texture_cache_->draw_resolution_scale_y(), fixed_16_truncated,
++                                 fixed_16_truncated, resolve_info) ||
++      !resolve_info.copy_dest_extent_length) {
++    return false;
++  }
++  uint32_t start = resolve_info.copy_dest_extent_start & 0x1FFFFFFF;
++  bool sampled = false;
++  for (uint32_t base : pass_dropped_draw_textures_) {
++    if (base - start < resolve_info.copy_dest_extent_length) {
++      sampled = true;
++      break;
++    }
++  }
++  if (pass_draws_done_ && !sampled) {
++    return false;
++  }
++  REXGPU_INFO(
++      "Resolve to 0x{:08X} not copied: {} of the {} draws before it were dropped while their "
++      "pipelines were being created{}",
++      start, pass_draws_dropped_, pass_draws_done_ + pass_draws_dropped_,
++      sampled ? ", one of them sampling that memory" : "");
++  return true;
++}
++
++bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath(bool copy) {
+   uint32_t written_address, written_length;
+   if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_, written_address,
+-                                     written_length)) {
++                                     written_length, copy)) {
+     return false;
+   }
+ 
+@@ -3198,7 +3308,7 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
+   const char* reason_str = "Unknown";
+   switch (reason) {
+     case DXGI_ERROR_DEVICE_HUNG:
+-      reason_str = "DEVICE_HUNG (TDR - GPU command took too long)";
++      reason_str = "DEVICE_HUNG (the GPU stopped: a command too long, or at once on a fault)";
+       break;
+     case DXGI_ERROR_DEVICE_REMOVED:
+       reason_str = "DEVICE_REMOVED (driver internal error or hot-unplug)";
+@@ -4003,6 +4113,22 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+   cbuffer_binding_system_.up_to_date &= !dirty;
+ }
+ 
++namespace {
++// Room for a shader's float constants. After the 256 registers of a shader with dynamic addressing, one of zeros: what
++// its reads out of range read (DxbcShaderTranslator::LoadOperand).
++uint8_t* RequestFloatConstants(ui::d3d12::D3D12UploadBufferPool& pool, uint64_t frame, uint32_t count,
++                               bool dynamic_addressing, D3D12_GPU_VIRTUAL_ADDRESS& address_out) {
++  const uint32_t size = sizeof(float) * 4 * std::max(count, uint32_t(1));
++  const uint32_t zeros = dynamic_addressing ? sizeof(float) * 4 : 0;
++  uint8_t* constants = pool.Request(frame, size + zeros, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT,
++                                    nullptr, nullptr, &address_out);
++  if (constants != nullptr && zeros) {
++    std::memset(constants + size, 0, zeros);
++  }
++  return constants;
++}
++}  // namespace
++
+ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+                                            const D3D12Shader* pixel_shader,
+                                            ID3D12RootSignature* root_signature,
+@@ -4106,10 +4232,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+     // still be provided, so if the first draw in the frame with the current
+     // root signature doesn't have float constants at all, still allocate an
+     // empty buffer.
+-    uint8_t* float_constants = constant_buffer_pool_->Request(
+-        frame_current_, sizeof(float) * 4 * std::max(float_constant_count_vertex, uint32_t(1)),
+-        D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
+-        &cbuffer_binding_float_vertex_.address);
++    uint8_t* float_constants = RequestFloatConstants(
++        *constant_buffer_pool_, frame_current_, float_constant_count_vertex,
++        float_constant_map_vertex.float_dynamic_addressing, cbuffer_binding_float_vertex_.address);
+     if (float_constants == nullptr) {
+       return false;
+     }
+@@ -4129,10 +4254,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+     current_graphics_root_up_to_date_ &= ~(1u << root_parameter_float_constants_vertex);
+   }
+   if (!cbuffer_binding_float_pixel_.up_to_date) {
+-    uint8_t* float_constants = constant_buffer_pool_->Request(
+-        frame_current_, sizeof(float) * 4 * std::max(float_constant_count_pixel, uint32_t(1)),
+-        D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
+-        &cbuffer_binding_float_pixel_.address);
++    uint8_t* float_constants = RequestFloatConstants(
++        *constant_buffer_pool_, frame_current_, float_constant_count_pixel,
++        pixel_shader != nullptr && pixel_shader->constant_register_map().float_dynamic_addressing,
++        cbuffer_binding_float_pixel_.address);
+     if (float_constants == nullptr) {
+       return false;
+     }
+@@ -4764,7 +4889,8 @@ void D3D12CommandProcessor::EvictOldReadbackBuffers(
+         if (readback.mapped_data[i]) {
+           readback.buffers[i]->Unmap(0, nullptr);
+         }
+-        readback.buffers[i]->Release();
++        // A copy in flight may still write to it: an entry goes by count whatever its age.
++        resources_for_deletion_.emplace_back(submission_current_, readback.buffers[i]);
+       }
+       readback.buffers[i] = nullptr;
+       readback.mapped_data[i] = nullptr;
+diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
+index 8e6b854..af0bd11 100644
+--- a/src/graphics/d3d12/pipeline_cache.cpp
++++ b/src/graphics/d3d12/pipeline_cache.cpp
+@@ -3197,6 +3197,14 @@ bool PipelineCache::PrepareRuntimeDescriptionForQueuedCreation(
+ }
+ 
+ void PipelineCache::CreationThread(size_t thread_index) {
++#ifdef _WIN32
++  // Behind the game's own threads: 3/4 of the PC's logical processors build pipelines at once, and the driver's
++  // compile of one takes tens of milliseconds. At the game's priority they can take the cores of a PC with six or
++  // eight from the game's threads for as long as a burst of new pipelines lasts (a fighter's first move, on a PC whose
++  // shader cache is cold), and the frames in it run long; a pipeline that is a moment later only leaves its draw out
++  // for a frame or two longer. (Not measured on a PC that small: a precaution.)
++  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
++#endif
+   while (true) {
+     Pipeline* pipeline_to_create = nullptr;
+ 
+diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
+index dd321a5..57d0078 100644
+--- a/src/graphics/d3d12/render_target_cache.cpp
++++ b/src/graphics/d3d12/render_target_cache.cpp
+@@ -1161,7 +1161,8 @@ void D3D12RenderTargetCache::WriteEdramUintPow2UAVDescriptor(D3D12_CPU_DESCRIPTO
+ 
+ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMemory& shared_memory,
+                                      D3D12TextureCache& texture_cache,
+-                                     uint32_t& written_address_out, uint32_t& written_length_out) {
++                                     uint32_t& written_address_out, uint32_t& written_length_out,
++                                     bool copy) {
+   written_address_out = 0;
+   written_length_out = 0;
+ 
+@@ -1184,7 +1185,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+ 
+   // Copying.
+   bool copied = false;
+-  if (resolve_info.copy_dest_extent_length) {
++  if (copy && resolve_info.copy_dest_extent_length) {
+     draw_util::ResolveCopyShaderConstants copy_shader_constants;
+     uint32_t copy_group_count_x, copy_group_count_y;
+     draw_util::ResolveCopyShaderIndex copy_shader =
+diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
+index a5c97a0..8b2c688 100644
+--- a/src/graphics/d3d12/shared_memory.cpp
++++ b/src/graphics/d3d12/shared_memory.cpp
+@@ -78,6 +78,7 @@ bool D3D12SharedMemory::Initialize() {
+       return false;
+     }
+   }
++  buffer_->SetName(L"Shared memory");
+   buffer_gpu_address_ = buffer_->GetGPUVirtualAddress();
+   buffer_uav_writes_commit_needed_ = false;
+ 
+diff --git a/src/graphics/d3d12/texture_cache.cpp b/src/graphics/d3d12/texture_cache.cpp
+index 2be0e8e..0e6b4b2 100644
+--- a/src/graphics/d3d12/texture_cache.cpp
++++ b/src/graphics/d3d12/texture_cache.cpp
+@@ -14,6 +14,7 @@
+ #include <cfloat>
+ #include <cstddef>
+ #include <cstring>
++#include <cwchar>
+ #include <memory>
+ #include <utility>
+ 
+@@ -1554,6 +1555,10 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
+                                              resource_state, nullptr, IID_PPV_ARGS(&resource)))) {
+     return nullptr;
+   }
++  wchar_t name[64];
++  std::swprintf(name, sizeof(name) / sizeof(name[0]), L"Texture @ 0x%08X, %ux%u, format %u",
++                uint32_t(key.base_page) << 12, key.GetWidth(), key.GetHeight(), uint32_t(key.format));
++  resource->SetName(name);
+   return std::unique_ptr<Texture>(new D3D12Texture(*this, key, resource.Get(), resource_state));
+ }
+ 
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 8f2fcb0..7da3f4d 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -158,15 +158,34 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+             std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
++#if REX_PLATFORM_WIN32
++        // This thread only keeps time (a blank is a short interrupt for the guest): a PC busy with other work must
++        // not make it late, and a blank that comes late is a frame the game misses
++        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
++#endif
+         while (vsync_worker_running_) {
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
+           uint64_t interval_ticks =
+               REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
+           while (current_time - last_frame_time >= interval_ticks) {
+-            MarkVblank();
++            // a blank held back (HoldVblanks) is left out: the next one comes a period later
++            int held = vblanks_held_.load(std::memory_order_relaxed);
++            while (held > 0 && !vblanks_held_.compare_exchange_weak(held, held - 1, std::memory_order_relaxed)) {
++            }
++            if (held <= 0) MarkVblank();
+             last_frame_time += interval_ticks;
+           }
+-          rex::thread::Sleep(std::chrono::milliseconds(1));
++          if (REXCVAR_GET(vsync)) {
++            // until the next blank is due, on a timer that keeps time (Sleep(1 ms) comes 1-2 ms late, and much later
++            // when Windows gives the process a coarse timer: the blanks then came in bursts, a frame in two, and
++            // the game missed them)
++            const uint64_t since = chrono::Clock::QueryGuestTickCount() - last_frame_time;
++            const uint64_t left = since < interval_ticks ? interval_ticks - since : 0;
++            const uint64_t left_us = left * 1000000 / guest_tick_frequency;
++            rex::thread::SleepPrecise(std::chrono::microseconds(std::clamp<uint64_t>(left_us, 50, 4000)));
++          } else {
++            rex::thread::Sleep(std::chrono::milliseconds(1));
++          }
+         }
+         return 0;
+       }));
+@@ -288,6 +307,16 @@ void GraphicsSystem::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_siz
+   command_processor_->EnableReadPointerWriteBack(ptr, block_size_log2);
+ }
+ 
++void GraphicsSystem::HoldVblanks(int periods) {
++  if (periods > 0) vblanks_held_.fetch_add(periods, std::memory_order_relaxed);
++}
++
++void GraphicsSystem::SkipDrawsFromNow(bool skip) {
++  if (command_processor_) {
++    command_processor_->SkipDrawsFromNow(skip);
++  }
++}
++
+ void GraphicsSystem::SetInterruptCallback(uint32_t callback, uint32_t user_data) {
+   interrupt_callback_ = callback;
+   interrupt_callback_data_ = user_data;
+diff --git a/src/graphics/pipeline/shader/dxbc_translator.cpp b/src/graphics/pipeline/shader/dxbc_translator.cpp
+index 2c31a0e..a8c81af 100644
+--- a/src/graphics/pipeline/shader/dxbc_translator.cpp
++++ b/src/graphics/pipeline/shader/dxbc_translator.cpp
+@@ -1344,11 +1344,37 @@ dxbc::Src DxbcShaderTranslator::LoadOperand(const InstructionOperand& operand,
+           return dxbc::Src::LF(0.0f);
+         }
+         index.index_ = float_constant_index;
++        src = dxbc::Src::CB(cbuffer_index_float_constants_,
++                            uint32_t(CbufferRegister::kFloatConstants), index);
+       } else {
+         assert_true(constant_register_map.float_dynamic_addressing);
++        // Root CBVs have no bounds. A Radeon adds the index as an unsigned 32-bit offset, so a negative one reads 4 GB past
++        // the buffer: a page fault, and the device is lost at once (DXGI_ERROR_DEVICE_HUNG, one RX 6600's seven reports, made
++        // again on a Radeon iGPU in rollback fights). As an unsigned number a negative index is out of range too: both read
++        // the register of zeros kept after the 256 (D3D12CommandProcessor::UpdateBindings).
++        uint32_t temp = PushSystemTemp();
++        temp_pushed_out = true;
++        uint32_t used_swizzle_components = 0;
++        for (uint32_t i = 0; i < uint32_t(operand.component_count); ++i) {
++          if (!(needed_components & (1 << i))) {
++            continue;
++          }
++          SwizzleSource component = operand.GetComponent(i);
++          assert_true(component >= SwizzleSource::kX && component <= SwizzleSource::kW);
++          used_swizzle_components |= 1 << (uint32_t(component) - uint32_t(SwizzleSource::kX));
++        }
++        assert_not_zero(used_swizzle_components);
++        a_.OpIAdd(dxbc::Dest::R(temp, 0b0001),
++                  operand.storage_addressing_mode == InstructionStorageAddressingMode::kLoopRelative
++                      ? dxbc::Src::R(system_temp_aL_, dxbc::Src::kXXXX)
++                      : dxbc::Src::R(system_temp_ps_pc_p0_a0_, dxbc::Src::kWWWW),
++                  dxbc::Src::LU(operand.storage_index));
++        a_.OpUMin(dxbc::Dest::R(temp, 0b0001), dxbc::Src::R(temp, dxbc::Src::kXXXX), dxbc::Src::LU(256));
++        a_.OpMov(dxbc::Dest::R(temp, used_swizzle_components),
++                 dxbc::Src::CB(cbuffer_index_float_constants_, uint32_t(CbufferRegister::kFloatConstants),
++                               dxbc::Index(temp, 0)));
++        src = dxbc::Src::R(temp);
+       }
+-      src = dxbc::Src::CB(cbuffer_index_float_constants_,
+-                          uint32_t(CbufferRegister::kFloatConstants), index);
+     } break;
+     default:
+       assert_unhandled_case(operand.storage_source);
+@@ -2036,7 +2062,9 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
+         case ShaderRdefTypeIndex::kFloat4ConstantArray:
+           // Declaring a 0-sized array may not be safe, so write something valid
+           // even if they aren't used.
+-          type.element_count = std::max(uint16_t(constant_register_map.float_count), uint16_t(1));
++          type.element_count = std::max(uint16_t(constant_register_map.float_count +
++                                                  (constant_register_map.float_dynamic_addressing ? 1 : 0)),
++                                        uint16_t(1));
+           break;
+         case ShaderRdefTypeIndex::kUint4DescriptorIndexArray:
+           type.element_count =
+@@ -2117,7 +2145,9 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
+     auto& constant_float = *reinterpret_cast<dxbc::RdefVariable*>(shader_object_.data() +
+                                                                   constant_position_dwords_float);
+     constant_float.name_ptr = constant_name_ptr_float;
+-    constant_float.size_bytes = sizeof(float) * 4 * constant_register_map.float_count;
++    constant_float.size_bytes = sizeof(float) * 4 *
++                                (constant_register_map.float_count +
++                                 (constant_register_map.float_dynamic_addressing ? 1 : 0));
+     constant_float.flags = dxbc::kRdefVariableFlagUsed;
+     constant_float.type_ptr =
+         types_ptr + sizeof(dxbc::RdefType) * uint32_t(ShaderRdefTypeIndex::kFloat4ConstantArray);
+@@ -2242,7 +2272,9 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
+         cbuffer.variable_count = 1;
+         cbuffer.variables_ptr =
+             (constant_position_dwords_float - blob_position_dwords) * sizeof(uint32_t);
+-        cbuffer.size_vector_aligned_bytes = sizeof(float) * 4 * constant_register_map.float_count;
++        cbuffer.size_vector_aligned_bytes =
++            sizeof(float) * 4 *
++            (constant_register_map.float_count + (constant_register_map.float_dynamic_addressing ? 1 : 0));
+       } else if (i == cbuffer_index_bool_loop_constants_) {
+         cbuffer.name_ptr = cbuffer_name_ptr_bool_loop;
+         cbuffer.variable_count = 2;
+@@ -3128,7 +3160,8 @@ void DxbcShaderTranslator::WriteShaderCode() {
+     ao_.OpDclConstantBuffer(dxbc::Src::CB(dxbc::Src::Dcl, cbuffer_index_float_constants_,
+                                           uint32_t(CbufferRegister::kFloatConstants),
+                                           uint32_t(CbufferRegister::kFloatConstants)),
+-                            constant_register_map.float_count,
++                            constant_register_map.float_count +
++                                (constant_register_map.float_dynamic_addressing ? 1 : 0),
+                             constant_register_map.float_dynamic_addressing
+                                 ? dxbc::ConstantBufferAccessPattern::kDynamicIndexed
+                                 : dxbc::ConstantBufferAccessPattern::kImmediateIndexed);
+diff --git a/src/kernel/xam/xam_misc.cpp b/src/kernel/xam/xam_misc.cpp
+index ff6cb56..a2917d6 100644
+--- a/src/kernel/xam/xam_misc.cpp
++++ b/src/kernel/xam/xam_misc.cpp
+@@ -8,9 +8,58 @@
+  *              See LICENSE file in the project root for full license text.
+  */
+ 
++#include <cstring>
++
+ #include <rex/kernel/xam/private.h>
+ #include <rex/logging.h>
+ #include <rex/hook.h>
++#include <rex/types.h>
++#include <rex/system/xtypes.h>
++
++// Disc media verification (XamMediaVerification*, ordinals 0x9BB-0x9BE; games look them up by ordinal): a game has
++// the system read its disc back and, when any block failed, shows the bad disc screen and quits (Soulcalibur V does at
++// its main menu, sub_823260B8). A disc's files read from a folder or an image always read back whole: the check is done
++// at once and found nothing. The result is what such a game makes up itself where the system cannot check (its own
++// fallback when the ordinal is missing clears the 24-byte result and sets +0x14).
++namespace rex::kernel::xam {
++
++struct X_MEDIA_VERIFICATION_RESULT {
++  rex::be<uint32_t> size;           // 24, the caller's
++  rex::be<uint32_t> unk04;
++  rex::be<uint32_t> failed_blocks;  // +0x08: a bad disc when not 0
++  rex::be<uint32_t> unk0C;
++  rex::be<uint32_t> unk10;
++  rex::be<uint32_t> complete;       // +0x14: 1 once the check is done
++};
++static_assert_size(X_MEDIA_VERIFICATION_RESULT, 24);
++
++u32 XamMediaVerificationCreate_entry(u32 unk) {
++  REXKRNL_DEBUG("XamMediaVerificationCreate({:08X})", uint32_t(unk));
++  return X_ERROR_SUCCESS;
++}
++
++u32 XamMediaVerificationVerify_entry(u32 unk1, u32 unk2, u32 unk3) {
++  REXKRNL_DEBUG("XamMediaVerificationVerify({:08X}, {:08X}, {:08X})", uint32_t(unk1), uint32_t(unk2),
++                uint32_t(unk3));
++  return X_ERROR_SUCCESS;
++}
++
++u32 XamMediaVerificationFailedBlocks_entry(ppc_ptr_t<X_MEDIA_VERIFICATION_RESULT> result) {
++  if (result) {
++    std::memset(result, 0, sizeof(X_MEDIA_VERIFICATION_RESULT));
++    result->complete = 1;
++  }
++  return X_ERROR_SUCCESS;
++}
++
++u32 XamMediaVerificationClose_entry() { return X_ERROR_SUCCESS; }
++
++}  // namespace rex::kernel::xam
++
++REX_EXPORT(__imp__XamMediaVerificationCreate, rex::kernel::xam::XamMediaVerificationCreate_entry)
++REX_EXPORT(__imp__XamMediaVerificationVerify, rex::kernel::xam::XamMediaVerificationVerify_entry)
++REX_EXPORT(__imp__XamMediaVerificationFailedBlocks, rex::kernel::xam::XamMediaVerificationFailedBlocks_entry)
++REX_EXPORT(__imp__XamMediaVerificationClose, rex::kernel::xam::XamMediaVerificationClose_entry)
+ 
+ // kinda gross but oh well
+ REX_EXPORT_STUB(__imp__CancelWaitableTimer);
+@@ -564,11 +613,7 @@ REX_EXPORT_STUB(__imp__XamLrcSetTitlePort);
+ REX_EXPORT_STUB(__imp__XamLrcVerifyClientId);
+ REX_EXPORT_STUB(__imp__XamMarkInternalAccountTrustedOnConsole);
+ REX_EXPORT_STUB(__imp__XamMarketplaceAcquireFreeContent);
+-REX_EXPORT_STUB(__imp__XamMediaVerificationClose);
+-REX_EXPORT_STUB(__imp__XamMediaVerificationCreate);
+-REX_EXPORT_STUB(__imp__XamMediaVerificationFailedBlocks);
+ REX_EXPORT_STUB(__imp__XamMediaVerificationInject);
+-REX_EXPORT_STUB(__imp__XamMediaVerificationVerify);
+ REX_EXPORT_STUB(__imp__XamMoveFile);
+ REX_EXPORT_STUB(__imp__XamNetworkStatusAddAddress);
+ REX_EXPORT_STUB(__imp__XamNetworkStatusGetInformation);
+diff --git a/src/kernel/xam/xam_ui.cpp b/src/kernel/xam/xam_ui.cpp
+index 5a572ce..97edae8 100644
+--- a/src/kernel/xam/xam_ui.cpp
++++ b/src/kernel/xam/xam_ui.cpp
+@@ -20,8 +20,11 @@
+ REXCVAR_DEFINE_BOOL(headless, false, "Kernel",
+                     "Don't display any UI, using defaults for prompts as needed");
+ #include <rex/kernel/xam/private.h>
++#include <rex/kernel/xam/ui.h>
+ #include <rex/hook.h>
+ #include <rex/types.h>
++#include <rex/system/thread_state.h>
++#include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ #include <rex/thread.h>
+ #include <rex/ui/imgui_dialog.h>
+@@ -54,6 +57,33 @@ using namespace rex::system;
+ 
+ extern std::atomic<int> xam_dialogs_shown_;
+ 
++namespace {
++MessageBoxAnswer g_message_box_answer;
++
++// the current guest thread's return addresses, innermost first: its LR, then each frame's saved LR up the back chain
++// (a frame's back chain at [sp], its caller's LR at [back chain - 8])
++std::vector<uint32_t> GuestCallers() {
++  std::vector<uint32_t> out;
++  auto* thread = XThread::GetCurrentThread();
++  if (!thread || !thread->thread_state()) return out;
++  const PPCContext* ctx = thread->thread_state()->context();
++  if (!ctx) return out;
++  out.push_back(uint32_t(ctx->lr));
++  auto* memory = REX_KERNEL_MEMORY();
++  uint32_t sp = ctx->r1.u32;
++  for (int i = 0; i < 15 && sp >= 0x10000 && sp < 0xC0000000; i++) {
++    const uint32_t back = rex::memory::load_and_swap<uint32_t>(memory->TranslateVirtual(sp));
++    // the stack's top is page aligned and holds nothing to read past it
++    if (!back || back <= sp || back - sp > 0x10000 || (back & 0xFFF) == 0 || back >= 0xC0000000) break;
++    out.push_back(rex::memory::load_and_swap<uint32_t>(memory->TranslateVirtual(back - 8)));
++    sp = back;
++  }
++  return out;
++}
++}  // namespace
++
++void SetMessageBoxAnswer(MessageBoxAnswer answer) { g_message_box_answer = std::move(answer); }
++
+ class XamDialog : public rex::ui::ImGuiDialog {
+  public:
+   void set_close_callback(std::function<void()> close_callback) {
+@@ -294,10 +324,22 @@ u32 XamShowMessageBoxUI_entry(u32 user_index, mapped_wstring title_ptr, mapped_w
+   }
+ 
+   X_RESULT result;
+-  if (REXCVAR_GET(headless)) {
+-    // Auto-pick the focused button.
+-    auto run = [result_ptr, active_button]() -> X_RESULT {
+-      *result_ptr = static_cast<uint32_t>(active_button);
++  std::optional<uint32_t> answer;
++  if (g_message_box_answer) {
++    MessageBoxRequest request;
++    request.user_index = user_index;
++    request.title = title;
++    request.text = text_str;
++    request.buttons = buttons;
++    request.active_button = active_button;
++    request.callers = GuestCallers();
++    answer = g_message_box_answer(request);
++  }
++  if (answer || REXCVAR_GET(headless)) {
++    // The game's own answer, or without UI the focused button.
++    const uint32_t chosen = answer ? *answer : uint32_t(active_button);
++    auto run = [result_ptr, chosen]() -> X_RESULT {
++      *result_ptr = chosen;
+       return X_ERROR_SUCCESS;
+     };
+     result = xeXamDispatchHeadless(run, overlapped.guest_address());
+diff --git a/src/kernel/xam/xam_user.cpp b/src/kernel/xam/xam_user.cpp
+index 8778066..f2afa65 100644
+--- a/src/kernel/xam/xam_user.cpp
++++ b/src/kernel/xam/xam_user.cpp
+@@ -96,9 +96,17 @@ i32 XamUserGetSigninInfo_entry(u32 user_index, u32 flags, ppc_ptr_t<X_USER_SIGNI
+     return X_E_NO_SUCH_USER;
+   }
+ 
++  // XUSER_GET_SIGNIN_INFO_ONLINE_XUID_ONLY (1) asks for the XUID the user has on Xbox LIVE, which a profile signed
++  // in locally (signin state 1) does not have: 0, as on the console; XUSER_GET_SIGNIN_INFO_OFFLINE_XUID_ONLY (2) asks
++  // for the offline one. Games tell a local profile from a LIVE one by comparing the two: Soulcalibur V's sign-in
++  // watcher saw a local profile whose XUID also was its LIVE one, kept re-checking it, and its title screen waited
++  // for that to settle forever.
++  constexpr uint32_t kOnlineXuidOnly = 0x1;
+   const auto& user_profile = REX_KERNEL_STATE()->user_profile();
+-  info->xuid = user_profile->xuid();
+-  info->signin_state = user_profile->signin_state();
++  const uint32_t signin_state = user_profile->signin_state();
++  const bool online = signin_state == 2;
++  info->xuid = ((flags & kOnlineXuidOnly) && !online) ? 0 : user_profile->xuid();
++  info->signin_state = signin_state;
+   rex::string::copy_truncating(info->name, user_profile->name(), rex::countof(info->name));
+   return X_E_SUCCESS;
+ }
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+index 8b862fc..a83e3d7 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+@@ -338,6 +338,12 @@ struct X_RTL_CRITICAL_SECTION {
+ #pragma pack(pop)
+ static_assert_size(X_RTL_CRITICAL_SECTION, 28);
+ 
++namespace {
++void (*critical_section_hook)(uint32_t cs_ptr) = nullptr;
++}  // namespace
++
++void SetCriticalSectionHook(void (*hook)(uint32_t cs_ptr)) { critical_section_hook = hook; }
++
+ void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t cs_ptr) {
+   cs->header.type = 1;      // EventSynchronizationObject (auto reset)
+   cs->header.absolute = 0;  // spin count div 256
+@@ -377,6 +383,7 @@ u32 RtlInitializeCriticalSectionAndSpinCount_entry(ppc_ptr_t<X_RTL_CRITICAL_SECT
+ }
+ 
+ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
++  if (auto hook = critical_section_hook) hook(cs.guest_address());
+   uint32_t cur_thread = XThread::GetCurrentThread()->guest_object();
+   uint32_t spin_count = cs->header.absolute * 256;
+ 
+@@ -408,6 +415,7 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
+ }
+ 
+ u32 RtlTryEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
++  if (auto hook = critical_section_hook) hook(cs.guest_address());
+   uint32_t thread = XThread::GetCurrentThread()->guest_object();
+ 
+   if (rex::thread::atomic_cas(-1, 0, &cs->lock_count)) {
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index bd43109..4886e48 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -13,6 +13,9 @@
+  *              role as a function dispatch table rather than a CPU emulator.
+  */
+ 
++#include <cstring>
++#include <string>
++
+ #include <rex/assert.h>
+ #include <rex/dbg.h>
+ #include <rex/logging.h>
+@@ -34,7 +37,29 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+ 
+ }  // namespace
+ 
+-static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
++static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* base) {
++  // mk9-rollback: where the call came from (the return address set for it), and the guest stack's
++  // return addresses above it (back chain at 0(r1), each caller's saved LR at -8 of the frame above)
++  std::string chain;
++  if (base) {
++    // only inside the thread's stack: its PCR (r13) has the bounds, +0x70 high, +0x74 low
++    auto word = [&](uint32_t a) {
++      uint32_t v = 0;
++      std::memcpy(&v, base + a, 4);
++      return __builtin_bswap32(v);
++    };
++    const uint32_t pcr = ctx.r13.u32;
++    const uint32_t hi = pcr ? word(pcr + 0x70) : 0, lo = pcr ? word(pcr + 0x74) : 0;
++    uint32_t sp = ctx.r1.u32;
++    for (int i = 0; i < 12 && hi > lo && sp >= lo && sp + 4 <= hi; i++) {
++      const uint32_t back = word(sp);
++      if (back <= sp || back > hi || back - 8 < lo) break;
++      chain += fmt::format(" {:08X}", word(back - 8));
++      sp = back;
++    }
++  }
++  REXCPU_ERROR("invalid call: lr {:08X} r1 {:08X} r3 {:08X} r11 {:08X} r12 {:08X}, stack{}",
++               uint32_t(ctx.lr), ctx.r1.u32, ctx.r3.u32, ctx.r11.u32, ctx.r12.u32, chain);
+   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
+             ctx.last_indirect_target);
+ }
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index 76cc877..f2e347f 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -25,8 +25,10 @@
+ #include <rex/logging.h>
+ #include <rex/math.h>
+ #include <rex/stream.h>
++#include <rex/ppc/context.h>
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/system/mmio_handler.h>
++#include <rex/system/thread_state.h>
+ #include <rex/system/xmemory.h>
+ #include <rex/thread.h>
+ 
+@@ -547,6 +549,28 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
+         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
+         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),
+         rex::thread::current_thread_id());
++    // mk9-rollback: the guest thread's last call and its stack's return addresses
++    if (auto* ts = runtime::ThreadState::Get(); ts && ts->context()) {
++      const PPCContext& ctx = *ts->context();
++      std::string chain;
++      // only inside the thread's stack: its PCR (r13) has the bounds, +0x70 high, +0x74 low
++      auto word = [&](uint32_t a) {
++        uint32_t v = 0;
++        std::memcpy(&v, virtual_membase_ + a, 4);
++        return __builtin_bswap32(v);
++      };
++      const uint32_t pcr = ctx.r13.u32;
++      const uint32_t hi = pcr ? word(pcr + 0x70) : 0, lo = pcr ? word(pcr + 0x74) : 0;
++      uint32_t sp = ctx.r1.u32;
++      for (int i = 0; i < 12 && hi > lo && sp >= lo && sp + 4 <= hi; i++) {
++        const uint32_t back = word(sp);
++        if (back <= sp || back > hi || back - 8 < lo) break;
++        chain += fmt::format(" {:08X}", word(back - 8));
++        sp = back;
++      }
++      REXSYS_ERROR("  guest lr {:08X} r1 {:08X} r3 {:08X} r31 {:08X}, stack{}", uint32_t(ctx.lr),
++                   ctx.r1.u32, ctx.r3.u32, ctx.r31.u32, chain);
++    }
+     return false;
+   }
+ 
+diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
+index f270f3c..5661df9 100644
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -436,12 +436,16 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   // it now if needed.
+   DetachIfLastDialogRemoved();
+ 
+-  if (!dialogs_.empty()) {
+-    // Repaint (and handle input) continuously if still active. In detached mode
+-    // there is no presenter; the app drives repaint via its own present loop.
+-    if (presenter_) {
+-      presenter_->RequestUIPaintFromUIThread();
+-    }
++  // Repaint (and handle input) continuously if a dialog that wants it is still
++  // active. In detached mode there is no presenter; the app drives repaint via
++  // its own present loop. Without one wanting it, the guest output's frames
++  // repaint the UI: the presenter is not kept painting as fast as it can.
++  bool continuous = false;
++  for (const ImGuiDialog* dialog : dialogs_) {
++    continuous = continuous || dialog->RepaintsContinuously();
++  }
++  if (continuous && presenter_) {
++    presenter_->RequestUIPaintFromUIThread();
+   }
+ }
+ 
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..a63a163 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -584,6 +584,8 @@ bool Presenter::RefreshGuestOutput(
+   // the host present call on the CPU and all frames reaching a present call).
+   uint32_t last_acquired_and_ready =
+       guest_output_mailbox_acquired_and_ready_.load(std::memory_order_relaxed);
++  // when it became ready, published with it (the present's wait for it is counted from here)
++  guest_output_ready_time_[guest_output_mailbox_writable_] = std::chrono::steady_clock::now();
+   // Desired acquired = current acquired (changed only by the consumers).
+   // Desired ready = current writable.
+   // memory_order_acq_rel to acquire the new writable image and to release the
+@@ -840,6 +842,10 @@ std::unique_lock<std::mutex> Presenter::ConsumeGuestOutput(
+         (old_acquired_and_ready & ~uint32_t(3)) | (old_acquired_and_ready >> 2);
+   }
+   uint32_t mailbox_index = desired_acquired_and_ready & 3;
++  // a guest frame not acquired before: its present (PaintAndPresent) counts its wait
++  if ((old_acquired_and_ready & 3) != mailbox_index) {
++    new_guest_output_ready_time_ = guest_output_ready_time_[mailbox_index];
++  }
+   // Give the current acquired image to the caller, or UINT32_MAX if it's
+   // inactive.
+   const GuestOutputProperties& properties = guest_output_properties_[mailbox_index];
+@@ -1494,10 +1500,63 @@ bool Presenter::InSurfaceOnMonitorFromUIThread() const {
+ #endif  // XE_PLATFORM
+ }
+ 
++namespace {
++std::atomic<uint64_t> g_present_count{0};
++// guest frames that reached a present since TakePresentWaits, their waits in all and the longest (microseconds)
++std::atomic<uint64_t> g_waited_frames{0}, g_waited_us{0}, g_longest_wait_us{0};
++}  // namespace
++
++uint64_t Presenter::PresentCount() { return g_present_count.load(std::memory_order_relaxed); }
++
++namespace {
++std::atomic<int64_t> g_last_shown_ns{0};
++std::atomic<uint64_t> g_shown_gaps{0}, g_shown_over_25{0}, g_shown_over_50{0}, g_shown_longest_us{0};
++}  // namespace
++
++void Presenter::ShownGaps(uint64_t& frames, uint64_t& over_25, uint64_t& over_50, double& longest_ms) {
++  frames = g_shown_gaps.load(std::memory_order_relaxed);
++  over_25 = g_shown_over_25.load(std::memory_order_relaxed);
++  over_50 = g_shown_over_50.load(std::memory_order_relaxed);
++  longest_ms = double(g_shown_longest_us.load(std::memory_order_relaxed)) / 1000.0;
++}
++
++void Presenter::TakePresentWaits(uint64_t& frames, double& total_ms, double& longest_ms) {
++  frames = g_waited_frames.exchange(0, std::memory_order_relaxed);
++  total_ms = double(g_waited_us.exchange(0, std::memory_order_relaxed)) / 1000.0;
++  longest_ms = double(g_longest_wait_us.exchange(0, std::memory_order_relaxed)) / 1000.0;
++}
++
+ Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
+   assert_false(execute_ui_drawers && !is_in_ui_thread_paint_);
+   assert_true(surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable);
+   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
++  if (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal) {
++    g_present_count.fetch_add(1, std::memory_order_relaxed);
++    // the first present of a guest frame: how long it waited since it was ready
++    if (new_guest_output_ready_time_ != std::chrono::steady_clock::time_point{}) {
++      const auto waited = std::chrono::duration_cast<std::chrono::microseconds>(
++                              std::chrono::steady_clock::now() - new_guest_output_ready_time_)
++                              .count();
++      new_guest_output_ready_time_ = {};
++      // the gap since the guest frame before this one reached a present
++      const int64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
++      const int64_t before_ns = g_last_shown_ns.exchange(now_ns, std::memory_order_relaxed);
++      if (before_ns) {
++        const uint64_t gap_us = uint64_t(std::max<int64_t>(0, now_ns - before_ns) / 1000);
++        g_shown_gaps.fetch_add(1, std::memory_order_relaxed);
++        if (gap_us > 25000) g_shown_over_25.fetch_add(1, std::memory_order_relaxed);
++        if (gap_us > 50000) g_shown_over_50.fetch_add(1, std::memory_order_relaxed);
++        uint64_t longest_gap = g_shown_longest_us.load(std::memory_order_relaxed);
++        while (gap_us > longest_gap &&
++               !g_shown_longest_us.compare_exchange_weak(longest_gap, gap_us, std::memory_order_relaxed)) {}
++      }
++      const uint64_t us = uint64_t(std::max<int64_t>(0, waited));
++      g_waited_frames.fetch_add(1, std::memory_order_relaxed);
++      g_waited_us.fetch_add(us, std::memory_order_relaxed);
++      uint64_t longest = g_longest_wait_us.load(std::memory_order_relaxed);
++      while (us > longest && !g_longest_wait_us.compare_exchange_weak(longest, us, std::memory_order_relaxed)) {}
++    }
++  }
+   switch (result) {
+     case PaintResult::kPresented:
+       surface_paint_connection_was_optimal_at_successful_paint_ = true;
+diff --git a/include/rex/kernel/xam/ui.h b/include/rex/kernel/xam/ui.h
+new file mode 100644
+index 0000000..fbda782
+--- /dev/null
++++ b/include/rex/kernel/xam/ui.h
+@@ -0,0 +1,33 @@
++#pragma once
++/**
++ * What a game can do about the system UI the runtime shows for it.
++ *
++ * @modified    SC5 Online, 2026 - a game's own answers to its message boxes
++ */
++
++#include <cstdint>
++#include <functional>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace rex::kernel::xam {
++
++// A message box the game asks for (XamShowMessageBoxUI)
++struct MessageBoxRequest {
++  uint32_t user_index = 0;
++  std::string title;
++  std::string text;
++  std::vector<std::string> buttons;
++  uint32_t active_button = 0;
++  // the guest's return addresses at the call, innermost first (up to 16): which of the game's functions asked
++  std::vector<uint32_t> callers;
++};
++
++// Asked before a message box is shown: the button to choose (the box is not shown, and the game gets that button as
++// if the player had picked it), or nothing to show the box as usual. Set once, before the game runs; called on the
++// game's thread.
++using MessageBoxAnswer = std::function<std::optional<uint32_t>(const MessageBoxRequest&)>;
++void SetMessageBoxAnswer(MessageBoxAnswer answer);
++
++}  // namespace rex::kernel::xam

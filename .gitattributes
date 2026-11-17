@@ -1,0 +1,7 @@
+# Windows scripts get CRLF whatever the checkout does (cmd.exe can miss a label in a script without them)
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# shell scripts LF, for Git Bash and Linux
+*.sh text eol=lf
+# the SDK patch applies byte for byte
+*.patch -text

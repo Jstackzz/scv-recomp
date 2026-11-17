@@ -1,0 +1,34 @@
+// SC5Launcher.exe's version and publisher, as Windows shows them (the file's Properties > Details) and antivirus
+// programs read them (launcher/CMakeLists.txt configures it from the project's version). An executable with none is
+// more often taken for malware by their machine learning: Windows Defender removed MK3D Online's unsigned 0.1.21
+// launcher as Trojan:Win32/Bearfoos.A!ml until it had one.
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Jstackzz"
+            VALUE "FileDescription", "SC5 Online launcher"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "SC5Launcher"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Jstackzz"
+            VALUE "OriginalFilename", "SC5Launcher.exe"
+            VALUE "ProductName", "SC5 Online"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

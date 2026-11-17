@@ -1,0 +1,143 @@
+#pragma once
+// Ranked / Casual queue pages, Single player (with the local two-instance test) and the Leaderboard.
+
+#include <QElapsedTimer>
+#include <QJsonObject>
+#include <QTimer>
+
+#include "MatchController.h"
+#include "Widgets.h"
+
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QPushButton;
+class QTableWidget;
+class ServerClient;
+
+class QueuePage : public Page {
+    Q_OBJECT
+public:
+    QueuePage(bool ranked, ServerClient* server, MatchController* controller, QWidget* parent = nullptr);
+    void setGame(const QString& gameId) override;
+    bool startSearch(const QString& mode = {}, const QString& character = {});  // also used by --queue
+    // the series card's choice, the rematch prompt's too: "rematch" (in versus, both back to character select), or
+    // leaving the series
+    void choose(const QString& choice);
+    void leaveSeries();
+    void pressFind();  // FIND MATCH (or cancelling the search) as a click would, for a controller's START
+
+signals:
+    // the series card's state at every change (series {}: none any more), mirrored by the rematch prompt
+    void seriesCard(const QJsonObject& series, const QString& title, const QString& score, const QString& info,
+                    bool canChoose);
+
+protected:
+    void showEvent(QShowEvent* event) override;  // the other queue page may have changed the shared settings
+
+private:
+    void refreshModes();
+    void refreshRoster();
+    void updateStats();
+    void updatePlayers();
+    void updateButton();
+    void onPhase(MatchController::Phase phase, const QString& text);
+    // the series after a match: a Casual rematch, or the ranked set's score and its next match
+    void onSeries(const QJsonObject& series);
+    void updateSeries();
+    QString seriesOverText(const QJsonObject& series) const;
+    bool leavingLosesSet();  // asks first when leaving would lose a ranked set; true: go ahead
+    QString key(const QString& what) const;
+
+    bool ranked_;
+    ServerClient* server_;
+    MatchController* controller_;
+    QComboBox* mode_;
+    QLabel* modeInfo_;
+    CharacterPicker* picker_;
+    QLabel* inGamePick_;
+    QCheckBox* pickInGame_;  // pick on the game's own select screen (modes the launcher picks for otherwise)
+    QLabel* playersNow_;   // how many play this game right now (the server's counts)
+    QLabel* playersInfo_;  // searching (for this page's queue too), in matches, in lobbies
+    QLabel* searchers_;    // who searches right now, for which game and queue
+    QComboBox* region_;
+    QComboBox* maxPing_;
+    QCheckBox* strict_;
+    QCheckBox* practice_;  // practice while the search waits (shared by both queue pages)
+    QCheckBox* searchAgain_;  // search again once a set or series is over (shared too)
+    QLabel* delayInfo_;
+    QPushButton* find_;
+    QLabel* status_;
+    QLabel* timer_;
+    QLabel* recordTitle_;
+    QLabel* elo_;
+    QLabel* wins_;
+    QLabel* losses_;
+    QLabel* rank_;  // ranked: the title the Elo gives and the next one
+    QLabel* rankBadge_;  // ranked: that title's badge
+    QWidget* mmCard_;
+    QWidget* seriesCard_;
+    QLabel* seriesTitle_;
+    QLabel* seriesScore_;
+    QLabel* seriesInfo_;
+    QPushButton* rematch_;  // Casual: again, both back to character select (versus)
+    QPushButton* leave_;
+    LogView* log_;
+    QTimer clock_;
+    QTimer seriesClock_;
+    QElapsedTimer seriesSince_;  // since the series' last message, for its countdown
+    QJsonObject stats_;
+    QJsonObject online_;      // the server's last online counts
+    QJsonObject series_;      // this page's series (Casual or ranked), {} when none
+    QString chosen_;  // "rematch" pressed, not seen by the server yet (sent once the game is ready)
+    // the series' last fighters by side as this player's game saw them (its own ids, "3.0"), and this player's side:
+    // whom a ranked set's keeper keeps
+    QStringList fighters_;
+    int side_ = 0;
+};
+
+// the whole game with its own menus (arcade, its practice mode, the side modes), straight to practice with every
+// character unlocked, and in a source build the two-game local test
+class SinglePlayerPage : public Page {
+    Q_OBJECT
+public:
+    explicit SinglePlayerPage(MatchController* controller, QWidget* parent = nullptr);
+    void setGame(const QString& gameId) override;
+
+private:
+    void refreshTestRoster();
+    void updateButtons();
+    void fillPlayer2();
+    MatchController* controller_;
+    QLabel* title_;
+    QPushButton* play_;
+    QPushButton* practice_;
+    QPushButton* versus_;
+    QComboBox* player2_;  // player 2's controller for versus (controls::Map::player2)
+    QPushButton* close_;
+    QComboBox* testMode_;
+    QComboBox* testP1_;
+    QComboBox* testP2_;
+    QLabel* exeInfo_;
+    QLabel* status_;
+    LogView* log_;
+};
+
+class LeaderboardPage : public Page {
+    Q_OBJECT
+public:
+    explicit LeaderboardPage(ServerClient* server, QWidget* parent = nullptr);
+    void setGame(const QString& gameId) override;
+    void refresh();
+    void setOrder(const QString& by);  // "elo" or "respect" (development: --snap-dir shows both)
+
+private:
+    void onMessage(const QJsonObject& msg);
+    ServerClient* server_;
+    QComboBox* mode_;
+    QComboBox* by_;  // by Elo (the ranked players) or by Respect Points (King of the Hill)
+    QTableWidget* table_;
+    QLabel* meBadge_;  // your rank's badge
+    QLabel* me_;
+    QLabel* info_;
+};

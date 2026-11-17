@@ -1,0 +1,205 @@
+#include "AppPaths.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QMutex>
+#include <QStandardPaths>
+
+#include "GameData.h"
+#include "WinUtil.h"
+
+namespace {
+QString g_config;
+QString g_dataDir;
+QSettings* g_settings = nullptr;
+QSettings* g_defaults = nullptr;  // defaults.ini beside the launcher: what a package sets up (the server), read only
+QMutex g_logMutex;
+
+bool writableDir(const QString& dir) {
+    QDir().mkpath(dir);
+    QFile probe(QDir(dir).filePath(QStringLiteral(".write-test")));
+    if (!probe.open(QIODevice::WriteOnly)) return false;
+    probe.close();
+    probe.remove();
+    return true;
+}
+}  // namespace
+
+namespace paths {
+
+void init(const QString& configOverride) {
+    if (!configOverride.isEmpty()) {
+        g_config = QFileInfo(configOverride).absoluteFilePath();
+    } else {
+        const QString exeDir = QCoreApplication::applicationDirPath();
+        const QString dir = writableDir(exeDir)
+                                ? exeDir
+                                : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        g_config = QDir(dir).filePath(QStringLiteral("sc5-launcher.ini"));
+    }
+    g_dataDir = QFileInfo(g_config).absolutePath();
+    QDir().mkpath(g_dataDir);
+    QDir().mkpath(sessionsDir());
+    g_settings = new QSettings(g_config, QSettings::IniFormat);
+    const QString defaults = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("defaults.ini"));
+    if (QFileInfo::exists(defaults)) g_defaults = new QSettings(defaults, QSettings::IniFormat);
+}
+
+QString configFile() { return g_config; }
+QString dataDir() { return g_dataDir; }
+QString sessionsDir() { return QDir(g_dataDir).filePath(QStringLiteral("sessions")); }
+QString logFile() { return QDir(g_dataDir).filePath(QStringLiteral("sc5-launcher.log")); }
+
+QString detectedRepoRoot() {
+    QDir dir(QCoreApplication::applicationDirPath());
+    for (int i = 0; i < 8; ++i) {
+        if (QFileInfo::exists(dir.filePath(QStringLiteral("tools/py/x360.py"))) &&
+            QFileInfo::exists(dir.filePath(QStringLiteral("launcher/CMakeLists.txt"))))
+            return dir.absolutePath();
+        if (!dir.cdUp()) break;
+    }
+    return QCoreApplication::applicationDirPath();
+}
+
+bool isPackage() { return QFileInfo(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("games"))).isDir(); }
+
+QString packagedGameFolder(const QString& gameId) {
+    const QString dir = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("games/") + gameId);
+    return QFileInfo(dir).isDir() ? dir : QString();
+}
+
+QString toolchainDir() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("toolchain")); }
+
+QString displayFile() { return QDir(g_dataDir).filePath(QStringLiteral("display.txt")); }
+
+}  // namespace paths
+
+namespace cfg {
+
+QSettings& store() { return *g_settings; }
+QVariant get(const QString& key, const QVariant& fallback) {
+    return g_settings->value(key, g_defaults ? g_defaults->value(key, fallback) : fallback);
+}
+void set(const QString& key, const QVariant& value) {
+    g_settings->setValue(key, value);
+    g_settings->sync();
+    if (key.startsWith(QLatin1String("display/"))) writeDisplayFile();  // a running game takes it from there
+}
+
+QString serverAddress() { return get(QStringLiteral("server/address"), QStringLiteral("127.0.0.1:7777")).toString(); }
+QString fingerprint() { return get(QStringLiteral("server/fingerprint")).toString(); }
+
+QString repoRoot() {
+    const QString v = get(QStringLiteral("tools/repo_root")).toString();
+    return v.isEmpty() ? paths::detectedRepoRoot() : v;
+}
+
+QString python() { return get(QStringLiteral("tools/python"), QStringLiteral("python")).toString(); }
+
+QString gameFolder(const QString& gameId) {
+    const QString v = get(QStringLiteral("games/%1/folder").arg(gameId)).toString();
+    if (!v.isEmpty()) return v;
+    const QString packaged = paths::packagedGameFolder(gameId);
+    // a source checkout keeps the game's files in game\ (git-ignored), where the game itself looks for them
+    return packaged.isEmpty() ? QDir(repoRoot()).filePath(QStringLiteral("game")) : packaged;
+}
+
+QString gameExe(const QString& gameId) {
+    const QString v = get(QStringLiteral("games/%1/exe").arg(gameId)).toString();
+    if (!v.isEmpty()) return v;
+    const Game* g = GameData::instance().game(gameId);
+    const QString exe = g && !g->defaultExe.isEmpty() ? g->defaultExe : gameId + QStringLiteral(".exe");
+    // a package keeps the executable in the game folder, also before Build game has put it there (SC5_GAME_EXE: where
+    // build-game.cmd installs it); a source checkout in its build output
+    const QDir folder(gameFolder(gameId));
+    if (paths::isPackage() || QFileInfo::exists(folder.filePath(exe))) return folder.filePath(exe);
+    return QDir(repoRoot()).filePath(QStringLiteral("%1/out/build/win-amd64-release/%2").arg(gameId, exe));
+}
+
+QString gameDataDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("disc")); }
+QString gameUpdateDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("update")); }
+QString gameDlcDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("dlc")); }
+QString gameUserDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("user")); }
+QString gameCacheDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("cache")); }
+
+QString buildScript(const QString& gameId) {
+    const QString v = get(QStringLiteral("games/%1/build_script").arg(gameId)).toString();
+    return v.isEmpty() ? QDir(gameFolder(gameId)).filePath(QStringLiteral("build-game.cmd")) : v;
+}
+
+QString buildArgs(const QString& gameId) { return get(QStringLiteral("games/%1/build_args").arg(gameId)).toString(); }
+
+QString region() { return get(QStringLiteral("online/region"), QStringLiteral("eu")).toString(); }
+int maxPing() { return get(QStringLiteral("online/max_ping"), 150).toInt(); }
+bool strict() { return get(QStringLiteral("online/strict"), false).toBool(); }
+bool pickInGame() { return get(QStringLiteral("online/pick_in_game"), true).toBool(); }
+bool practiceWhileWaiting() { return get(QStringLiteral("online/practice_while_waiting"), true).toBool(); }
+bool searchAgain() { return get(QStringLiteral("online/search_again"), true).toBool(); }
+bool matchSound() { return get(QStringLiteral("online/match_sound"), true).toBool(); }
+// 1 frame unless changed: rollback covers the rest of a match's ping, and every frame of it is felt
+int inputDelay() { return qBound(0, get(QStringLiteral("online/delay"), 1).toInt(), 4); }
+bool autoDelay() { return get(QStringLiteral("online/auto_delay"), true).toBool(); }
+int gamePort() { return get(QStringLiteral("online/game_port"), 7001).toInt(); }
+// as a game the launcher does not start: borderless at the monitor's own resolution
+QString displayMode() { return get(QStringLiteral("display/mode"), QStringLiteral("borderless")).toString(); }
+QString resolution() { return get(QStringLiteral("display/resolution"), QStringLiteral("desktop")).toString(); }
+int renderScale() { return qBound(1, get(QStringLiteral("display/render_scale"), 1).toInt(), 4); }
+QString antiAliasing() {
+    const QString v = get(QStringLiteral("display/anti_aliasing"), QStringLiteral("off")).toString();
+    return v == QLatin1String("fxaa") || v == QLatin1String("fxaa_extreme") ? v : QStringLiteral("off");
+}
+int anisotropic() {
+    const int v = get(QStringLiteral("display/anisotropic"), 0).toInt();
+    return v == 2 || v == 4 || v == 8 || v == 16 ? v : 0;
+}
+bool vsync() { return get(QStringLiteral("display/vsync"), true).toBool(); }
+bool adaptiveSync() { return get(QStringLiteral("display/adaptive_sync"), false).toBool(); }
+int brightness() { return qBound(50, get(QStringLiteral("display/brightness"), 100).toInt(), 200); }
+bool frameData() { return get(QStringLiteral("display/frame_data"), true).toBool(); }
+QStringList volumeNames() {
+    return {QStringLiteral("master"), QStringLiteral("music"), QStringLiteral("effects"), QStringLiteral("voices")};
+}
+int volume(const QString& name) { return qBound(0, get(QStringLiteral("display/volume_") + name, 100).toInt(), 150); }
+
+// key=value lines, the keys as the game's SC5_ variables name them, in lower case (docs/PROTOCOL.md 3.1)
+void writeDisplayFile() {
+    const QString text = QStringLiteral("mode=%1\nresolution=%2\nrender_scale=%3\nanti_aliasing=%4\nanisotropic=%5\n"
+                                        "vsync=%6\nadaptive_sync=%7\nbrightness=%8\nframe_data=%9\n")
+                             .arg(displayMode(), resolution())
+                             .arg(renderScale())
+                             .arg(antiAliasing())
+                             .arg(anisotropic())
+                             .arg(vsync() ? 1 : 0)
+                             .arg(adaptiveSync() ? 1 : 0)
+                             .arg(brightness())
+                             .arg(frameData() ? 1 : 0);
+    QString volumes;
+    for (const QString& name : volumeNames()) volumes += QStringLiteral("volume_%1=%2\n").arg(name).arg(volume(name));
+    winutil::writeFileAtomic(paths::displayFile(), (text + volumes).toLatin1());
+}
+bool udpLoopback() { return get(QStringLiteral("dev/udp_loopback"), false).toBool(); }
+bool udpBlocked() { return get(QStringLiteral("dev/udp_blocked"), false).toBool(); }
+bool devBackground() { return get(QStringLiteral("dev/background"), false).toBool(); }
+bool upnp() { return get(QStringLiteral("online/upnp"), true).toBool(); }
+bool hideIp() { return get(QStringLiteral("online/hide_ip"), false).toBool(); }
+bool hideIpAlways() { return get(QStringLiteral("online/hide_ip_always"), false).toBool(); }
+int localTestPort(int instance) {
+    return get(QStringLiteral("dev/local_port%1").arg(instance), instance == 1 ? 7001 : 7002).toInt();
+}
+
+}  // namespace cfg
+
+namespace applog {
+
+void write(const QString& line) {
+    QMutexLocker lock(&g_logMutex);
+    QFile f(paths::logFile());
+    if (!f.open(QIODevice::Append | QIODevice::Text)) return;
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss.zzz"));
+    f.write((stamp + QLatin1Char(' ') + line + QLatin1Char('\n')).toUtf8());
+}
+
+}  // namespace applog
