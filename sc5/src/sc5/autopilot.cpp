@@ -91,6 +91,10 @@ uint64_t g_over_at = 0;
 int g_won[2] = {0, 0};
 bool g_reselect = false;     // a rematch goes through Character Select (always so far: Rematch keeps state apart)
 bool g_menu_pressed = false;  // the after-result presses went out (Leave, Again)
+uint32_t g_skip_logged = 0;   // the battle state whose skipping with A the log said last
+bool g_both = false;          // this frame's press goes to both pads (each player skips their own intro)
+int g_last_rights = 0;        // the last match's stage: that many to the right of Random on the stage select
+bool g_same_stage = false;    // the next stage select picks the last match's stage (a rematch, the same two fighters)
 bool g_fresh_save = true;     // the save has never seen the main menu (its first-visit window comes)
 bool g_practice_script = false;  // tests: SC5_TEST_PRACTICE_SCRIPT plays
 
@@ -382,6 +386,7 @@ bool Override(uint32_t user, input::Pad& out) {
   if (g_plan.mode == Mode::Practice && g_phase == Phase::Fight && !g_practice_script) return false;
   out = input::Pad{};
   out.connected = true;  // the launcher's game has both pads (docs\PROTOCOL.md 3.1)
+  if (user == 1 && g_both) out.buttons = g_pad.buttons;  // skipping the way into a fight: each player's own part
   if (user != 0) return user < 2;
   if (g_local) {
     input::Pad own = input::ReadPhysical(0);
@@ -469,23 +474,23 @@ void Park() {
   }
 }
 
-void Rematch(const Plan& plan) {
+void Rematch(const Plan& plan, const bool named[2], bool same_stage) {
   // Always through Character Select, the same fighters picked again by the autopilot on both PCs unless the launcher
-  // names new ones: the fight loads again and the games meet at its intro. (VS Battle's own Rematch keeps the fight
-  // loaded and goes straight to "between rounds", whose state counts on from the result screens, which took a different
-  // time on each PC: the two games left it on different frames.)
+  // names others (or `-`: that side's player picks again): the fight loads again and the games meet at its intro. (VS
+  // Battle's own Rematch keeps the fight loaded and goes straight to "between rounds", whose state counts on from the
+  // result screens, which took a different time on each PC: the two games left it on different frames.)
   g_reselect = true;
   const uint64_t over_at = g_over_at;
   const int slots[2] = {g_picked_slot[0], g_picked_slot[1]}, costumes[2] = {g_picked_costume[0], g_picked_costume[1]};
   Plan next = plan;
   for (int s = 0; s < 2; s++) {
-    const bool named = plan.slots[s] >= 0 && (plan.slots[s] != g_plan.slots[s] || plan.costumes[s] != g_plan.costumes[s]);
-    if (!named && slots[s] >= 0) {
+    if (!named[s] && slots[s] >= 0) {
       next.slots[s] = slots[s];
       next.costumes[s] = costumes[s];
     }
   }
   g_plan = next;
+  g_same_stage = same_stage && g_last_rights > 0;
   NewMatch();
   g_over = true;  // still at the result
   g_over_reported = true;
@@ -531,6 +536,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   g_pad = input::Pad{};
   g_local = false;
   g_allow = 0;
+  g_both = false;
   switch (g_phase) {
     case Phase::Off:
     case Phase::Lost:
@@ -678,11 +684,15 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       // every 1.5 s should it not have taken. (Random would draw on each PC; the stage select sets more up with its
       // choice than the stage the battle setup copies, so player 2's game taking player 1's stage there is not enough.)
       if (In() == 300) {
+        // a rematch with the same two fighters: the last match's stage, as the game's own Rematch keeps it
         const int64_t seed = game::FightSeed();
-        const int rights = 1 + int((seed >= 0 ? uint64_t(seed) : 0) % 8);
+        const bool same = g_same_stage;
+        const int rights = same ? g_last_rights : 1 + int((seed >= 0 ? uint64_t(seed) : 0) % 8);
+        g_last_rights = rights;
+        g_same_stage = false;
         for (int i = 0; i < rights; i++) Push(input::kDpadRight, 6, 24);
         Push(input::kA, 10, 80);
-        REXLOG_INFO("sc5 autopilot: the stage {} to the right of Random", rights);
+        REXLOG_INFO("sc5 autopilot: the stage {} to the right of Random{}", rights, same ? " (the last match's)" : "");
       }
       if (In() > 700 && In() % 90 == 10) Tap(input::kA);
       if (In() > 2400) Enter(Phase::Lost);
@@ -711,6 +721,26 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
           Enter(Phase::Hold);
         }
         return;
+      }
+      // the way into an online fight: the VS screen (both fighters on their cards) while the fight loads, which START
+      // ends as on the console once the fight has loaded (A, B, X, Y do nothing there), then the stage's fly-over and
+      // the fighters' intros, which START skips too: START on both pads every third of a second while they are up
+      // (2026-11-17: the VS screen 359 frames to 101, the intros 484 to 201, about 9 s less). The games meet at round
+      // 1's call whatever time their way there took (the netplay's barrier). (In the one launcher test with the intros
+      // skipped the two games took a KO's replay differently: the replay's own frame counter, which rollback did not
+      // put back, battle.cpp; it parted the games with the intros played as well.)
+      if (g_plan.online && !g_fought && (battle == game::kBattleLoading || battle == game::kBattleIntro)) {
+        if (g_skip_logged != battle) {
+          g_skip_logged = battle;
+          REXLOG_INFO("sc5 autopilot: skipping the {} with START from frame {}",
+                      battle == game::kBattleLoading ? "VS screen" : "fly-over and intros", Now());
+        }
+        if (In() % 20 == 0) Tap(input::kStart);
+        RunSteps();
+        g_both = true;
+      } else if (g_plan.online && !g_fought && !g_steps.empty()) {
+        g_steps.clear();  // a press still queued when round 1's call came: none for the result screen's menus
+        g_step_t = 0;
       }
       if (g_over) Enter(Phase::Result);
       return;

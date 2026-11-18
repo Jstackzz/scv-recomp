@@ -174,9 +174,14 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    wired, the ping); ranked shows your rank and keeps the opponent hidden until both accept. Then the launcher
    punches the opponent on the game port (UPnP, hole punching, else the server's relay, else the tunnel over its TLS
    connection), measures the ping, writes the start line, reports the result the game writes and parks the game.
-   After a match the series card shows the score against that opponent: Casual offers REMATCH (both back to the
-   select screen when both press it) and LEAVE for 60 s after every match; a ranked set (first to 3) asks for its next
-   match by itself, only the last match's loser picks again, and *Leave set* asks first when leaving would lose it.
+   After a match the game waits at its result screen, still connected to the other's (a queue match reached
+   straight), and the series card shows the score against that opponent: Casual offers REMATCH (the same characters
+   on the same stage, as the game's own Rematch, when both choose it), CHARACTER SELECT (both pick again; either
+   one's choice of it takes both there) and LEAVE for 60 s after every match, in the card and in the *Rematch?* window
+   that comes over the game (a controller works it); a ranked set (first to 3) asks for its next match by itself, only
+   the last match's loser picks again, and *Leave set* asks first when leaving would lose it. The next match starts
+   from the result screen (`MatchController::Phase::AtResult`, the game's `rematch`: back through Character Select,
+   no new punch, no restart); a series over, a relayed match or an older opponent's launcher park the game as before.
    *Your record* shows the wins and losses (and in Ranked the Elo, the rank's badge, the next rank and the whole
    ladder in its tooltip).
 3. **Lobby**: create (name, mode, password, best of 1/3/5, *King of the Hill*), join from the list or by its
@@ -318,14 +323,16 @@ files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them
   spectator feed), the display and sound settings (`SC5_DISPLAY_FILE`) and `controls.toml` (docs\GAME.md, "The
   launcher's game"). The launcher's own end-to-end runs above still use `launcher/tools/fake_game.py`;
   `tools\linktest.py` drives two or three real games through the same files.
-- No match has been played between two PCs over the internet yet: the tests so far ran two or three games on one PC
-  with lag added (up to 150 ms each way), and the server answers from outside.
+- Few matches have been played between two PCs yet (the first, 2026-11-17, on one home network, found the throws'
+  heap pointer, GAME.md "Two PCs"); the other tests ran two or three games on one PC with lag added (up to 150 ms each
+  way), with one game's heap moved to stand in for a second PC.
 - Build game compiles the game only in a player package (its `games\sc5\build-game.cmd`, tested 2026-11-17 on a
   laid-out package; `tools\package.ps1`), not in a source build, where `sc5\build.cmd` does. Before the first build
   a package says `sc5.exe` is missing, as if an antivirus had taken it.
 - Dampierre (downloadable) is picked in the game only, by players who both have him.
-- Each match of a series is a `park` and a new `start` (about 20 s and 35 s with the real game); the game's own
-  Rematch (`rematch`, no loading) is not used by the launcher yet.
+- A series' next match goes from the result screen back through Character Select and loads the fight again (the
+  game's own Rematch, which keeps the fight loaded, parts two games: GAME.md); a relayed or tunnelled match's next
+  one is still a `park` and a new `start`.
 - Results are self-reported: agreement counts, disagreement voids the match, a single report counts for nothing.
 - One server process with in-memory queues and lobbies; a restart drops searches and matches in progress.
 - The launcher is Windows only and not code-signed.

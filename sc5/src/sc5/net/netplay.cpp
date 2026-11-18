@@ -84,25 +84,48 @@ constexpr int kRing = 16;                  // battle snapshots kept (> kMaxPredi
 constexpr uint32_t kCheckEvery = 30;
 
 // what the two games make alike at the barrier: player 1's game's values of the counters that start at boot
-// (docs\GAME.md, "Determinism"), which player 2's game takes
+// (docs\GAME.md, "Determinism"), which player 2's game takes; not the three that count frames presented to the GPU
+// (0x8280DE94, 0x8281929C, 0x8281991C: battle.cpp's kRaw says why), which each game's own GPU waits by
 constexpr uint32_t kAgreedWords[] = {
     0x82771B40, 0x82771B44, 0x82771B48, 0x82771B4C, 0x82771B50, 0x82771B54, 0x82771B58, 0x82771B5C,
-    0x8280DE94, 0x8281929C, 0x8281991C, 0x828E8790, 0x835B3EB4,
+    0x828E8790, 0x835B3EB4,
 };
 // and the battle's state machine (0x82767D08, 0x200 bytes: the current and pending states and the embedded states'
 // own counts, static addresses only): a state keeps counts from before it (the "between rounds" a rematch's barrier
 // is the first frame of counted on from the result screens, which took a different time on each PC, and the two
 // games left it on different frames)
 constexpr uint32_t kAgreedMachine = 0x82767D08, kAgreedMachineSize = 0x200;
+// ... all but +0x14, a heap object's address (the menus' object the fight was set up from), which each game has where
+// its own heap put it: player 1's there left player 2's game pointing into its own heap at whatever lay at that
+// address, and with the two heaps apart (two PCs: a game whose heap started 2 MB higher showed it on one) its KO
+// replays no longer played, so every KO parted the games (2026-11-17)
+// (and +0x13C, another heap object's address, which a fight sets: Elysium against Edge Master, Kilik against Ezio;
+// with the count at +0x138 that comes with it, worked out from a player's pose: battle.cpp KindOf)
+// (and +0x10, which goes with +0x14: that object counts as the fight's setup only while its +48 is the state machine's
+// +0x10 (sub_82479360 and the KO replay's start test it). In a rematch the two games had numbered it apart (0x569 and
+// 0x54B), player 2's game took player 1's, no longer saw its own setup object and played no KO replay: it went to the
+// result 397 frames before the other (Ezio against Viola with 40 ms each way and render scale 2 on game 2,
+// 2026-11-18). The snapshot does not carry it.)
+constexpr uint32_t kMachineOwnWords[] = {0x82767D18, 0x82767D1C, 0x82767E40, 0x82767E44};
 
 std::vector<uint32_t> AgreedAddresses() {
   std::vector<uint32_t> out(std::begin(kAgreedWords), std::end(kAgreedWords));
-  for (uint32_t a = kAgreedMachine; a < kAgreedMachine + kAgreedMachineSize; a += 4) out.push_back(a);
+  for (uint32_t a = kAgreedMachine; a < kAgreedMachine + kAgreedMachineSize; a += 4)
+    if (std::find(std::begin(kMachineOwnWords), std::end(kMachineOwnWords), a) == std::end(kMachineOwnWords))
+      out.push_back(a);
   return out;
 }
 // the game's own input delay per player (sub_8216E2F8 reads it at 0x8216E63C: 2 frames offline); the netplay's
 // delay stands in for it
 constexpr uint32_t kGameDelay = 0x8275C15C;
+// The game's count of frames shown (0x82771B44, one of the agreed words): only the present moves it (sub_824945F8),
+// and only when the GPU took the frame, yet the battle reads it, to throttle what it does to once in a few frames shown
+// (sub_82155B80, sub_82114200, sub_821CA8F0: "4 or more since the stamp", the stamp kept in its objects). A frame run
+// again presents nothing, and a busy GPU makes the present skip a count, so each game's count went its own way and
+// the stamps came out apart (frame numbers 32 apart in the players' objects, 2026-11-17). In a match it is the
+// match's frame from its agreed value at the barrier, in every frame run, again or not (SetFrameInputs).
+constexpr uint32_t kFramesShown = 0x82771B44;
+uint32_t g_shown_base = 0;
 
 struct Wire {
   uint16_t buttons = 0;
@@ -854,7 +877,8 @@ bool Open(const Settings& st) {
 }
 
 void StopRolling();
-void DumpAt(PPCContext& ctx, uint8_t* base);
+void DumpAtTop(PPCContext& ctx, uint8_t* base, uint32_t f);
+void DumpSettled(uint32_t settled);
 
 void ApplyPending() {
   std::lock_guard<std::mutex> lock(g_cfg_lock);
@@ -950,8 +974,37 @@ Wire Guess(uint32_t f) {
 // the frame running now plays on neutral inputs (outside a round's fighting)
 bool g_neutral = false;
 
-// frame f's inputs: what the game's pad reads get until the next frame's top
+// a round is fought: the battle state machine's "fighting", but not a KO's replay, which the game plays in that state
+// too (battle::InKoReplay says why it runs on neutral inputs, as the KO around it)
+bool RoundFought() { return game::BattleState() == game::kBattleFighting && !battle::InKoReplay(); }
+
+// The fight's random numbers seeded again wherever the battle's state changes outside a round's fighting (the KO, the
+// KO's replay and its end, between rounds, the round's call, the round's first frame fought), at the frame's top: the
+// two games reach each of these on the same frame with the same fight. Within a round their generators come apart
+// though the fight stays alike: some draws from the C library's rand, TT800 and the Mersenne Twister come in a frame's
+// first run and not in its rerun, or the other way round (who draws them is not known yet), and the check does not
+// hash the generators. Between rounds the game picks from them: Elysium's and Edge Master's style for the next round
+// (each player's +0x1B8 and +0x17AC), which the two games picked apart, loaded for 19 and 14 frames and started round
+// 3 on frames 5 apart (Elysium against Edge Master with 40 ms each way: TT800 a draw apart from frame 1189 and the
+// Twister two from 434, round 3 parted from its first check, 2026-11-18). Seeded as the barrier seeds them
+// (sub_824A35A8), from the match's seed and the frame.
+uint32_t g_match_seed = 0;
+uint32_t g_seeded_state = 0;
+uint32_t SeededState() { return game::BattleState() | (battle::InKoReplay() ? 0x10000u : 0u); }
+void ReseedAtStateChange(PPCContext& ctx, uint8_t* base) {
+  const uint32_t state = SeededState();
+  if (state == g_seeded_state) return;
+  g_seeded_state = state;
+  // the seeding's hook (game.cpp) seeds with the match's seed whatever it is asked: this seed for this one
+  const uint32_t seed = g_match_seed ^ (g_frame * 0x9E3779B9u);
+  game::SetSeed(int64_t(seed));
+  game::Reseed(ctx, base, seed);
+  game::SetSeed(int64_t(g_match_seed));
+}
+
+// frame f's inputs: what the game's pad reads get until the next frame's top (and its count of frames shown)
 void SetFrameInputs(uint32_t f) {
+  Put32(kFramesShown, g_shown_base + f);
   if (g_cfg.watch) {  // a spectator: both players' own, from the feed (neutral where theirs were)
     Watched& w = g_watched[g_match];
     for (int s = 0; s < 2; s++) {
@@ -1097,6 +1150,7 @@ bool CorrectGuesses(PPCContext& ctx, uint8_t* base) {
     }
     SetFrameInputs(f);
     sparring::OnFrame(f);  // Online Practice's rules, as the frame's first run had them
+    DumpAtTop(ctx, base, f);
     const auto r0 = Clock::now();
     frame::RunAgain(ctx, base);
     running += Clock::now() - r0;
@@ -1415,11 +1469,23 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   if (g_slot == 1)
     for (int i = 0; i < 3; i++) Send(Header(kFixOk));
   const uint32_t seed = g_slot == 0 ? my_seed : p.seed;
-  if (g_slot == 1)
-    for (size_t i = 0; i < agreed.size() && i < p.words.size(); i++) Put32(agreed[i], p.words[i]);
+  if (g_slot == 1) {
+    // what this game had otherwise, in the log (the words a game far along its own way differs in)
+    std::string differed;
+    int n = 0;
+    for (size_t i = 0; i < agreed.size() && i < p.words.size(); i++) {
+      const uint32_t mine = Get32(agreed[i]);
+      if (mine != p.words[i] && n++ < 16) differed += fmt::format(" {:08X}:{:08X}>{:08X}", agreed[i], mine, p.words[i]);
+      Put32(agreed[i], p.words[i]);
+    }
+    if (n) REXLOG_INFO("sc5 net: match {}: {} agreed words taken from player 1's game:{}", g_match, n, differed);
+  }
+  g_shown_base = Get32(kFramesShown);  // player 1's, in both games
   // the fight's random numbers from the agreed seed on both PCs (the game's own seeding: sub_824A35A8)
   game::SetSeed(int64_t(seed));
   game::Reseed(ctx, base, seed);
+  g_match_seed = seed;
+  g_seeded_state = SeededState();
   // the visual systems' random numbers (sc5/rng.h) from the agreed ones too: their own streams went apart before the
   // match (menus, result screens), and the intro draws from them (a rematch's intro played otherwise on the two PCs)
   rng::ResetVisual();
@@ -1467,6 +1533,7 @@ bool WatchMeet(PPCContext& ctx, uint8_t* base) {
   Watched& w = g_watched[g_match];
   const std::vector<uint32_t> agreed = AgreedAddresses();
   for (size_t i = 0; i < agreed.size() && i < w.words.size(); i++) Put32(agreed[i], w.words[i]);
+  g_shown_base = Get32(kFramesShown);
   uint32_t bytes = 0;
   for (auto& [chunk, piece] : w.blocks) {
     if (piece.size() < 8) continue;
@@ -1485,6 +1552,8 @@ bool WatchMeet(PPCContext& ctx, uint8_t* base) {
   }
   game::SetSeed(int64_t(w.seed));
   game::Reseed(ctx, base, w.seed);
+  g_match_seed = w.seed;
+  g_seeded_state = SeededState();
   rng::ResetVisual();
   Put32(kGameDelay, 0);
   Put32(kGameDelay + 4, 0);
@@ -1508,7 +1577,7 @@ bool WatchMeet(PPCContext& ctx, uint8_t* base) {
 
 // the spectator's check of frame f (the players' at the same top of frame) against theirs
 void WatchCheck(PPCContext& ctx, uint8_t* base, uint32_t f) {
-  if (f % kCheckEvery != 0 || game::BattleState() != game::kBattleFighting) return;
+  if (f % kCheckEvery != 0 || !RoundFought()) return;
   if (!g_watch_stream) g_watch_stream = battle::NewStream();
   if (!g_watch_stream || !battle::Save(ctx, base, g_watch_stream)) return;
   g_watch_mine[f] = battle::FightHash(g_watch_stream);
@@ -1559,7 +1628,7 @@ bool WatchWait(uint32_t f) {
 // Which frames the players ran on neutral inputs (OnTop): a frame whose top is outside a round's fighting, unless the
 // frame before was fought (that one still takes the real inputs, as the players' last rolled frame does)
 void WatchNeutral() {
-  const bool fighting = game::BattleState() == game::kBattleFighting;
+  const bool fighting = RoundFought();
   if (g_watch_rolling) {
     if (!fighting) g_watch_rolling = false;
     g_neutral = false;
@@ -1577,9 +1646,9 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   FeedPump();
   const Watched& w = g_watched[g_match];
   int unseen = 0;
-  while (unseen < 120 && std::min(w.contiguous[0], w.contiguous[1]) > g_frame + 30 &&
-         game::BattleState() == game::kBattleFighting) {
+  while (unseen < 120 && std::min(w.contiguous[0], w.contiguous[1]) > g_frame + 30 && RoundFought()) {
     WatchNeutral();
+    ReseedAtStateChange(ctx, base);  // as the players' games do
     SetFrameInputs(g_frame);
     sparring::OnFrame(g_frame);
     WatchCheck(ctx, base, g_frame);
@@ -1601,6 +1670,7 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
     return Lost(Status::Disconnected);
   }
   g_waiting = false;
+  ReseedAtStateChange(ctx, base);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);
   WatchCheck(ctx, base, g_frame);
@@ -1656,10 +1726,13 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     SendOwn();
     if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
     // the round is no longer fought: lockstep again once every frame so far ran with the real inputs
-    if (game::BattleState() != game::kBattleFighting) {
+    if (!RoundFought()) {
       if (g_frame && !WaitForInputs(g_frame - 1)) return Lost(Status::Disconnected);
       if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
-      if (game::BattleState() != game::kBattleFighting) StopRolling();
+      if (!RoundFought()) {
+        StopRolling();
+        ReseedAtStateChange(ctx, base);
+      }
     }
     if (g_rolling) {
       if (g_frame >= g_peer.confirmed + kMaxPredict && !WaitForInputs(g_frame - kMaxPredict))
@@ -1680,13 +1753,14 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
   } else {
     SendOwn();
-    if (g_cfg.rollback && game::BattleState() == game::kBattleFighting) {
+    ReseedAtStateChange(ctx, base);  // before the round's first frame is kept
+    if (g_cfg.rollback && RoundFought()) {
       StartRolling(ctx, base);
       Keep(ctx, base, g_frame);
     } else {
-      // Outside a round's fighting (the intro, the round's call, a KO, between rounds) the players' inputs do nothing
-      // the fight keeps: both games run these frames on neutral inputs, without waiting for the other's (with a
-      // round trip longer than the input delay, lockstep made the intro wait at almost every frame)
+      // Outside a round's fighting (the intro, the round's call, a KO and its replay, between rounds) the players'
+      // inputs do nothing the fight keeps: both games run these frames on neutral inputs, without waiting for the
+      // other's (with a round trip longer than the input delay, lockstep made the intro wait at almost every frame)
       g_peer.confirmed = g_frame + 1;
       g_neutral = true;
       Pace();  // the two games kept even here too, or they start the round apart
@@ -1696,35 +1770,77 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
   sparring::OnFrame(g_frame);  // Online Practice's rules at the frame's top, after it was kept (a rerun starts there)
   SettleChecks();
   CompareChecks();
-  DumpAt(ctx, base);
+  DumpAtTop(ctx, base, g_frame);
+  DumpSettled(g_rolling ? g_peer.confirmed : g_frame + 1);
 }
 
-// tests: SC5_NET_DUMP_AT=<frame>,...: the battle's snapshot and its blocks at the top of those match frames (rolling or
-// not) into SC5_NET_DUMP_DIR as net<side>_m<match>at<frame>.bin / .blocks, to compare the two games
-void DumpAt(PPCContext& ctx, uint8_t* base) {
-  static const std::vector<uint32_t> at = [] {
-    std::vector<uint32_t> out;
+// tests: SC5_NET_DUMP_AT=<frame>,...: the battle's snapshot at the top of those match frames (their inputs set) as the
+// two games end up with it, into SC5_NET_DUMP_DIR as net<side>_m<match>at<frame>.bin / .blocks (each block's place in
+// the .bin, size and guest address), and the raw memory kept beside it (battle.cpp) as .raw.bin / .raw.blocks. Each
+// run of such a frame (the first, and every rerun) keeps its top; it is written once the frame's own input and every
+// one before it are known, so the last run had them all and a wrong guess shows in neither game's files.
+struct AtDumps {
+  std::vector<uint32_t> at;
+  std::map<uint32_t, uint32_t> pending;  // frame -> the stream holding its top from its last run
+  std::vector<uint32_t> spare;
+};
+
+AtDumps& Dumps() {
+  static AtDumps d = [] {
+    AtDumps out;
     if (const char* v = std::getenv("SC5_NET_DUMP_AT"))
       for (const char* p = v; *p;) {
-        out.push_back(uint32_t(std::strtoul(p, const_cast<char**>(&p), 10)));
+        out.at.push_back(uint32_t(std::strtoul(p, const_cast<char**>(&p), 10)));
         while (*p == ',') p++;
       }
     return out;
   }();
+  return d;
+}
+
+void DumpAtTop(PPCContext& ctx, uint8_t* base, uint32_t f) {
+  AtDumps& d = Dumps();
   const char* dir = std::getenv("SC5_NET_DUMP_DIR");
-  if (at.empty() || !dir || frame::Replaying() || std::find(at.begin(), at.end(), g_frame) == at.end()) return;
-  static uint32_t stream = 0;
-  if (!stream) stream = battle::NewStream();
-  if (!battle::Save(ctx, base, stream)) return;
-  const std::string stem = fmt::format("{}/net{}_m{}at{}", dir, g_slot + 1, g_match, g_frame);
-  if (FILE* out = std::fopen((stem + ".bin").c_str(), "wb")) {
-    std::fwrite(battle::Data(stream), 1, battle::Size(stream), out);
-    std::fclose(out);
+  if (d.at.empty() || !dir || std::find(d.at.begin(), d.at.end(), f) == d.at.end()) return;
+  uint32_t& stream = d.pending[f];
+  if (!stream) {
+    if (d.spare.empty()) {
+      stream = battle::NewStream();
+    } else {
+      stream = d.spare.back();
+      d.spare.pop_back();
+    }
   }
-  if (FILE* out = std::fopen((stem + ".blocks").c_str(), "w")) {
-    if (const auto* blocks = battle::Blocks(stream))
-      for (const auto& b : *blocks) std::fprintf(out, "%u %u %08X\n", b.pos, b.size, b.source);
-    std::fclose(out);
+  if (!battle::Save(ctx, base, stream)) {
+    d.spare.push_back(stream);
+    d.pending.erase(f);
+  }
+}
+
+// the frames below `settled` ran with every real input: their kept tops are final
+void DumpSettled(uint32_t settled) {
+  AtDumps& d = Dumps();
+  const char* dir = std::getenv("SC5_NET_DUMP_DIR");
+  while (!d.pending.empty() && d.pending.begin()->first < settled) {
+    const auto [f, stream] = *d.pending.begin();
+    const std::string stem = fmt::format("{}/net{}_m{}at{}", dir, g_slot + 1, g_match, f);
+    auto write = [](const std::string& path, const uint8_t* data, size_t size, const std::vector<battle::Block>& blocks) {
+      if (FILE* out = std::fopen((path + ".bin").c_str(), "wb")) {
+        std::fwrite(data, 1, size, out);
+        std::fclose(out);
+      }
+      if (FILE* out = std::fopen((path + ".blocks").c_str(), "w")) {
+        for (const auto& b : blocks) std::fprintf(out, "%u %u %08X\n", b.pos, b.size, b.source);
+        std::fclose(out);
+      }
+    };
+    if (const auto* blocks = battle::Blocks(stream)) write(stem, battle::Data(stream), battle::Size(stream), *blocks);
+    // the raw memory kept beside it (battle.cpp kRaw and DynamicRegions), which the check does not hash
+    std::vector<battle::Block> raw_blocks;
+    const std::vector<uint8_t> raw = battle::RawBytes(stream, 0, raw_blocks);
+    write(stem + ".raw", raw.data(), raw.size(), raw_blocks);
+    d.spare.push_back(stream);
+    d.pending.erase(d.pending.begin());
   }
 }
 

@@ -31,6 +31,9 @@ std::string RawDifferences(uint32_t a, uint32_t b, uint32_t& count);
 struct Block {
   uint32_t pos, size, source;
 };
+// tests: the raw memory kept beside a stream, its blocks (their places counted from `offset`) added to `blocks`
+// (net/netplay.cpp DumpAt writes it beside the snapshot)
+std::vector<uint8_t> RawBytes(uint32_t stream, uint32_t offset, std::vector<Block>& blocks);
 const std::vector<Block>* Blocks(uint32_t stream);
 // what a block's guest address holds: a player's pose (each player's three buffers of 6208 bytes at +0x3190, +0xB190,
 // +0x13190: cloth and secondary bones that the stage's wind moves, which rollback cannot keep exact), a heap object
@@ -46,5 +49,8 @@ Kind KindOf(uint32_t source);
 uint64_t FightHash(uint32_t stream);
 // the stream write hook's report (debug_watch.cpp's Sc5DbgSnapWrite)
 void OnSnapWrite(uint32_t stream, uint32_t pos, uint32_t size, uint32_t source);
+// A KO's replay is playing (the replay's manager, sub_8211A8A8, in its state 2): the battle state machine says
+// "fighting", but the game plays a stretch of the round back and puts the present back at its end (battle.cpp)
+bool InKoReplay();
 
 }  // namespace sc5::battle

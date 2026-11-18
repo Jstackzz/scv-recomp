@@ -733,8 +733,11 @@ void MainWindow::onCasualSeries(const QJsonObject& series, const QString& title,
     }
     const QString key = series.value(QStringLiteral("series")).toString() + QLatin1Char('/') +
                         QString::number(series.value(QStringLiteral("played")).toInt());
-    // once per match, when the game has played its end (the finisher, a fatality, the winner's pose) and is ready
-    if (!rematchDialog_ && rematchShownFor_ != key && controller_->phase() == MatchController::Phase::Idle) {
+    // once per match: when its game waits at its result screen (where the next match starts from), or once the game
+    // has played its end (the finisher, the winner's pose) and is back at its hold point
+    const MatchController::Phase phase = controller_->phase();
+    if (!rematchDialog_ && rematchShownFor_ != key &&
+        (phase == MatchController::Phase::Idle || phase == MatchController::Phase::AtResult)) {
         rematchShownFor_ = key;
         auto* dlg = new RematchDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);

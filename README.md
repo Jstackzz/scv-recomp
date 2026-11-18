@@ -54,14 +54,21 @@ again by itself before you play.
 - **Display settings that cannot desync a match**: window mode and size, internal resolution (720p as on the console
   up to 4x), anti-aliasing, texture filtering, V-sync, brightness. Each changes only how a frame looks, never what
   the game computes, so two players may pick differently. Music, effects and voices levels apply at once.
+- **Rematches in the game**: after a match the game stays at its result screen. Casual offers REMATCH (the same
+  characters on the same stage) and CHARACTER SELECT (both pick again); a ranked set goes on by itself, its last
+  match's winner keeping their fighter while the loser picks again. The next match starts from there, without
+  closing the game. The VS screen before each fight (both fighters on their cards), the stage's fly-over and the
+  fighters' intros are skipped, as START skips them on the console.
 - **The launcher**: accounts, MATCH FOUND with the opponent's connection, ranked sets with 16 Soulcalibur rank
-  titles, rematches, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and
-  F3 (picture) reports to the server. Players who cannot reach each other play through the server's relay.
+  titles, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and F3 (picture)
+  reports to the server. Players who cannot reach each other play through the server's relay.
 
 ## Not done yet
 
-- No match has been played between two PCs over the internet yet; the tests so far ran on one PC with lag added.
-- Each match of a series closes the fight and starts it again (about 20 s); the game's own Rematch is not used yet.
+- Few matches have been played between two PCs yet (the first ones found the throws' desync, fixed in 0.1.2); most
+  tests ran on one PC with lag added, one game's memory moved to stand in for a second PC.
+- A rematch goes back through Character Select and loads the fight again (a few seconds more than the game's own
+  Rematch, which would part the two games).
 - Screens can hitch for 70-210 ms while they load. Only tested on a fast PC so far.
 - More in [docs/LAUNCHER.md](docs/LAUNCHER.md#known-limitations).
 

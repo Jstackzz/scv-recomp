@@ -65,6 +65,24 @@ bool ParseButtons(const std::string& s, Pad& pad) {
       pad.right_trigger = 0xFF;
       known = true;
     }
+    // an analog value as the netplay carries it: LX=, LY=, RX=, RY= a stick's top byte (-128..127, up and right
+    // positive), LT=, RT= a trigger (0..255): a match's net log played back as it was
+    if (name.size() > 3 && name[2] == '=') {
+      const std::string axis = name.substr(0, 2);
+      const int v = std::atoi(name.c_str() + 3);
+      int16_t* stick = _stricmp(axis.c_str(), "LX") == 0   ? &pad.lx
+                       : _stricmp(axis.c_str(), "LY") == 0 ? &pad.ly
+                       : _stricmp(axis.c_str(), "RX") == 0 ? &pad.rx
+                       : _stricmp(axis.c_str(), "RY") == 0 ? &pad.ry
+                                                           : nullptr;
+      if (stick && v >= -128 && v <= 127) {
+        *stick = int16_t(v * 256);
+        known = true;
+      } else if ((_stricmp(axis.c_str(), "LT") == 0 || _stricmp(axis.c_str(), "RT") == 0) && v >= 0 && v <= 255) {
+        (_stricmp(axis.c_str(), "LT") == 0 ? pad.left_trigger : pad.right_trigger) = uint8_t(v);
+        known = true;
+      }
+    }
     if (!known) return false;
   }
   return true;

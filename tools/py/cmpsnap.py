@@ -14,18 +14,24 @@ from collections import defaultdict
 
 P1, P2, PSIZE = 0x82937070, 0x82994BA0, 0x5DB30
 # battle.cpp's KindOf
-POINTERS = {0x22638, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04, 0x5CEB4, 0x5D2B4, 0x5D30C, 0x5D364, 0x5D3BC,
-            0x5DACC, 0x5DAD0}
+POINTERS = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04, 0x5CEB4, 0x5D2B4, 0x5D30C, 0x5D364,
+            0x5D3BC, 0x5DACC, 0x5DAD0}
 
 
 def kind(a):
     for p in (P1, P2):
         if any(p + b <= a < p + b + 6208 for b in (0x3190, 0xB190, 0x13190)):
             return "pose"
+        if any(p + b <= a < p + b + 0x800 for b in (0x1B310, 0x1BB10, 0x1C310)):  # the pose's buffers for the drawing
+            return "pose"
         if p + 0x22638 <= a < p + 0x5DAD4 and any(p + o <= a < p + o + 4 for o in POINTERS):
             return "pointer"
-    if 0x829F552C <= a < 0x829F5530 or 0x829F59D4 <= a < 0x829F59D8:
+    if 0x829F5528 <= a < 0x829F5530 or 0x829F59D4 <= a < 0x829F59D8 or 0x829F55D0 <= a < 0x829F55D8:
         return "pointer"
+    if 0x82767D1C <= a < 0x82767D20 or 0x82767E44 <= a < 0x82767E48:  # the battle state machine's two heap pointers
+        return "pointer"
+    if 0x82767E40 <= a < 0x82767E44:  # ... and the count with the second, worked out from a player's pose
+        return "pose"
     if 0x70000000 <= a < 0x80000000:
         return "stack"
     if 0x40000000 <= a < 0x70000000 or a >= 0xA0000000:

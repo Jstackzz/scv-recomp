@@ -34,8 +34,11 @@ public:
     // Finishing: the result is in, the game still plays the match's ending (finisher, winner's pose) until it is back
     // at its hold point; no new match meanwhile, the game still holds the game port. Watching: the game plays a lobby
     // match this player watches, from both players' feeds (docs/PROTOCOL.md 1.10.1), then finishes as above.
+    // AtResult: a queue match is over and its game waits at its result screen, still connected to the other's, while
+    // the series asks for the next match (Rematch? or a ranked set's next by itself): that one starts from there (the
+    // game's way back to Character Select, no new punch); a series over, or a next match that cannot, parks it.
     enum class Phase { Idle, Searching, Found, Connecting, Starting, Playing, Reporting, Finishing, Solo, LocalTest,
-                       Watching };
+                       Watching, AtResult };
     Q_ENUM(Phase)
 
     explicit MatchController(ServerClient* server, QObject* parent = nullptr);
@@ -150,6 +153,10 @@ private:
     void reportLeft();  // the game ended during the match: "left", with how it ended
     void reportDesync(int frame);  // the match went out of step: the game's log of it to the server
     void finishMatch();
+    // a match_result: a queue match that ended at its result screen, against a game reached straight, waits there
+    // (AtResult) for the series' next match; any other parks (finishMatch)
+    void afterResult(const QJsonObject& result);
+    QString rematchLine(const QJsonObject& go) const;  // the next match from the result screen (in place)
     void sendSeriesReady();
     void releaseUdp();
     void sendKeepaliveHello();
@@ -211,6 +218,9 @@ private:
     bool resultSent_ = false;
     bool wantNext_ = false;  // ready for the series' next match, not sent yet (the game still plays the last one's end)
     QString nextChoice_ = QStringLiteral("rematch");
+    QString lastVia_;         // how the last punch reached the other game: lan, public (straight), relay, tunnel
+    bool inPlace_ = false;    // the match found starts from the last one's result screen (no punch: rematchLine)
+    QTimer atResultTimer_;    // AtResult: no series to wait for after all (a match that started none): parked then
     QElapsedTimer searchClock_;
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)
     QJsonObject queued_;     // the server's reply to the last search

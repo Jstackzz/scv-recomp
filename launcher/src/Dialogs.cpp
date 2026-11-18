@@ -272,13 +272,20 @@ RematchDialog::RematchDialog(QWidget* parent) : QDialog(parent) {
     rematch_->setProperty("compact", true);
     rematch_->setMinimumHeight(40);
     rematch_->setDefault(true);
-    rematch_->setToolTip(tr("Fight again: you both go back to character select and pick (when you both choose it)"));
+    rematch_->setToolTip(tr("Fight again with the same characters on the same stage, as the game's own Rematch (when "
+                            "you both choose it; if one of you chooses Character Select, you both pick again)"));
+    select_ = new QPushButton(tr("CHARACTER SELECT"));
+    select_->setProperty("compact", true);
+    select_->setMinimumHeight(40);
+    select_->setToolTip(tr("Back to the game's character select screen: you both pick again"));
     auto* leave = new QPushButton(tr("LEAVE"));
     leave->setMinimumHeight(40);
     buttons->addWidget(rematch_, 1);
+    buttons->addWidget(select_, 1);
     buttons->addWidget(leave, 1);
     v->addLayout(buttons);
     connect(rematch_, &QPushButton::clicked, this, [this] { emit chose(QStringLiteral("rematch")); });
+    connect(select_, &QPushButton::clicked, this, [this] { emit chose(QStringLiteral("select")); });
     connect(leave, &QPushButton::clicked, this, [this] { emit chose(QStringLiteral("leave")); });
     rematch_->setFocus();  // A on a controller, as Enter on the keyboard, chooses the rematch
     winutil::useDarkTitleBar(this);
@@ -289,6 +296,7 @@ void RematchDialog::update(const QString& title, const QString& score, const QSt
     score_->setText(score);
     info_->setText(info);
     rematch_->setEnabled(canChoose);
+    select_->setEnabled(canChoose);
 }
 
 // --- UpdateDialog ----------------------------------------------------------------------------------

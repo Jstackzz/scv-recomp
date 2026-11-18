@@ -71,13 +71,14 @@ public:
     void update(const QString& title, const QString& score, const QString& info, bool canChoose);
 
 signals:
-    void chose(const QString& choice);  // "rematch" or "leave"
+    void chose(const QString& choice);  // "rematch" (the same fighters), "select" (both pick again) or "leave"
 
 private:
     QLabel* title_;
     QLabel* score_;
     QLabel* info_;
     QPushButton* rematch_;
+    QPushButton* select_;
 };
 
 // A newer release the server names (Updater): what it is and what is new, UPDATE NOW or LATER; while it downloads and

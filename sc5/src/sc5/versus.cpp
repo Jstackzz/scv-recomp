@@ -47,13 +47,14 @@ constexpr uint32_t kSide = 88, kRounds = 8, kRoundTime = 176, kStage = 208;
 
 // What both games must have alike from the battle setup on, which player 2's game takes from player 1's: the random
 // number generators the setup does not seed (Park-Miller and TT800, 0x829249F0-0x82924A87, sc5/rng.cpp) and the
-// counters that started at boot (as the netplay's barrier agrees them again: the loading in between draws from them).
+// counters that started at boot (as the netplay's barrier agrees them again: the loading in between draws from them),
+// but the three that count frames presented to the GPU, which each game's own GPU waits by (battle.cpp's kRaw).
 // The C library's rand() and the Mersenne Twister both games seed with the match's seed (sub_824A35A8).
 std::vector<uint32_t> SetupAddresses() {
   std::vector<uint32_t> out;
   for (uint32_t a = 0x829249F0; a < 0x829249F0 + 0x98; a += 4) out.push_back(a);
   for (uint32_t a : {0x82771B40u, 0x82771B44u, 0x82771B48u, 0x82771B4Cu, 0x82771B50u, 0x82771B54u, 0x82771B58u,
-                     0x82771B5Cu, 0x8280DE94u, 0x8281929Cu, 0x8281991Cu, 0x828E8790u, 0x835B3EB4u})
+                     0x82771B5Cu, 0x828E8790u, 0x835B3EB4u})
     out.push_back(a);
   return out;
 }

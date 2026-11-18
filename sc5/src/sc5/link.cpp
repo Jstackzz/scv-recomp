@@ -313,13 +313,25 @@ void Rematch(const Command& c) {
   if (std::string m = Key(c, "match"); !m.empty()) g_match = m;
   if (std::string seed = Key(c, "seed"); !seed.empty())
     game::SetSeed(int64_t(std::strtoul(seed.c_str(), nullptr, 10)));
+  // per side: a fighter named (a roster id or the game's id with its costume, "0.1"), `-` (that side's player picks
+  // again on the select screen), or no key (the same fighter again); stage=keep: the last match's stage
   autopilot::Plan plan = g_plan;
-  for (int s = 0; s < 2; s++)
-    if (auto it = c.keys.find(s ? "p2" : "p1"); it != c.keys.end()) ParsePick(it->second, plan.slots[s], plan.costumes[s]);
+  bool named[2] = {false, false};
+  for (int s = 0; s < 2; s++) {
+    auto it = c.keys.find(s ? "p2" : "p1");
+    if (it == c.keys.end()) continue;
+    if (!ParsePick(it->second, plan.slots[s], plan.costumes[s])) {
+      WriteStatus("error bad command: no character " + it->second);
+      return;
+    }
+    named[s] = true;
+  }
+  const bool same_stage = Key(c, "stage") == "keep";
   g_plan = plan;
   g_reported = false;
-  autopilot::Rematch(plan);
-  REXLOG_INFO("sc5 link: rematch, match {}", g_match);
+  autopilot::Rematch(plan, named, same_stage);
+  REXLOG_INFO("sc5 link: rematch, match {}, picks {} {}{}", g_match, Key(c, "p1", "(the same)"),
+              Key(c, "p2", "(the same)"), same_stage ? ", the same stage" : "");
   WriteStatus("starting match=" + g_match);
 }
 

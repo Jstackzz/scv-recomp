@@ -34,9 +34,10 @@ bool AtHoldPoint();
 void Begin(const Plan& plan);
 // back to the hold point
 void Park();
-// the same fighters again (or the plan's new ones), from the result screen through Character Select (a new seed is
-// the link's)
-void Rematch(const Plan& plan);
+// the next match from the result screen through Character Select (a new seed is the link's): per side the same fighter
+// again, unless `named[side]` (the plan's slot then: a fighter, or -1 for that side's player to pick again);
+// `same_stage`: the stage picked as for the last match (the game's own Rematch keeps it)
+void Rematch(const Plan& plan, const bool named[2], bool same_stage);
 // still pressing buttons (menus)
 bool Busy();
 // lost: the game went somewhere the autopilot does not know (the launcher should start it again)

@@ -80,7 +80,8 @@ private:
     QLabel* seriesTitle_;
     QLabel* seriesScore_;
     QLabel* seriesInfo_;
-    QPushButton* rematch_;  // Casual: again, both back to character select (versus)
+    QPushButton* rematch_;  // Casual: again with the same characters (versus: on the same stage too)
+    QPushButton* select_;   // Casual: both back to character select, to pick again
     QPushButton* leave_;
     LogView* log_;
     QTimer clock_;

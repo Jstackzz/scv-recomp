@@ -203,23 +203,51 @@ async def test_casual_rematch_while_both_want_one(server, connect, udp_peers):
     assert played(prof["stats"]) == {"sc5": {"versus": {"casual": {"wins": 1, "losses": 1}}}}
 
 
-async def test_versus_rematch_goes_back_to_character_select(server, connect, udp_peers):
-    # queued with fighters from the launcher: the first match plays them, every match after it is picked again on the
-    # game's select screen, whatever each chose (an older launcher's "rematch" too)
+async def test_versus_rematch_keeps_the_fighters_and_select_picks_again(server, connect, udp_peers):
+    # queued with fighters from the launcher: the first match plays them; both choosing a rematch plays the fighters
+    # both games saw again (the game's own Rematch), either one choosing character select sends both back there
     sides, gos = await first_match(server, connect, udp_peers, ["Raiden", "Jade"], ranked=False)
     (c1, _), (c2, _) = sides[1], sides[2]
     assert (gos[1]["p1"], gos[1]["p2"]) == ("Scorpion", "Scorpion")
     s1, _ = await play(c1, c2, gos[1]["match"], 1, fighters=(("12", "7"), ("12", "7")))
     assert s1["same_fighters"] is True and s1["you_choice"] == "" and s1["them_choice"] == ""
     gos2 = await next_match(server, sides, s1["series"], choices=("rematch", "rematch"))
-    assert (gos2[1]["p1"], gos2[1]["p2"]) == ("-", "-") and (gos2[2]["p1"], gos2[2]["p2"]) == ("-", "-")
+    assert (gos2[1]["p1"], gos2[1]["p2"]) == ("12", "7") and (gos2[2]["p1"], gos2[2]["p2"]) == ("12", "7")
     s1, _ = await play(c1, c2, gos2[1]["match"], 2, fighters=(("3", "4"), ("3", "4")))
-    # one wants character select: the other sees it (in versus both pick again either way)
+    # one wants character select: the other sees it, and both pick again
     await c2.request({"type": "series_ready", "series": s1["series"], "ready": True, "choice": "select"})
     waiting = await c1.expect("series", state="between", them_ready=True)
     assert waiting["them_choice"] == "select" and waiting["you_choice"] == ""
     gos3 = await next_match(server, sides, s1["series"], choices=("rematch", None))
     assert (gos3[1]["p1"], gos3[1]["p2"]) == ("-", "-")
+    # the games did not agree on the fighters: a rematch picks again too
+    s1, _ = await play(c1, c2, gos3[1]["match"], 1, fighters=(("3", "4"), ("3", "5")))
+    assert s1["same_fighters"] is False
+    gos4 = await next_match(server, sides, s1["series"], choices=("rematch", "rematch"))
+    assert (gos4[1]["p1"], gos4[1]["p2"]) == ("-", "-")
+
+
+async def test_the_next_match_from_the_result_screens_needs_no_punch(server, connect, udp_peers):
+    # both launchers ready with their games still at the result screen (in_place), the last match straight between
+    # them: match_found says so and match_go follows at once, on the last match's route, with a new id and seed
+    sides, gos = await first_match(server, connect, udp_peers, ["Kitana", "Mileena"], ranked=False)
+    (c1, _), (c2, _) = sides[1], sides[2]
+    s1, _ = await play(c1, c2, gos[1]["match"], 1, fighters=(("12", "7"), ("12", "7")))
+    for c in (c1, c2):
+        msg = {"type": "series_ready", "series": s1["series"], "ready": True, "choice": "rematch", "in_place": True}
+        assert (await c.request(msg))["type"] == "series_ack"
+    for c, side in ((c1, 1), (c2, 2)):
+        found = await c.expect("match_found")
+        assert found["in_place"] is True and found["side"] == side
+        go = await c.expect("match_go", match=found["match"])
+        assert go["match"] != gos[1]["match"] and go["seed"] != gos[1]["seed"]
+        assert (go["p1"], go["p2"]) == ("12", "7") and go["remote"] == gos[side]["remote"]
+    # one of them in place only: the usual way (UDP, punch) for both
+    s1, _ = await play(c1, c2, go["match"], 2, fighters=(("12", "7"), ("12", "7")))
+    await c1.request({"type": "series_ready", "series": s1["series"], "ready": True, "in_place": True})
+    await c2.request({"type": "series_ready", "series": s1["series"], "ready": True})
+    for c in (c1, c2):
+        assert (await c.expect("match_found"))["in_place"] is False
 
 
 async def test_ranked_winner_keeps_their_fighter_and_the_loser_picks_again(server, connect, udp_peers):

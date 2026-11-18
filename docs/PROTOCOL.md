@@ -505,22 +505,35 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
   matches: 60 s for a casual rematch, 90 s for a set's next match (the last
   match's ending plays first). The server sends the state to both players at
   every change, and to a player who logs in again in the middle of one.
-- A launcher sends `series_ready` true once its game is back at its hold
-  point: for a ranked set by itself, for a casual rematch when the player
-  chose one. When both are ready the server starts the next match like a lobby
+- A launcher sends `series_ready` true for a ranked set by itself, for a casual
+  rematch when the player chose one: with `"in_place":true` while its game
+  still waits at the last match's result screen, connected to the other game
+  (SC5 0.1.2: a queue match that ended there, against a game reached straight,
+  not through the relay or the tunnel), else once its game is back at its hold
+  point. When both are ready the server starts the next match like a lobby
   match: `match_found` with `accept_required` false, `"series"` and the same
-  sides, then the usual setup (1.8).
-- In `versus` (the server's `SELECT_SCREEN_MODES`, 0.1.18) every match of a
-  series after the first goes back to the game's select screen (`match_go`
-  `p1`/`p2` `-`), whatever `choice` says (the launcher has one button,
-  REMATCH): in casual both players pick again there. In a ranked set (0.1.21)
-  only the last counted match's loser does: its winner keeps the fighter both
-  reports named for them (1.9 `p1_char`/`p2_char`, with its costume), which
-  `match_go` gives their side (`"p1":"12.1","p2":"-"`) and the autopilot picks
-  in both games; `keeps` names that player (`null`: both pick, as after a win
-  without fighters both reports agreed on). A match that did not count (a
-  desync) is played again the same way. `opponent_elo` and `opponent_title`:
-  the other player's rating as they searched, in ranked (`null` in casual).
+  sides, then the usual setup (1.8). When both said `in_place` and the last
+  match went straight between them, `match_found` says `"in_place":true` and
+  `match_go` follows at once on the last match's route (its `remote` and
+  `rtt_ms`, a new `match` and `seed`): no UDP hello, no punch; the launcher
+  sends the game `rematch` (3.3) instead of `start`. A launcher whose game waits
+  at its result screen and gets a `match_found` without it parks the game first
+  (it lets go of the game port at once) and goes the usual way.
+- In `versus` (the server's `SELECT_SCREEN_MODES`) the next match's picks: in a
+  ranked set (0.1.21) only the last counted match's loser picks again on the
+  game's select screen: its winner keeps the fighter both reports named for
+  them (1.9 `p1_char`/`p2_char`, with its costume), which `match_go` gives
+  their side (`"p1":"12.1","p2":"-"`) and the autopilot picks in both games;
+  `keeps` names that player (`null`: both pick, as after a win without
+  fighters both reports agreed on). Casual (SC5 0.1.2), `choice`: `rematch`
+  from both plays the last match's fighters again (`match_go` `p1`/`p2` are the
+  game's character ids from both results, on the same stage when it goes on
+  from the result screens: the game's own Rematch), `select` from either sends
+  both back to the select screen (`p1`/`p2` `-`), and so does a rematch after a
+  match whose fighters the reports did not agree on (`same_fighters` false). A
+  match that did not count (a desync) is played again the same way.
+  `opponent_elo` and `opponent_title`: the other player's rating as they
+  searched, in ranked (`null` in casual).
 - `choice` (casual, other modes; default `rematch`): `rematch` plays the last
   match's fighters again when both choose it (`match_go` `p1`/`p2` are the
   game's character ids from both results, the autopilot picks them); `select`
@@ -822,7 +835,13 @@ SHA-1); from the match's start (the link's `start` line), the picks, the setup
 both games agreed on (or the lines saying it differs) and the failed check (the
 per-second stats left out; 36 lines at most); last, the game's extracted files:
 how many, how large, and a hash of their names and sizes (a modded or reduced
-copy of the disc differs there). IP addresses and user folders are taken out.
+copy of the disc differs there), and (SC5 0.1.2) the PC: `This PC: <processor>,
+<n> threads, Windows <kernel version>, game code for <x86-64-v3 or v2>` (what
+build-game.cmd compiled the game's code for there). SC5's game logs its
+netplay as `sc5 net:` (the failed check: `DESYNC at frame <f>: <hash> here,
+<hash> there`), its setup as `sc5 versus:`, its picks as `autopilot: side <n>
+picked`: the report takes those, and the game's own errors and warnings but the
+graphics' (which repeat by the thousand). IP addresses and user folders are taken out.
 The server logs each line with the player's name (`DESYNC_REPORT <name> |
 <line>`, after a line naming the game, launcher version, match and frame), so
 both players' reports of a match stand side by side, and keeps nothing: at most
@@ -1165,7 +1184,7 @@ the game reads can never be lost. The launcher writes a new command only after t
 | `start game=sc5 mode=versus watch=1 feed=127.0.0.1:50210 seed=123456 p1=Siegfried p2=- rounds=3 ranked=0 match=<id>` | watch a lobby match (a spectator, 1.10.1) |
 | `start game=sc5 mode=practice side=1 p1=Siegfried p2=Mitsurugi` | start offline practice (no network keys; the local test's practice) |
 | `park` | leave the current match or practice and return to the hold point; after a result while the match's end (the winner's pose) still plays in sync, once both games have left the match together (30 s at most); the players' controllers keep working until then |
-| `rematch [seed=N] [match=<id>] [p1=.. p2=..]` | play again against the same peer from the result screen, through VS Battle's Character Select (SC5's own Rematch keeps the two games' state apart), the same picks unless `p1`/`p2` name others (new seed and id when given). The launcher does not send it yet: each match of a series is a `park` and a new `start` |
+| `rematch [seed=N] [match=<id>] [p1=.. p2=..] [stage=keep]` | play again against the same peer from the result screen, through VS Battle's Character Select (SC5's own Rematch keeps the two games' state apart): per side the same fighter again, or the one `p1`/`p2` names (a roster id or the game's id with its costume, `12.1`), or `-`: that side's player picks again on the select screen; `stage=keep`: the last match's stage (the launcher's REMATCH, as the game's own Rematch); new seed and id when given. The launcher sends it for a series' next match when both games still wait at their result screens (1.9.1, `in_place`) |
 | `quit` | exit the process cleanly |
 
 `start` keys: `game` (`sc5`); `mode` (`versus`, `sparring`, `practice`); `side` (local player, 1 or 2);

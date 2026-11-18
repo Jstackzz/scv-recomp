@@ -140,10 +140,17 @@ QueuePage::QueuePage(bool ranked, ServerClient* server, MatchController* control
     rematch_->setProperty("compact", true);
     rematch_->setMinimumHeight(36);
     rematch_->setVisible(!ranked);
-    rematch_->setToolTip(tr("Fight again: you both go back to character select and pick (when you both choose it)"));
+    rematch_->setToolTip(tr("Fight again with the same characters on the same stage, as the game's own Rematch (when "
+                            "you both choose it; if one of you chooses Character Select, you both pick again)"));
+    select_ = new QPushButton(tr("CHARACTER SELECT"));
+    select_->setProperty("compact", true);
+    select_->setMinimumHeight(36);
+    select_->setVisible(!ranked);
+    select_->setToolTip(tr("Back to the game's character select screen: you both pick again"));
     leave_ = new QPushButton(ranked ? tr("LEAVE SET") : tr("LEAVE"));
     leave_->setMinimumHeight(36);
     seriesButtons->addWidget(rematch_, 1);
+    seriesButtons->addWidget(select_, 1);
     seriesButtons->addWidget(leave_, 1);
     ser->addLayout(seriesButtons);
     seriesCard_->setVisible(false);
@@ -257,6 +264,7 @@ QueuePage::QueuePage(bool ranked, ServerClient* server, MatchController* control
         }
     });
     connect(rematch_, &QPushButton::clicked, this, [this] { choose(QStringLiteral("rematch")); });
+    connect(select_, &QPushButton::clicked, this, [this] { choose(QStringLiteral("select")); });
     connect(leave_, &QPushButton::clicked, this, &QueuePage::leaveSeries);
     connect(controller_, &MatchController::seriesChanged, this, &QueuePage::onSeries);
     seriesClock_.setInterval(1000);
@@ -628,18 +636,31 @@ void QueuePage::updateSeries() {
                        : tr("The next match starts as soon as both games are ready (%1 s). Leaving the set now "
                             "counts as losing it."))
                    .arg(left);
-    else if (youReady && themReady)
-        info = select ? tr("Starting: character select...") : tr("Starting the rematch...");
-    else if (youReady)  // one line at the smallest window (the buttons' tooltips say what each does)
-        info = tr("Rematch chosen: waiting for %1 (%2 s).").arg(opp).arg(left);
-    else if (themReady)
-        info = tr("%1 wants a rematch! (%2 s)").arg(opp).arg(left);
-    else if (select)
-        info = tr("Rematch? Back to character select (%1 s)").arg(left);
-    else
-        info = tr("Rematch? (%1 s)").arg(left);
+    else {
+        // casual: REMATCH (the same characters on the same stage) or CHARACTER SELECT (both pick again): either one's
+        // character select takes both there
+        const QString mine = !chosen_.isEmpty() ? chosen_ : series_.value(QStringLiteral("you_choice")).toString();
+        const QString theirs = series_.value(QStringLiteral("them_choice")).toString();
+        const bool toSelect = mine == QLatin1String("select") || theirs == QLatin1String("select");
+        if (youReady && themReady)
+            info = toSelect || !select ? (select ? tr("Starting: character select...") : tr("Starting the rematch..."))
+                                       : tr("Starting the rematch: the same characters...");
+        else if (youReady)  // one line at the smallest window (the buttons' tooltips say what each does)
+            info = (mine == QLatin1String("select") ? tr("Character select chosen: waiting for %1 (%2 s).")
+                                                    : tr("Rematch chosen: waiting for %1 (%2 s)."))
+                       .arg(opp).arg(left);
+        else if (themReady)
+            info = (theirs == QLatin1String("select") ? tr("%1 wants character select! (%2 s)")
+                                                      : tr("%1 wants a rematch! (%2 s)"))
+                       .arg(opp).arg(left);
+        else if (select)
+            info = tr("Rematch with the same characters, or character select? (%1 s)").arg(left);
+        else
+            info = tr("Rematch? (%1 s)").arg(left);
+    }
     seriesInfo_->setText(info);
     rematch_->setEnabled(between && !youReady);
+    select_->setEnabled(between && !youReady);
     leave_->setEnabled(between);
     emit seriesCard(series_, seriesTitle_->text(), seriesScore_->text(), info, between && !youReady);
 }

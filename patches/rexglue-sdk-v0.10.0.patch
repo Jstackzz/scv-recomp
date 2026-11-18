@@ -81,15 +81,58 @@ index da8e432..e636672 100644
    reg::DC_LUT_PWL_DATA gamma_ramp_pwl_rgb_[128][3] = {};
    uint32_t gamma_ramp_rw_component_ = 0;
 diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
-index 96d362b..f20365b 100644
+index 96d362b..4253ffa 100644
 --- a/include/rex/graphics/d3d12/command_processor.h
 +++ b/include/rex/graphics/d3d12/command_processor.h
-@@ -365,7 +365,20 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -88,6 +88,10 @@ class D3D12CommandProcessor : public CommandProcessor {
+   void PushUAVBarrier(ID3D12Resource* resource);
+   void SubmitBarriers();
+ 
++  // The texture cache has loaded a texture's data from guest memory (not from a scaled resolve) for
++  // the draw being set up. See IssueDraw: the draw goes into a new command list.
++  void NoteTextureLoadedFromGuestMemory() { texture_loaded_from_guest_memory_ = true; }
++
+   // Finds or creates root signature for a pipeline.
+   ID3D12RootSignature* GetRootSignature(const DxbcShader* vertex_shader,
+                                         const DxbcShader* pixel_shader, bool tessellated);
+@@ -365,7 +369,60 @@ class D3D12CommandProcessor : public CommandProcessor {
                                    uint32_t normalized_color_mask);
    bool UpdateBindings(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader,
                        ID3D12RootSignature* root_signature, bool shared_memory_is_uav);
 -  bool IssueCopy_ReadbackResolvePath();
-+  bool IssueCopy_ReadbackResolvePath(bool copy);
++  // How IssueCopy_ReadbackResolvePath copies a resolve into guest memory: as readback_resolve says (a
++  // frame late if fast or some, at once if full); at once, waiting for the GPU; or only if it writes
++  // kSmallResolveReadbackMax bytes or fewer, a frame late and never waiting (ReadBackSmallResolve).
++  // kNone copies nothing: a resolve of the textures a game makes (TextureMakingResolve) that needs only
++  // its 1x copy (WriteUnscaledResolve).
++  enum class ResolveReadback { kNone, kAsSet, kAtOnce, kSmall };
++  // A resolve of the textures a game makes on the GPU (see IssueCopy): of an image being compressed,
++  // one the CPU may read (kImage), or of the blocks a compression pass drew, into a texture (kBlocks).
++  // With resolution scaling, kept at 1x.
++  enum class TextureMakingResolve { kNone, kImage, kBlocks };
++  bool IssueCopy_ReadbackResolvePath(bool copy, ResolveReadback readback,
++                                     TextureMakingResolve texture_making = TextureMakingResolve::kNone);
++  // With resolution scaling: writes the 1x data of the range a scaled resolve wrote into the shared
++  // memory and marks the range unscaled (TextureCache::MarkRangeAsUnscaledResolved), so textures from
++  // it are drawn at 1x, from the shared memory, as without scaling. A 1x pixel of an image with 8 bits
++  // per channel is the average of its host pixels, anything else's the host pixel (scale / 2, scale /
++  // 2); or, for a compression pass drawn at 1x into the top-left of its render target (`corner`,
++  // see IssueDraw), the host pixel at its own coordinates, where the resolve of a tiled 2D
++  // `corner_width` x `corner_height` rectangle at the range's start (`corner_pitch` pixels a row,
++  // a multiple of 32) put it. 32bpp and 64bpp only; returns whether it was written.
++  bool WriteUnscaledResolve(uint32_t address, uint32_t length, xenos::ColorFormat format,
++                            bool corner = false, uint32_t corner_pitch = 0, uint32_t corner_width = 0,
++                            uint32_t corner_height = 0);
++  // Before a compression draw, with resolution scaling: an image it samples that a scaled resolve
++  // wrote while its images were not known yet (the first a game makes) is taken to 1x the same way.
++  void UnscaleTextureCompressionImages(const Shader& pixel_shader);
++  // Records a copy of the range the last resolve wrote, at 1x (downscaled when the resolution is
++  // scaled), into a readback buffer at `offset`. False if nothing was recorded.
++  bool CopyResolveToReadbackBuffer(uint32_t written_address, uint32_t written_length,
++                                   ID3D12Resource* readback_buffer, uint64_t offset);
++  // Into guest memory, the newest copy of an earlier resolve of the same range that the GPU has
++  // finished (if any), then this resolve's own copy queued for a later one.
++  void ReadBackSmallResolve(uint32_t written_address, uint32_t written_length);
 +  // A pass, here: the draws since the last resolve. Notes a draw of the pass: done, dropped while its
 +  // pipeline was still being created (and what it sampled, see IssueCopy), or skipped in a frame
 +  // nobody sees (skipping_draws, see IsSkippedTarget).
@@ -103,10 +146,75 @@ index 96d362b..f20365b 100644
 +  // draws should have drawn: every draw of the pass was dropped, or a dropped one sampled memory the
 +  // copy writes. Logs each resolve it holds back.
 +  bool IsResolveOfDroppedDraws();
++  // Textures a game makes on the GPU and finishes on the CPU (see IssueCopy). Notes a draw of a pass
++  // compressing texture blocks: a pixel shader writing a 64bpp float render target 0, and the textures
++  // it samples (the images being compressed).
++  void NoteTextureCompressionDraw(const Shader& pixel_shader);
++  // Whether the resolve the registers describe copies an image the game compresses, while it makes
++  // such textures (kImage: one the CPU may read), or is a compression pass's own (kBlocks), which
++  // starts or extends that time and makes its pass's images ones of those.
++  TextureMakingResolve GetTextureMakingResolve();
    bool IssueDraw_MemexportReadbackFullPath(uint32_t total_size);
    bool IssueDraw_MemexportReadbackFastPath(uint32_t total_size);
  
-@@ -760,6 +773,14 @@ class D3D12CommandProcessor : public CommandProcessor {
+@@ -425,6 +482,8 @@ class D3D12CommandProcessor : public CommandProcessor {
+   HANDLE fence_completion_event_ = nullptr;
+ 
+   bool submission_open_ = false;
++  // Set by NoteTextureLoadedFromGuestMemory, used and cleared by IssueDraw.
++  bool texture_loaded_from_guest_memory_ = false;
+   // Values of submission_fence_.
+   uint64_t submission_current_ = 1;
+   uint64_t submission_completed_ = 0;
+@@ -616,6 +675,24 @@ class D3D12CommandProcessor : public CommandProcessor {
+   Microsoft::WRL::ComPtr<ID3D12Resource> resolve_downscale_buffer_;
+   uint32_t resolve_downscale_buffer_size_ = 0;
+ 
++  // WriteUnscaledResolve (resolve_unscale.cs.hlsl), with the downscale's root parameters.
++  struct ResolveUnscaleConstants {
++    uint32_t scale_x;
++    uint32_t scale_y;
++    uint32_t pixel_size_log2;
++    uint32_t pixel_count;
++    uint32_t sample_x;
++    uint32_t sample_y;
++    uint32_t average;
++    uint32_t corner;
++    uint32_t corner_pitch;
++    uint32_t corner_width;
++    uint32_t corner_height;
++    uint32_t padding;
++  };
++  Microsoft::WRL::ComPtr<ID3D12RootSignature> resolve_unscale_root_signature_;
++  Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_unscale_pipeline_;
++
+   // PWL gamma ramp can result in values with more precision than 10bpc. Though
+   // those sub-10bpc bits don't have any noticeable visual effect, so normally
+   // R10G10B10A2_UNORM is enough. But what's the most important is that for the
+@@ -647,6 +724,22 @@ class D3D12CommandProcessor : public CommandProcessor {
+   uint32_t readback_buffer_size_ = 0;
+   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
+   std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
++  // Small resolves read back a frame late (ReadBackSmallResolve), by range (MakeReadbackResolveKey),
++  // a buffer once the range is resolved a second time: kSmallReadbackSlots copies, each of one
++  // resolve of the range, written in turn, and the submission that wrote each. More slots than frames
++  // in flight, so that one is done even while the GPU is behind.
++  static constexpr uint32_t kSmallResolveReadbackMax = 8 * 1024;
++  static constexpr uint32_t kSmallReadbackSlots = kQueueFrames + 1;
++  struct SmallReadback {
++    ID3D12Resource* buffer = nullptr;
++    void* mapped_data = nullptr;
++    uint64_t submission_written[kSmallReadbackSlots] = {};
++    uint32_t next_slot = 0;
++    uint64_t last_used_frame = 0;
++  };
++  std::unordered_map<uint64_t, SmallReadback> small_readbacks_;
++  // Those of ranges not resolved for kReadbackBufferEvictionAgeFrames, or all.
++  void ReleaseSmallReadbacks(bool all);
+ 
+   static constexpr uint32_t kMaxOcclusionQueries = 8192;
+   Microsoft::WRL::ComPtr<ID3D12QueryHeap> occlusion_query_heap_;
+@@ -760,6 +853,33 @@ class D3D12CommandProcessor : public CommandProcessor {
  
    // Temporary storage for memexport stream constants used in the draw.
    std::vector<draw_util::MemExportRange> memexport_ranges_;
@@ -118,14 +226,48 @@ index 96d362b..f20365b 100644
 +  uint32_t pass_draws_skipped_ = 0;
 +  bool pass_resolved_ = false;
 +  std::vector<uint32_t> pass_dropped_draw_textures_;
++
++  // Textures made on the GPU (NoteTextureCompressionDraw, GetTextureMakingResolve): the physical base
++  // addresses of the images the compression draws since the last resolve sampled, those of the
++  // passes before, and the frame until which resolves of those images are read back.
++  std::vector<uint32_t> pass_compression_images_;
++  std::vector<uint32_t> compression_images_;
++  uint64_t compression_readback_until_frame_ = 0;
++  // With resolution scaling, the last resolves left scaled (UnscaleTextureCompressionImages): the
++  // memory each wrote and its format.
++  struct ScaledResolve {
++    uint32_t address = 0;
++    uint32_t length = 0;
++    xenos::ColorFormat format = xenos::ColorFormat::k_8;
++  };
++  std::array<ScaledResolve, 8> scaled_resolves_;
++  size_t scaled_resolve_next_ = 0;
++  // A compression draw of the current pass drawn at 1x into its render target's top-left (IssueDraw).
++  bool pass_compression_corner_ = false;
++  void NoteScaledResolve(uint32_t address, uint32_t length);
  };
  
  }  // namespace rex::graphics::d3d12
 diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
-index cd7693a..25fbe3f 100644
+index cd7693a..23437c8 100644
 --- a/include/rex/graphics/d3d12/render_target_cache.h
 +++ b/include/rex/graphics/d3d12/render_target_cache.h
-@@ -74,10 +74,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+@@ -63,6 +63,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+     are_current_command_list_render_targets_valid_ = false;
+   }
+ 
++  // On the host render target path, binds the render targets of the last Update again: IssueDraw
++  // may begin a new command list between Update and the draw, and a new one has none bound.
++  void RestoreCommandListRenderTargets() {
++    if (GetPath() == Path::kHostRenderTargets) {
++      SetCommandListRenderTargets(last_update_accumulated_render_targets());
++    }
++  }
++
+   bool msaa_2x_supported() const { return msaa_2x_supported_; }
+ 
+   void WriteEdramRawSRVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+@@ -74,10 +82,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
  
    // Performs the resolve to a shared memory area according to the current
    // register values, and also clears the render targets if needed. Must be in a
@@ -164,6 +306,34 @@ index ac6b056..a9785b4 100644
    system::object_ref<system::XHostThread> vsync_worker_thread_;
  
    RegisterFile register_file_;
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index d26cd4f..41ec578 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -81,6 +81,13 @@ class TextureCache {
+   virtual void BeginFrame();
+ 
+   void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
++  // With resolution scaling: memory a scaled resolve wrote whose 1x data the caller has written into
++  // the shared memory. Textures from it are drawn at 1x again, from the shared memory, like textures
++  // the CPU wrote.
++  void MarkRangeAsUnscaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
++  // Checks if there are any pages that contain scaled resolve data within the
++  // range.
++  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+   // Ensures the memory backing the range in the scaled resolve address space is
+   // allocated and returns whether it is.
+   virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
+@@ -568,9 +575,6 @@ class TextureCache {
+   static void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
+                             void* context, void* data, uint64_t argument, bool invalidated_by_gpu);
+ 
+-  // Checks if there are any pages that contain scaled resolve data within the
+-  // range.
+-  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+   // Global shared memory invalidation callback for invalidating scaled resolved
+   // texture data.
+   static void ScaledResolveGlobalWatchCallbackThunk(
 diff --git a/include/rex/kernel/xboxkrnl/rtl.h b/include/rex/kernel/xboxkrnl/rtl.h
 index 540f698..2445560 100644
 --- a/include/rex/kernel/xboxkrnl/rtl.h
@@ -639,10 +809,60 @@ index a744375..6eb72c3 100644
        if (wait >= 0x100) {
          PrepareForWait();
 diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
-index 19874a5..5d48b23 100644
+index 19874a5..0b8c452 100644
 --- a/src/graphics/d3d12/command_processor.cpp
 +++ b/src/graphics/d3d12/command_processor.cpp
-@@ -1897,6 +1897,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -43,6 +43,11 @@ REXCVAR_DEFINE_BOOL(d3d12_readback_resolve, false, "GPU/D3D12",
+                     "Read render-to-texture results on the CPU")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(d3d12_readback_small_resolves, true, "GPU/D3D12",
++                    "Read small render-to-texture results (8 KB or less) on the CPU a frame late, "
++                    "without waiting for the GPU (a game's auto exposure)")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
+                     "Submit command list when PM4 primary buffer ends")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -58,6 +63,7 @@ namespace shaders {
+ #include "../shaders/bytecode/d3d12_5_1/fxaa_cs.h"
+ #include "../shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
+ #include "../shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
++#include "../shaders/bytecode/d3d12_5_1/resolve_unscale_cs.h"
+ }  // namespace shaders
+ 
+ D3D12CommandProcessor::D3D12CommandProcessor(D3D12GraphicsSystem* graphics_system,
+@@ -1483,6 +1489,21 @@ bool D3D12CommandProcessor::SetupContext() {
+     resolve_downscale_root_signature_.Reset();
+     REXGPU_WARN("Failed to initialize D3D12 resolve-downscale readback pipeline");
+   }
++  // The same root parameters with the unscale shader's constants.
++  resolve_downscale_root_parameters[UINT(ResolveDownscaleRootParameter::kConstants)]
++      .Constants.Num32BitValues = sizeof(ResolveUnscaleConstants) / sizeof(uint32_t);
++  *(resolve_unscale_root_signature_.ReleaseAndGetAddressOf()) =
++      ui::d3d12::util::CreateRootSignature(provider, resolve_downscale_root_signature_desc);
++  if (resolve_unscale_root_signature_) {
++    *(resolve_unscale_pipeline_.ReleaseAndGetAddressOf()) = ui::d3d12::util::CreateComputePipeline(
++        device, shaders::resolve_unscale_cs, sizeof(shaders::resolve_unscale_cs),
++        resolve_unscale_root_signature_.Get());
++  }
++  if (!resolve_unscale_root_signature_ || !resolve_unscale_pipeline_) {
++    resolve_unscale_pipeline_.Reset();
++    resolve_unscale_root_signature_.Reset();
++    REXGPU_WARN("Failed to initialize the D3D12 resolve unscale pipeline");
++  }
+ 
+   if (bindless_resources_used_) {
+     // Create the system bindless descriptors once all resources are
+@@ -1667,6 +1688,7 @@ void D3D12CommandProcessor::ShutdownContext() {
+     }
+   }
+   memexport_readback_buffers_.clear();
++  ReleaseSmallReadbacks(true);
+ 
+   ui::d3d12::util::ReleaseAndNull(scratch_buffer_);
+   scratch_buffer_size_ = 0;
+@@ -1897,6 +1919,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
    vertex_buffers_in_sync_[0] = 0;
    vertex_buffers_in_sync_[1] = 0;
  
@@ -656,10 +876,20 @@ index 19874a5..5d48b23 100644
    if (!graphics_system_)
      return;
    ui::Presenter* presenter = graphics_system_->presenter();
-@@ -2327,6 +2334,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2327,6 +2356,30 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
    bool memexport_used = memexport_used_vertex || memexport_used_pixel;
  
++  // Texture blocks compressed on the GPU (see IssueCopy): noted whether the draw is done or not.
++  bool texture_compression_draw =
++      pixel_shader && pixel_shader->writes_color_target(0) &&
++      (regs[XE_GPU_REG_RB_COLOR_MASK] & 0xF) &&
++      regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[0]).color_format ==
++          xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT;
++  if (texture_compression_draw) {
++    NoteTextureCompressionDraw(*pixel_shader);
++  }
++
 +  // A frame nobody sees draws nothing to the screen's targets; memory it exports is written still.
 +  if (skipping_draws() && !memexport_used) {
 +    if (IsSkippedTarget()) {
@@ -677,7 +907,7 @@ index 19874a5..5d48b23 100644
    if (!BeginSubmission(true)) {
      return false;
    }
-@@ -2400,6 +2421,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2400,6 +2453,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
    }
    if (REXCVAR_GET(async_shader_compilation) &&
        pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
@@ -685,7 +915,81 @@ index 19874a5..5d48b23 100644
      return true;
    }
  
-@@ -2694,6 +2716,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2407,8 +2461,37 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   uint32_t used_texture_mask =
+       vertex_shader->GetUsedTextureMaskAfterTranslation() |
+       (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
++  if (texture_compression_draw) {
++    UnscaleTextureCompressionImages(*pixel_shader);
++  }
+   texture_cache_->RequestTextures(used_texture_mask);
+ 
++  // A draw for which a texture was just loaded from guest memory goes into a new command list. Such
++  // a load copies the CPU-written pages into the shared memory, untiles each slice into a buffer
++  // with a compute dispatch and copies it into the texture (CopyTextureRegion), each step behind
++  // barriers. At render scale 3 and 4, on an RTX 5080 with two or more games on it, the draw right
++  // after that, or the one after it, at times never finished and the GPU was reset
++  // (DXGI_ERROR_DEVICE_HUNG, in menus or fights, most often as a rematch begins). In every DRED
++  // report naming it, the first operation not completed was that draw: on the ROV path (14 reports)
++  // after the load of one of the 32x32 cube maps the game's CPU rewrites in fights or of a menu
++  // texture, often a draw not even sampling it, the draws before the load with the same shaders and
++  // textures having completed; on the host render target path, far more rarely (a game in 45
++  // rematches, ROV one in 7 of 8 runs), a loading screen's draw after a 256x32 DXT1 texture's load.
++  // Never after loads from scaled resolves (no upload), never at scales 1 and 2. With the boundary
++  // no game was lost (ROV 0 in 81 rematches, RTV 0 in 56). One or two a frame in a fight. Not
++  // inside an occlusion query: ending the submission ends the query and would cut the game's count.
++  // On the RTV path the new list gets the render targets Update bound in the old one.
++  if (texture_loaded_from_guest_memory_) {
++    texture_loaded_from_guest_memory_ = false;
++    if (!active_occlusion_query_.valid) {
++      EndSubmission(false);
++      if (!BeginSubmission(true)) {
++        return false;
++      }
++      render_target_cache_->RestoreCommandListRenderTargets();
++    }
++  }
++
+   // Bind the pipeline after configuring it and doing everything that may bind
+   // other pipelines.
+   if (current_guest_pipeline_ != pipeline_handle) {
+@@ -2452,6 +2535,35 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+     viewport_cache_valid_ = true;
+   }
+ 
++  // A compression pass drawn at a scale (see IssueCopy). The game's shader works out the block, and
++  // the half of a DXT5 block, it draws from the position interpolated at the pixel's centre, exactly
++  // as at 1x only there: just off it, one half or the other comes out wrong (at the other host
++  // pixels of a 1x pixel: other blocks, or nothing; at an odd scale even at the middle one, where
++  // the interpolation is not exact: Ezio's stubble gone, Mitsurugi's kimono see-through at scale 3).
++  // So it is drawn as at 1x, a host pixel for each 1x pixel, into its render target's top-left: the
++  // host viewport at its 1x size, the positions as at 1x (scaling them by 1 / 3 would not be exact
++  // either). WriteUnscaledResolve gathers the blocks from there. A viewport starting elsewhere:
++  // moved so that the host pixel scale / 2 of each 1x pixel is drawn at the 1x pixel's centre
++  // (exact at even scales).
++  if (texture_compression_draw && texture_cache_->IsDrawResolutionScaled()) {
++    const uint32_t scales[] = {draw_resolution_scale_x, draw_resolution_scale_y};
++    if (!viewport_info.xy_offset[0] && !viewport_info.xy_offset[1]) {
++      viewport_info.xy_extent[0] /= scales[0];
++      viewport_info.xy_extent[1] /= scales[1];
++      pass_compression_corner_ = true;
++    } else {
++      for (uint32_t i = 0; i < 2; ++i) {
++        if (!viewport_info.xy_extent[i]) {
++          continue;
++        }
++        // In guest pixels: that host pixel's centre is (scale / 2 + 0.5) / scale into the 1x pixel.
++        float shift = (float(scales[i] >> 1) + 0.5f) / float(scales[i]) - 0.5f;
++        float ndc_shift = shift * 2.0f * float(scales[i]) / float(viewport_info.xy_extent[i]);
++        viewport_info.ndc_offset[i] += i ? -ndc_shift : ndc_shift;
++      }
++    }
++  }
++
+   draw_util::Scissor scissor;
+   draw_util::GetScissor(regs, scissor);
+   scissor.offset[0] *= draw_resolution_scale_x;
+@@ -2694,6 +2806,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
      }
    }
  
@@ -694,7 +998,7 @@ index 19874a5..5d48b23 100644
    if (memexport_used) {
      // Make sure this memexporting draw is ordered with other work using shared
      // memory as a UAV.
-@@ -2877,19 +2901,105 @@ bool D3D12CommandProcessor::IssueCopy() {
+@@ -2877,19 +2991,327 @@ bool D3D12CommandProcessor::IssueCopy() {
    if (!BeginSubmission(true)) {
      return false;
    }
@@ -712,16 +1016,242 @@ index 19874a5..5d48b23 100644
 +    ++skipped_.resolves;
 +  }
 +  pass_resolved_ = true;
-   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
-   if (readback_mode == ReadbackResolveMode::kDisabled) {
-     uint32_t written_address, written_length;
-     return render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
--                                         written_address, written_length);
-+                                         written_address, written_length, copy);
++  // Soulcalibur V makes its fighters' textures as a fight loads, the costume's colours over each
++  // texture's template: it draws the image of a mip, resolves it into guest memory, and compresses it.
++  // The large mips it compresses on the GPU (a pass draws the DXT blocks into a 64bpp float render
++  // target, sampling the image, and resolves them into the texture); those 16 blocks high or less it
++  // compresses on the CPU, reading the image from guest memory. Resolves write only the GPU's copy of
++  // guest memory unless read back, so the CPU compressed zeros: those mips were black blocks, and the
++  // eyes, which a close-up draws from the eye texture's 64x64 mip, came out black with only their
++  // highlights (drawn over them) showing. While the game makes such textures, a resolve of an image
++  // one of them is compressed from is read back at once (IssueCopy_ReadbackResolvePath, waiting for
++  // the GPU).
++  // At render scale 2 to 4 every resolve of those passes is kept at 1x (WriteUnscaledResolve), and
++  // the compression passes are drawn so that one host pixel of each 1x pixel is drawn as at 1x (see
++  // IssueDraw): the textures come out as at scale 1. A scaled resolve writes only the scaled copy of
++  // guest memory, and a texture any of whose memory one wrote is drawn whole from that copy, so the
++  // CPU's mips never reached it (black eyes again), and DXT blocks drawn at the scale were no texture
++  // (each host pixel drew its own block, or nothing: rainbow noise in beards and sashes).
++  // And its auto exposure: every frame it downsamples the scene's brightness on the GPU (to 64x64,
++  // then three single tiles, the last 8x8), and its step reads the last on the CPU (the first texel:
++  // sub_8233E140, which eases the exposure towards it). With nothing read back it read 0 and every
++  // scene came out over-exposed: paler skin, silver-white hair. So a small resolve (a tile or two,
++  // kSmallResolveReadbackMax bytes or fewer) that a game makes again every frame is copied into guest
++  // memory a frame late, never waiting for the GPU (ReadBackSmallResolve): a few KB a frame.
++  TextureMakingResolve texture_making = GetTextureMakingResolve();
++  if (texture_making != TextureMakingResolve::kBlocks) {
++    pass_compression_corner_ = false;
 +  }
-+  return IssueCopy_ReadbackResolvePath(copy);
+   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
+-  if (readback_mode == ReadbackResolveMode::kDisabled) {
+-    uint32_t written_address, written_length;
+-    return render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
+-                                         written_address, written_length);
++  if (texture_making == TextureMakingResolve::kImage) {
++    return IssueCopy_ReadbackResolvePath(copy, ResolveReadback::kAtOnce, texture_making);
++  }
++  if (readback_mode != ReadbackResolveMode::kDisabled) {
++    return IssueCopy_ReadbackResolvePath(copy, ResolveReadback::kAsSet, texture_making);
++  }
++  if (REXCVAR_GET(d3d12_readback_small_resolves)) {
++    return IssueCopy_ReadbackResolvePath(copy, ResolveReadback::kSmall, texture_making);
++  }
++  if (texture_making != TextureMakingResolve::kNone && texture_cache_->IsDrawResolutionScaled()) {
++    return IssueCopy_ReadbackResolvePath(copy, ResolveReadback::kNone, texture_making);
++  }
++  uint32_t written_address, written_length;
++  if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_, written_address,
++                                     written_length, copy)) {
++    return false;
++  }
++  NoteScaledResolve(written_address, written_length);
++  return true;
 +}
 +
++void D3D12CommandProcessor::NoteTextureCompressionDraw(const Shader& pixel_shader) {
++  for (const Shader::TextureBinding& binding : pixel_shader.texture_bindings()) {
++    uint32_t base =
++        (uint32_t(register_file_->GetTextureFetch(binding.fetch_constant).base_address) << 12) &
++        0x1FFFFFFF;
++    if (base && std::find(pass_compression_images_.begin(), pass_compression_images_.end(), base) ==
++                    pass_compression_images_.end()) {
++      pass_compression_images_.push_back(base);
++    }
++  }
++}
++
++D3D12CommandProcessor::TextureMakingResolve D3D12CommandProcessor::GetTextureMakingResolve() {
++  // Long enough for a fighter's textures, made over a few frames, and both fighters' (one after the
++  // other, frames apart); over well before the fight.
++  constexpr uint64_t kCompressionReadbackFrames = 60;
++  std::vector<uint32_t> pass_images;
++  pass_images.swap(pass_compression_images_);
++  const RegisterFile& regs = *register_file_;
++  if (regs.Get<reg::RB_COPY_DEST_INFO>().copy_dest_format ==
++          xenos::ColorFormat::k_16_16_16_16_FLOAT &&
++      !pass_images.empty()) {
++    // The blocks of a compression pass, copied into a texture.
++    if (frame_current_ >= compression_readback_until_frame_) {
++      REXGPU_INFO(
++          "Textures compressed on the GPU: resolves of the images they are made from are read back to "
++          "the CPU for {} frames",
++          kCompressionReadbackFrames);
++    }
++    compression_readback_until_frame_ = frame_current_ + kCompressionReadbackFrames;
++    for (uint32_t image : pass_images) {
++      if (std::find(compression_images_.begin(), compression_images_.end(), image) ==
++          compression_images_.end()) {
++        compression_images_.push_back(image);
++        if (compression_images_.size() > 16) {
++          compression_images_.erase(compression_images_.begin());
++        }
++      }
++    }
++    return TextureMakingResolve::kBlocks;
++  }
++  if (frame_current_ >= compression_readback_until_frame_) {
++    return TextureMakingResolve::kNone;
++  }
++  uint32_t dest_base = regs[XE_GPU_REG_RB_COPY_DEST_BASE] & 0x1FFFFFFF;
++  return std::find(compression_images_.begin(), compression_images_.end(), dest_base) !=
++                 compression_images_.end()
++             ? TextureMakingResolve::kImage
++             : TextureMakingResolve::kNone;
++}
++
++void D3D12CommandProcessor::NoteScaledResolve(uint32_t address, uint32_t length) {
++  if (!length || !texture_cache_->IsDrawResolutionScaled()) {
++    return;
++  }
++  ScaledResolve& scaled_resolve = scaled_resolves_[scaled_resolve_next_];
++  scaled_resolve_next_ = (scaled_resolve_next_ + 1) % scaled_resolves_.size();
++  scaled_resolve.address = address;
++  scaled_resolve.length = length;
++  scaled_resolve.format = register_file_->Get<reg::RB_COPY_DEST_INFO>().copy_dest_format;
++}
++
++void D3D12CommandProcessor::UnscaleTextureCompressionImages(const Shader& pixel_shader) {
++  if (!texture_cache_->IsDrawResolutionScaled()) {
++    return;
++  }
++  for (const Shader::TextureBinding& binding : pixel_shader.texture_bindings()) {
++    uint32_t base =
++        (uint32_t(register_file_->GetTextureFetch(binding.fetch_constant).base_address) << 12) &
++        0x1FFFFFFF;
++    // The image as the last scaled resolve to its base wrote it.
++    for (size_t i = 1; i <= scaled_resolves_.size(); ++i) {
++      ScaledResolve& scaled_resolve =
++          scaled_resolves_[(scaled_resolve_next_ + scaled_resolves_.size() - i) %
++                           scaled_resolves_.size()];
++      if (!scaled_resolve.length || scaled_resolve.address != base) {
++        continue;
++      }
++      if (texture_cache_->IsRangeScaledResolved(scaled_resolve.address, scaled_resolve.length)) {
++        WriteUnscaledResolve(scaled_resolve.address, scaled_resolve.length, scaled_resolve.format);
++      }
++      scaled_resolve.length = 0;
++      break;
++    }
++  }
++}
++
++bool D3D12CommandProcessor::WriteUnscaledResolve(uint32_t address, uint32_t length,
++                                                 xenos::ColorFormat format, bool corner,
++                                                 uint32_t corner_pitch, uint32_t corner_width,
++                                                 uint32_t corner_height) {
++  if (!resolve_unscale_pipeline_ || !length) {
++    return false;
++  }
++  uint32_t bits_per_pixel = FormatInfo::Get(uint32_t(format))->bits_per_pixel;
++  if (bits_per_pixel != 32 && bits_per_pixel != 64) {
++    return false;
+   }
+-  return IssueCopy_ReadbackResolvePath();
++  uint32_t pixel_size_log2 = bits_per_pixel == 64 ? 3 : 2;
++  if (corner && (!corner_width || !corner_height || corner_width > corner_pitch)) {
++    return false;
++  }
++  if (((address | length) & ((uint32_t(1) << pixel_size_log2) - 1)) ||
++      (address & (D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT - 1))) {
++    return false;
++  }
++  // The 1x copy goes into the shared memory: make the range resident there, and the scaled data
++  // current.
++  if (!shared_memory_->RequestRange(address, length) ||
++      !texture_cache_->EnsureScaledResolveMemoryCommitted(address, length) ||
++      !texture_cache_->MakeScaledResolveRangeCurrent(address, length)) {
++    return false;
++  }
++  ID3D12Resource* scaled_buffer = texture_cache_->GetCurrentScaledResolveBufferResource();
++  uint64_t scaled_buffer_base = uint64_t(texture_cache_->GetCurrentScaledResolveBufferIndexPublic())
++                                << 30;
++  uint32_t scale_x = texture_cache_->draw_resolution_scale_x();
++  uint32_t scale_y = texture_cache_->draw_resolution_scale_y();
++  uint64_t source_start = uint64_t(address) * scale_x * scale_y;
++  if (!scaled_buffer || source_start < scaled_buffer_base) {
++    return false;
++  }
++  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
++  if (!RequestOneUseSingleViewDescriptors(2, descriptors)) {
++    return false;
++  }
++  ID3D12Device* device = GetD3D12Provider().GetDevice();
++  ui::d3d12::util::CreateBufferRawSRV(
++      device, descriptors[0].first, scaled_buffer,
++      rex::align(uint32_t(uint64_t(length) * scale_x * scale_y),
++                 uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT)),
++      source_start - scaled_buffer_base);
++  ui::d3d12::util::CreateBufferRawUAV(device, descriptors[1].first, shared_memory_->GetBuffer(),
++                                      rex::align(length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT)),
++                                      address);
++
++  PushUAVBarrier(scaled_buffer);
++  texture_cache_->TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++  shared_memory_->UseForWriting();
++  SubmitBarriers();
++
++  ResolveUnscaleConstants constants;
++  constants.scale_x = scale_x;
++  constants.scale_y = scale_y;
++  constants.pixel_size_log2 = pixel_size_log2;
++  constants.pixel_count = length >> pixel_size_log2;
++  // A compression pass's block: the host pixel IssueDraw draws as at 1x. An image of a pass that
++  // makes a texture: the average, a 1x pixel's own for a pass drawing a half-size copy with bilinear
++  // filtering (the mips, sampling between four texels at 1x, each texel at the scale), within a
++  // quarter of a pixel's colours for the others.
++  constants.sample_x = scale_x >> 1;
++  constants.sample_y = scale_y >> 1;
++  constants.average = (!corner && (format == xenos::ColorFormat::k_8_8_8_8 ||
++                                   format == xenos::ColorFormat::k_8_8_8_8_A ||
++                                   format == xenos::ColorFormat::k_8_8_8_8_AS_16_16_16_16))
++                          ? 1
++                          : 0;
++  constants.corner = corner ? 1 : 0;
++  constants.corner_pitch = corner_pitch;
++  constants.corner_width = corner_width;
++  constants.corner_height = corner_height;
++  if (corner) {
++    constants.pixel_count = corner_width * corner_height;
++  }
++  constants.padding = 0;
++  SetExternalPipeline(resolve_unscale_pipeline_.Get());
++  deferred_command_list_.D3DSetComputeRootSignature(resolve_unscale_root_signature_.Get());
++  deferred_command_list_.D3DSetComputeRoot32BitConstants(
++      UINT(ResolveDownscaleRootParameter::kConstants), sizeof(constants) / sizeof(uint32_t),
++      &constants, 0);
++  deferred_command_list_.D3DSetComputeRootDescriptorTable(
++      UINT(ResolveDownscaleRootParameter::kSource), descriptors[0].second);
++  deferred_command_list_.D3DSetComputeRootDescriptorTable(
++      UINT(ResolveDownscaleRootParameter::kDestination), descriptors[1].second);
++  deferred_command_list_.D3DDispatch((constants.pixel_count + 63) >> 6, 1, 1);
++  shared_memory_->MarkUAVWritesCommitNeeded();
++  texture_cache_->TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++
++  texture_cache_->MarkRangeAsUnscaledResolved(address, length);
++  return true;
+ }
+ 
+-bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
 +void D3D12CommandProcessor::NotePassDraw(PassDraw draw, const Shader* vertex_shader,
 +                                         const Shader* pixel_shader) {
 +  if (pass_resolved_) {
@@ -751,11 +1281,9 @@ index 19874a5..5d48b23 100644
 +        pass_dropped_draw_textures_.push_back(base & 0x1FFFFFFF);
 +      }
 +    }
-   }
--  return IssueCopy_ReadbackResolvePath();
- }
- 
--bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
++  }
++}
++
 +// The screen's targets are at least 640x320 (its own image, half-size copies, shadows); the
 +// textures Mortal Kombat 9 paints its fighters' blood and damage into are 128 to 512 square.
 +bool D3D12CommandProcessor::IsSkippedTarget() const {
@@ -796,7 +1324,8 @@ index 19874a5..5d48b23 100644
 +  return true;
 +}
 +
-+bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath(bool copy) {
++bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath(bool copy, ResolveReadback readback,
++                                                          TextureMakingResolve texture_making) {
    uint32_t written_address, written_length;
    if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_, written_address,
 -                                     written_length)) {
@@ -804,7 +1333,320 @@ index 19874a5..5d48b23 100644
      return false;
    }
  
-@@ -3198,7 +3308,7 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
+@@ -2897,11 +3319,51 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+     return true;
+   }
+ 
++  bool corner = texture_making == TextureMakingResolve::kBlocks && pass_compression_corner_;
++  pass_compression_corner_ = false;
++  uint32_t corner_pitch = 0, corner_width = 0, corner_height = 0;
++  if (corner) {
++    // The rectangle the resolve copied, from the render target's origin to the start of the range.
++    draw_util::ResolveInfo resolve_info;
++    bool fixed_16_truncated = render_target_cache_->IsFixed16TruncatedToMinus1To1();
++    corner = draw_util::GetResolveInfo(*register_file_, *memory_,
++                                       texture_cache_->draw_resolution_scale_x(),
++                                       texture_cache_->draw_resolution_scale_y(), fixed_16_truncated,
++                                       fixed_16_truncated, resolve_info) &&
++             !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
++             !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
++             !resolve_info.coordinate_info.edram_offset_x_div_8 &&
++             !resolve_info.coordinate_info.edram_offset_y_div_8 &&
++             !resolve_info.copy_dest_info.copy_dest_array &&
++             resolve_info.copy_dest_extent_start == resolve_info.copy_dest_base &&
++             resolve_info.copy_dest_base == written_address;
++    corner_pitch = uint32_t(resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32) << 5;
++    corner_width = uint32_t(resolve_info.coordinate_info.width_div_8) << 3;
++    corner_height = resolve_info.height_div_8 << 3;
++  }
++  if (texture_cache_->IsDrawResolutionScaled() &&
++      (texture_making == TextureMakingResolve::kNone ||
++       !WriteUnscaledResolve(written_address, written_length,
++                             register_file_->Get<reg::RB_COPY_DEST_INFO>().copy_dest_format, corner,
++                             corner_pitch, corner_width, corner_height))) {
++    NoteScaledResolve(written_address, written_length);
++  }
++  if (readback == ResolveReadback::kNone) {
++    return true;
++  }
++
+   if (!memory_->TranslatePhysical(written_address)) {
+     return true;
+   }
+ 
+-  bool is_scaled = texture_cache_->IsDrawResolutionScaled();
++  if (readback == ResolveReadback::kSmall) {
++    if (written_length <= kSmallResolveReadbackMax) {
++      ReadBackSmallResolve(written_address, written_length);
++    }
++    return true;
++  }
++  bool at_once = readback == ResolveReadback::kAtOnce;
++
+   uint64_t resolve_key = MakeReadbackResolveKey(written_address, written_length);
+   ReadbackBuffer& rb = readback_buffers_[resolve_key];
+   rb.last_used_frame = frame_current_;
+@@ -2941,33 +3403,77 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+     return true;
+   }
+ 
+-  if (is_scaled) {
+-    if (!resolve_downscale_pipeline_ || !resolve_downscale_root_signature_) {
++  if (!CopyResolveToReadbackBuffer(written_address, written_length, rb.buffers[write_index], 0)) {
++    return true;
++  }
++
++  ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
++  bool use_delayed_sync = !at_once && (readback_mode == ReadbackResolveMode::kFast ||
++                                       readback_mode == ReadbackResolveMode::kSome);
++  uint32_t read_index = write_index;
++  if (use_delayed_sync) {
++    read_index = 1 - write_index;
++  } else if (!AwaitAllQueueOperationsCompletion()) {
++    return true;
++  }
++
++  bool is_cache_miss = false;
++  if (use_delayed_sync && (!rb.buffers[read_index] || written_length > rb.sizes[read_index] ||
++                           !rb.mapped_data[read_index])) {
++    is_cache_miss = true;
++    read_index = write_index;
++    if (!AwaitAllQueueOperationsCompletion()) {
+       return true;
+     }
++  }
++
++  bool should_copy =
++      (!at_once && readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
++  if (should_copy && rb.buffers[read_index] && written_length <= rb.sizes[read_index] &&
++      rb.mapped_data[read_index]) {
++    uint8_t* destination = memory_->TranslatePhysical(written_address);
++    if (destination) {
++      std::memcpy(destination, static_cast<uint8_t*>(rb.mapped_data[read_index]), written_length);
++    }
++  }
++
++  rb.current_index = 1 - rb.current_index;
++  return true;
++}
++
++bool D3D12CommandProcessor::CopyResolveToReadbackBuffer(uint32_t written_address,
++                                                        uint32_t written_length,
++                                                        ID3D12Resource* readback_buffer,
++                                                        uint64_t offset) {
++  // Not a range WriteUnscaledResolve has taken to 1x.
++  if (texture_cache_->IsDrawResolutionScaled() &&
++      texture_cache_->IsRangeScaledResolved(written_address, written_length)) {
++    if (!resolve_downscale_pipeline_ || !resolve_downscale_root_signature_) {
++      return false;
++    }
+ 
+     reg::RB_COPY_DEST_INFO copy_dest_info = register_file_->Get<reg::RB_COPY_DEST_INFO>();
+     const FormatInfo* format_info = FormatInfo::Get(uint32_t(copy_dest_info.copy_dest_format));
+     uint32_t bits_per_pixel = format_info->bits_per_pixel;
+     if (bits_per_pixel != 8 && bits_per_pixel != 16 && bits_per_pixel != 32 &&
+         bits_per_pixel != 64) {
+-      return true;
++      return false;
+     }
+ 
+     uint32_t pixel_size_log2;
+     if (!rex::bit_scan_forward(bits_per_pixel >> 3, &pixel_size_log2)) {
+-      return true;
++      return false;
+     }
+     uint32_t tile_size_1x = 32 * 32 * (uint32_t(1) << pixel_size_log2);
+     uint32_t tile_count = written_length / tile_size_1x;
+     if (!tile_count) {
+-      return true;
++      return false;
+     }
+ 
+     uint32_t scaled_length = uint32_t(texture_cache_->GetCurrentScaledResolveRangeLengthScaled());
+     uint64_t scaled_address = texture_cache_->GetCurrentScaledResolveRangeStartScaled();
+     if (!scaled_length) {
+-      return true;
++      return false;
+     }
+ 
+     uint32_t downscale_buffer_size = AlignReadbackBufferSize(written_length);
+@@ -2984,7 +3490,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+               IID_PPV_ARGS(&buffer)))) {
+         REXGPU_ERROR("Failed to create a {} MB resolve downscale buffer",
+                      downscale_buffer_size >> 20);
+-        return true;
++        return false;
+       }
+       if (resolve_downscale_buffer_) {
+         resources_for_deletion_.emplace_back(GetCurrentSubmission(),
+@@ -2995,23 +3501,23 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+     }
+ 
+     if (!resolve_downscale_buffer_) {
+-      return true;
++      return false;
+     }
+ 
+     ID3D12Resource* scaled_resolve_buffer = texture_cache_->GetCurrentScaledResolveBufferResource();
+     size_t scaled_resolve_buffer_index = texture_cache_->GetCurrentScaledResolveBufferIndexPublic();
+     if (!scaled_resolve_buffer) {
+-      return true;
++      return false;
+     }
+     uint64_t scaled_buffer_base = uint64_t(scaled_resolve_buffer_index) << 30;
+     if (scaled_address < scaled_buffer_base) {
+-      return true;
++      return false;
+     }
+     uint64_t source_offset = scaled_address - scaled_buffer_base;
+ 
+     ui::d3d12::util::DescriptorCpuGpuHandlePair downscale_descriptors[2];
+     if (!RequestOneUseSingleViewDescriptors(2, downscale_descriptors)) {
+-      return true;
++      return false;
+     }
+ 
+     const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+@@ -3055,7 +3561,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+     PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE);
+     SubmitBarriers();
+-    deferred_command_list_.D3DCopyBufferRegion(rb.buffers[write_index], 0,
++    deferred_command_list_.D3DCopyBufferRegion(readback_buffer, offset,
+                                                resolve_downscale_buffer_.Get(), 0, written_length);
+     PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+@@ -3065,41 +3571,102 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+     shared_memory_->UseAsCopySource();
+     SubmitBarriers();
+     ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
+-    deferred_command_list_.D3DCopyBufferRegion(rb.buffers[write_index], 0, shared_memory_buffer,
++    deferred_command_list_.D3DCopyBufferRegion(readback_buffer, offset, shared_memory_buffer,
+                                                written_address, written_length);
+   }
++  return true;
++}
+ 
+-  ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
+-  bool use_delayed_sync =
+-      readback_mode == ReadbackResolveMode::kFast || readback_mode == ReadbackResolveMode::kSome;
+-  uint32_t read_index = write_index;
+-  if (use_delayed_sync) {
+-    read_index = 1 - write_index;
+-  } else if (!AwaitAllQueueOperationsCompletion()) {
+-    return true;
+-  }
+-
+-  bool is_cache_miss = false;
+-  if (use_delayed_sync && (!rb.buffers[read_index] || written_length > rb.sizes[read_index] ||
+-                           !rb.mapped_data[read_index])) {
+-    is_cache_miss = true;
+-    read_index = write_index;
+-    if (!AwaitAllQueueOperationsCompletion()) {
+-      return true;
++void D3D12CommandProcessor::ReadBackSmallResolve(uint32_t written_address,
++                                                 uint32_t written_length) {
++  uint64_t key = MakeReadbackResolveKey(written_address, written_length);
++  auto it = small_readbacks_.try_emplace(key).first;
++  SmallReadback& readback = it->second;
++  // Only a range resolved again within a frame or two, as a game's every frame: not one resolved
++  // once (the textures Soulcalibur V makes as a fight loads, see IssueCopy), whose late copy would
++  // be of nothing or of what an earlier use of its memory held.
++  bool resolved_lately =
++      readback.last_used_frame && frame_current_ <= readback.last_used_frame + 2;
++  readback.last_used_frame = frame_current_;
++  if (!readback.buffer) {
++    if (!resolved_lately) {
++      return;
++    }
++    // A game resolving many small ranges every frame reads back only the first ones.
++    constexpr size_t kMaxSmallReadbackBuffers = 64;
++    size_t buffer_count = 0;
++    for (const auto& small_readback : small_readbacks_) {
++      buffer_count += small_readback.second.buffer != nullptr;
+     }
++    if (buffer_count >= kMaxSmallReadbackBuffers) {
++      return;
++    }
++    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
++    const uint32_t size = kSmallReadbackSlots * kSmallResolveReadbackMax;
++    D3D12_RESOURCE_DESC buffer_desc;
++    ui::d3d12::util::FillBufferResourceDesc(buffer_desc, size, D3D12_RESOURCE_FLAG_NONE);
++    ID3D12Resource* buffer = nullptr;
++    if (FAILED(provider.GetDevice()->CreateCommittedResource(
++            &ui::d3d12::util::kHeapPropertiesReadback, provider.GetHeapFlagCreateNotZeroed(),
++            &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer)))) {
++      REXGPU_ERROR("Failed to create a small resolve readback buffer");
++      small_readbacks_.erase(it);
++      return;
++    }
++    D3D12_RANGE read_range = {0, size};
++    void* mapped_data = nullptr;
++    if (FAILED(buffer->Map(0, &read_range, &mapped_data))) {
++      REXGPU_ERROR("Failed to map a small resolve readback buffer");
++      buffer->Release();
++      small_readbacks_.erase(it);
++      return;
++    }
++    readback.buffer = buffer;
++    readback.mapped_data = mapped_data;
++  }
++  // The newest copy the GPU has finished: the last resolve of the range when the GPU keeps up, an
++  // older one when it is behind, none after the range's first resolve. Never waits for the GPU.
++  CheckSubmissionFence(0);
++  uint32_t newest = kSmallReadbackSlots;
++  for (uint32_t i = 0; i < kSmallReadbackSlots; ++i) {
++    uint64_t submission = readback.submission_written[i];
++    if (submission && submission <= submission_completed_ &&
++        (newest == kSmallReadbackSlots || submission > readback.submission_written[newest])) {
++      newest = i;
++    }
++  }
++  if (newest < kSmallReadbackSlots) {
++    std::memcpy(memory_->TranslatePhysical(written_address),
++                static_cast<const uint8_t*>(readback.mapped_data) +
++                    size_t(newest) * kSmallResolveReadbackMax,
++                written_length);
++  }
++  uint32_t slot = readback.next_slot;
++  if (CopyResolveToReadbackBuffer(written_address, written_length, readback.buffer,
++                                  uint64_t(slot) * kSmallResolveReadbackMax)) {
++    readback.submission_written[slot] = submission_current_;
++    readback.next_slot = (slot + 1) % kSmallReadbackSlots;
+   }
++}
+ 
+-  bool should_copy = (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
+-  if (should_copy && rb.buffers[read_index] && written_length <= rb.sizes[read_index] &&
+-      rb.mapped_data[read_index]) {
+-    uint8_t* destination = memory_->TranslatePhysical(written_address);
+-    if (destination) {
+-      std::memcpy(destination, static_cast<uint8_t*>(rb.mapped_data[read_index]), written_length);
++void D3D12CommandProcessor::ReleaseSmallReadbacks(bool all) {
++  for (auto it = small_readbacks_.begin(); it != small_readbacks_.end();) {
++    SmallReadback& readback = it->second;
++    if (!all && readback.last_used_frame + kReadbackBufferEvictionAgeFrames >= frame_current_) {
++      ++it;
++      continue;
++    }
++    if (readback.buffer) {
++      readback.buffer->Unmap(0, nullptr);
++      if (all) {
++        readback.buffer->Release();
++      } else {
++        // A copy in flight may still write to it.
++        resources_for_deletion_.emplace_back(submission_current_, readback.buffer);
++      }
+     }
++    it = small_readbacks_.erase(it);
+   }
+-
+-  rb.current_index = 1 - rb.current_index;
+-  return true;
+ }
+ 
+ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
+@@ -3198,7 +3765,7 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
    const char* reason_str = "Unknown";
    switch (reason) {
      case DXGI_ERROR_DEVICE_HUNG:
@@ -813,7 +1655,15 @@ index 19874a5..5d48b23 100644
        break;
      case DXGI_ERROR_DEVICE_REMOVED:
        reason_str = "DEVICE_REMOVED (driver internal error or hot-unplug)";
-@@ -4003,6 +4113,22 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3362,6 +3929,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
+     }
+     EvictOldReadbackBuffers(readback_buffers_);
+     EvictOldReadbackBuffers(memexport_readback_buffers_);
++    ReleaseSmallReadbacks(false);
+ 
+     primitive_processor_->BeginFrame();
+ 
+@@ -4003,6 +4571,22 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
    cbuffer_binding_system_.up_to_date &= !dirty;
  }
  
@@ -836,7 +1686,7 @@ index 19874a5..5d48b23 100644
  bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                                             const D3D12Shader* pixel_shader,
                                             ID3D12RootSignature* root_signature,
-@@ -4106,10 +4232,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4106,10 +4690,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      // still be provided, so if the first draw in the frame with the current
      // root signature doesn't have float constants at all, still allocate an
      // empty buffer.
@@ -850,7 +1700,7 @@ index 19874a5..5d48b23 100644
      if (float_constants == nullptr) {
        return false;
      }
-@@ -4129,10 +4254,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4129,10 +4712,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      current_graphics_root_up_to_date_ &= ~(1u << root_parameter_float_constants_vertex);
    }
    if (!cbuffer_binding_float_pixel_.up_to_date) {
@@ -865,7 +1715,7 @@ index 19874a5..5d48b23 100644
      if (float_constants == nullptr) {
        return false;
      }
-@@ -4764,7 +4889,8 @@ void D3D12CommandProcessor::EvictOldReadbackBuffers(
+@@ -4764,7 +5347,8 @@ void D3D12CommandProcessor::EvictOldReadbackBuffers(
          if (readback.mapped_data[i]) {
            readback.buffers[i]->Unmap(0, nullptr);
          }
@@ -930,7 +1780,7 @@ index a5c97a0..8b2c688 100644
    buffer_uav_writes_commit_needed_ = false;
  
 diff --git a/src/graphics/d3d12/texture_cache.cpp b/src/graphics/d3d12/texture_cache.cpp
-index 2be0e8e..0e6b4b2 100644
+index 2be0e8e..b266613 100644
 --- a/src/graphics/d3d12/texture_cache.cpp
 +++ b/src/graphics/d3d12/texture_cache.cpp
 @@ -14,6 +14,7 @@
@@ -950,6 +1800,17 @@ index 2be0e8e..0e6b4b2 100644
 +                uint32_t(key.base_page) << 12, key.GetWidth(), key.GetHeight(), uint32_t(key.format));
 +  resource->SetName(name);
    return std::unique_ptr<Texture>(new D3D12Texture(*this, key, resource.Get(), resource_state));
+ }
+ 
+@@ -1932,6 +1937,10 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
+ 
+   command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
+ 
++  if (!texture_resolution_scaled) {
++    command_processor_.NoteTextureLoadedFromGuestMemory();
++  }
++
+   return true;
  }
  
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
@@ -1097,6 +1958,40 @@ index 2c31a0e..a8c81af 100644
                              constant_register_map.float_dynamic_addressing
                                  ? dxbc::ConstantBufferAccessPattern::kDynamicIndexed
                                  : dxbc::ConstantBufferAccessPattern::kImmediateIndexed);
+diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
+index 76f5600..bc009b5 100644
+--- a/src/graphics/pipeline/texture/cache.cpp
++++ b/src/graphics/pipeline/texture/cache.cpp
+@@ -349,6 +349,29 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
+   shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
+ }
+ 
++void TextureCache::MarkRangeAsUnscaledResolved(uint32_t start_unscaled, uint32_t length_unscaled) {
++  if (length_unscaled == 0 || !IsDrawResolutionScaled()) {
++    return;
++  }
++  start_unscaled &= 0x1FFFFFFF;
++  length_unscaled = std::min(length_unscaled, 0x20000000 - start_unscaled);
++  uint32_t page_first = start_unscaled >> 12;
++  uint32_t page_last = (start_unscaled + length_unscaled - 1) >> 12;
++  {
++    auto global_lock = global_critical_region_.Acquire();
++    for (uint32_t page = page_first; page <= page_last; ++page) {
++      uint32_t block = page >> 5;
++      scaled_resolve_pages_[block] &= ~(UINT32_C(1) << (page & 31));
++      if (!scaled_resolve_pages_[block]) {
++        scaled_resolve_pages_l2_[block >> 6] &= ~(UINT64_C(1) << (block & 63));
++      }
++    }
++  }
++  // Textures from the range are found again (FindOrCreateTexture, now unscaled) and loaded from the
++  // shared memory.
++  shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
++}
++
+ uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {
+   uint32_t host_swizzle = 0;
+   for (uint32_t i = 0; i < 4; ++i) {
 diff --git a/src/kernel/xam/xam_misc.cpp b/src/kernel/xam/xam_misc.cpp
 index ff6cb56..a2917d6 100644
 --- a/src/kernel/xam/xam_misc.cpp
@@ -1549,3 +2444,1248 @@ index 0000000..fbda782
 +void SetMessageBoxAnswer(MessageBoxAnswer answer);
 +
 +}  // namespace rex::kernel::xam
+diff --git a/src/graphics/shaders/resolve_unscale.cs.hlsl b/src/graphics/shaders/resolve_unscale.cs.hlsl
+new file mode 100644
+index 0000000..f30e9f4
+--- /dev/null
++++ b/src/graphics/shaders/resolve_unscale.cs.hlsl
+@@ -0,0 +1,106 @@
++// Compute shader taking a resolve's scaled data back to 1x, into the shared memory: for each 1x pixel,
++// one of its scale_x * scale_y host pixels, or (32bpp, 8 bits per channel) the average of them all.
++// Or (corner) the 1x data of a pass drawn at 1x into its render target's top-left, a host pixel for
++// each 1x pixel: 1x pixel (x, y) of the tiled 2D rectangle the resolve wrote is the host pixel (x, y).
++//
++// The scaled resolve layout (as the resolve_*_scaled shaders write it): the 16 bytes of 1x pixels
++// that hold E = 16 / bytes per pixel of them (a 1x row's E consecutive pixels, from x0, a multiple
++// of E) take scale_x * scale_y * 16 bytes, at their 1x address times scale_x * scale_y: 16-byte
++// chunks of E host pixels, chunk j * scale_y + r holding host row r of the group, host pixels
++// scale_x * x0 + E * j to + E - 1. (Not each 1x pixel's host pixels together: that is only so for
++// 64bpp at 2x.)
++//
++// Built into bytecode/d3d12_5_1/resolve_unscale_cs.h with:
++//   fxc /nologo /T cs_5_1 /E main /O3 /Vn resolve_unscale_cs /Fh resolve_unscale_cs.h resolve_unscale.cs.hlsl
++// (then line endings made LF and trailing spaces removed, as the other headers are).
++
++cbuffer XeResolveUnscaleConstants : register(b0) {
++  uint xe_unscale_scale_x;
++  uint xe_unscale_scale_y;
++  // 2 for 32bpp, 3 for 64bpp.
++  uint xe_unscale_pixel_size_log2;
++  uint xe_unscale_pixel_count;
++  // The host pixel taken when not averaging.
++  uint xe_unscale_sample_x;
++  uint xe_unscale_sample_y;
++  // 32bpp only: each byte the average of the host pixels' (8 bits per channel).
++  uint xe_unscale_average;
++  // The corner gather: the rectangle's pitch (pixels, a multiple of 32), width and height.
++  uint xe_unscale_corner;
++  uint xe_unscale_corner_pitch;
++  uint xe_unscale_corner_width;
++  uint xe_unscale_corner_height;
++  uint xe_unscale_padding;
++};
++
++ByteAddressBuffer xe_unscale_source : register(t0);
++RWByteAddressBuffer xe_unscale_dest : register(u0);
++
++// The byte offset of a pixel in a tiled 2D surface (Xenos' tiling, as texture_util::GetTiledOffset2D).
++uint XeUnscaleTiledOffset2D(uint2 p, uint pitch, uint bpp_log2) {
++  int x = int(p.x);
++  int y = int(p.y);
++  int macro_offset = ((x >> 5) + (y >> 5) * int(pitch >> 5)) << (bpp_log2 + 7u);
++  int micro_offset = ((x & 7) + ((y & 0xE) << 2)) << bpp_log2;
++  int offset = macro_offset + ((micro_offset & ~0xF) << 1) + (micro_offset & 0xF) + ((y & 1) << 4);
++  return uint(((offset & ~0x1FF) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
++              (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F));
++}
++
++// Where the scaled resolve put a host pixel: the group's 16 bytes at 1x (`group_address`, relative to
++// the range), the host pixel's x from the group's first host pixel, and its row within the 1x pixel.
++uint XeUnscaleScaledAddress(uint group_address, uint host_x_in_group, uint host_row) {
++  uint pixels_per_chunk_log2 = 4u - xe_unscale_pixel_size_log2;
++  uint chunk = (host_x_in_group >> pixels_per_chunk_log2) * xe_unscale_scale_y + host_row;
++  uint in_chunk = host_x_in_group & ((1u << pixels_per_chunk_log2) - 1u);
++  return group_address * (xe_unscale_scale_x * xe_unscale_scale_y) + (chunk << 4u) +
++         (in_chunk << xe_unscale_pixel_size_log2);
++}
++
++[numthreads(64, 1, 1)]
++void main(uint3 xe_thread_id : SV_DispatchThreadID) {
++  uint pixel = xe_thread_id.x;
++  [branch] if (pixel >= xe_unscale_pixel_count) {
++    return;
++  }
++  uint pixels_per_chunk_log2 = 4u - xe_unscale_pixel_size_log2;
++  uint source;
++  uint dest;
++  [branch] if (xe_unscale_corner != 0u) {
++    uint2 p = uint2(pixel % xe_unscale_corner_width, pixel / xe_unscale_corner_width);
++    uint2 p_1x = p / uint2(xe_unscale_scale_x, xe_unscale_scale_y);
++    uint group_x = p_1x.x & ~((1u << pixels_per_chunk_log2) - 1u);
++    source = XeUnscaleScaledAddress(
++        XeUnscaleTiledOffset2D(uint2(group_x, p_1x.y), xe_unscale_corner_pitch,
++                               xe_unscale_pixel_size_log2),
++        p.x - xe_unscale_scale_x * group_x, p.y - xe_unscale_scale_y * p_1x.y);
++    dest = XeUnscaleTiledOffset2D(p, xe_unscale_corner_pitch, xe_unscale_pixel_size_log2);
++  } else {
++    // The 1x pixel's place in its group of the 16 bytes, from the group's first.
++    uint group_address = (pixel >> pixels_per_chunk_log2) << 4u;
++    uint host_x_in_group = (pixel & ((1u << pixels_per_chunk_log2) - 1u)) * xe_unscale_scale_x;
++    dest = pixel << xe_unscale_pixel_size_log2;
++    [branch] if (xe_unscale_average != 0u && xe_unscale_pixel_size_log2 == 2u) {
++      uint4 sum = uint4(0u, 0u, 0u, 0u);
++      for (uint r = 0u; r < xe_unscale_scale_y; ++r) {
++        for (uint i = 0u; i < xe_unscale_scale_x; ++i) {
++          uint value =
++              xe_unscale_source.Load(XeUnscaleScaledAddress(group_address, host_x_in_group + i, r));
++          sum += uint4(value, value >> 8u, value >> 16u, value >> 24u) & 0xFFu;
++        }
++      }
++      uint samples = xe_unscale_scale_x * xe_unscale_scale_y;
++      uint4 average = (sum + (samples >> 1u)) / samples;
++      xe_unscale_dest.Store(dest,
++                            average.x | (average.y << 8u) | (average.z << 16u) | (average.w << 24u));
++      return;
++    }
++    source = XeUnscaleScaledAddress(group_address, host_x_in_group + xe_unscale_sample_x,
++                                    xe_unscale_sample_y);
++  }
++  [branch] if (xe_unscale_pixel_size_log2 == 3u) {
++    xe_unscale_dest.Store2(dest, xe_unscale_source.Load2(source));
++  } else {
++    xe_unscale_dest.Store(dest, xe_unscale_source.Load(source));
++  }
++}
+diff --git a/src/graphics/shaders/bytecode/d3d12_5_1/resolve_unscale_cs.h b/src/graphics/shaders/bytecode/d3d12_5_1/resolve_unscale_cs.h
+new file mode 100644
+index 0000000..cdfdde3
+--- /dev/null
++++ b/src/graphics/shaders/bytecode/d3d12_5_1/resolve_unscale_cs.h
+@@ -0,0 +1,1127 @@
++#if 0
++//
++// Generated by Microsoft (R) HLSL Shader Compiler 10.1
++//
++//
++// Buffer Definitions:
++//
++// cbuffer XeResolveUnscaleConstants
++// {
++//
++//   uint xe_unscale_scale_x;           // Offset:    0 Size:     4
++//   uint xe_unscale_scale_y;           // Offset:    4 Size:     4
++//   uint xe_unscale_pixel_size_log2;   // Offset:    8 Size:     4
++//   uint xe_unscale_pixel_count;       // Offset:   12 Size:     4
++//   uint xe_unscale_sample_x;          // Offset:   16 Size:     4
++//   uint xe_unscale_sample_y;          // Offset:   20 Size:     4
++//   uint xe_unscale_average;           // Offset:   24 Size:     4
++//   uint xe_unscale_corner;            // Offset:   28 Size:     4
++//   uint xe_unscale_corner_pitch;      // Offset:   32 Size:     4
++//   uint xe_unscale_corner_width;      // Offset:   36 Size:     4
++//   uint xe_unscale_corner_height;     // Offset:   40 Size:     4 [unused]
++//   uint xe_unscale_padding;           // Offset:   44 Size:     4 [unused]
++//
++// }
++//
++//
++// Resource Bindings:
++//
++// Name                                 Type  Format         Dim      ID      HLSL Bind  Count
++// ------------------------------ ---------- ------- ----------- ------- -------------- ------
++// xe_unscale_source                 texture    byte         r/o      T0             t0      1
++// xe_unscale_dest                       UAV    byte         r/w      U0             u0      1
++// XeResolveUnscaleConstants         cbuffer      NA          NA     CB0            cb0      1
++//
++//
++//
++// Input signature:
++//
++// Name                 Index   Mask Register SysValue  Format   Used
++// -------------------- ----- ------ -------- -------- ------- ------
++// no Input
++//
++// Output signature:
++//
++// Name                 Index   Mask Register SysValue  Format   Used
++// -------------------- ----- ------ -------- -------- ------- ------
++// no Output
++cs_5_1
++dcl_globalFlags refactoringAllowed
++dcl_constantbuffer CB0[0:0][3], immediateIndexed, space=0
++dcl_resource_raw T0[0:0], space=0
++dcl_uav_raw U0[0:0], space=0
++dcl_input vThreadID.x
++dcl_temps 5
++dcl_thread_group 64, 1, 1
++uge r0.x, vThreadID.x, CB0[0][0].w
++if_nz r0.x
++  ret
++endif
++iadd r0.x, -CB0[0][0].z, l(4)
++if_nz CB0[0][1].w
++  udiv r1.x, r2.x, vThreadID.x, CB0[0][2].y
++  mov r2.y, r1.x
++  udiv r0.yz, null, r2.xxyx, CB0[0][0].xxyx
++  bfi r0.y, r0.x, l(0), l(0), r0.y
++  ishr r1.yz, r0.yyyy, l(0, 5, 3, 0)
++  ishr r2.yz, r0.zzzz, l(0, 5, 2, 0)
++  ushr r0.w, CB0[0][2].x, l(5)
++  imad r1.y, r2.y, r0.w, r1.y
++  iadd r1.w, CB0[0][0].z, l(7)
++  ishl r1.y, r1.y, r1.w
++  ishl r2.yw, r0.zzzz, l(0, 2, 0, 7)
++  and r2.yzw, r2.yyzw, l(0, 56, 2, 2048)
++  ishl r2.y, r2.y, CB0[0][0].z
++  bfi r2.y, l(3), CB0[0][0].z, r0.y, r2.y
++  ishl r3.x, r2.y, l(1)
++  and r3.x, r3.x, l(-32)
++  iadd r1.y, r1.y, r3.x
++  and r2.y, r2.y, l(15)
++  iadd r1.y, r1.y, r2.y
++  bfi r2.y, l(1), l(4), r0.z, l(0)
++  iadd r1.y, r1.y, r2.y
++  ishl r3.xy, r1.yyyy, l(3, 2, 0, 0)
++  bfi r2.y, l(12), l(0), r2.w, r3.x
++  and r2.w, r3.y, l(1792)
++  iadd r2.y, r2.y, r2.w
++  iadd r1.z, r1.z, r2.z
++  bfi r1.z, l(2), l(6), r1.z, l(0)
++  iadd r1.z, r2.y, r1.z
++  bfi r1.y, l(6), l(0), r1.y, r1.z
++  imad r0.y, -CB0[0][0].x, r0.y, r2.x
++  imad r0.z, -CB0[0][0].y, r0.z, r1.x
++  ushr r1.z, r0.y, r0.x
++  imad r0.z, r1.z, CB0[0][0].y, r0.z
++  imul null, r1.z, CB0[0][0].y, CB0[0][0].x
++  ishl r0.z, r0.z, l(4)
++  imad r0.z, r1.y, r1.z, r0.z
++  bfi r0.y, r0.x, CB0[0][0].z, r0.y, l(0)
++  iadd r0.y, r0.y, r0.z
++  ishr r1.yz, r2.xxxx, l(0, 5, 3, 0)
++  ishr r2.yz, r1.xxxx, l(0, 5, 2, 0)
++  imad r0.z, r2.y, r0.w, r1.y
++  ishl r0.z, r0.z, r1.w
++  ishl r1.yw, r1.xxxx, l(0, 2, 0, 7)
++  and r1.yw, r1.yyyw, l(0, 56, 0, 2048)
++  ishl r0.w, r1.y, CB0[0][0].z
++  bfi r0.w, l(3), CB0[0][0].z, r2.x, r0.w
++  ishl r1.y, r0.w, l(1)
++  and r1.y, r1.y, l(-32)
++  iadd r0.z, r0.z, r1.y
++  and r0.w, r0.w, l(15)
++  iadd r0.z, r0.w, r0.z
++  bfi r0.w, l(1), l(4), r1.x, l(0)
++  iadd r0.z, r0.w, r0.z
++  ishl r1.xy, r0.zzzz, l(3, 2, 0, 0)
++  bfi r0.w, l(12), l(0), r1.w, r1.x
++  and r1.x, r1.y, l(1792)
++  iadd r0.w, r0.w, r1.x
++  and r1.x, r2.z, l(2)
++  iadd r1.x, r1.z, r1.x
++  bfi r1.x, l(2), l(6), r1.x, l(0)
++  iadd r0.w, r0.w, r1.x
++  bfi r0.z, l(6), l(0), r0.z, r0.w
++else
++  ushr r0.w, vThreadID.x, r0.x
++  ishl r0.w, r0.w, l(4)
++  ubfe r1.x, r0.x, l(0), vThreadID.x
++  ishl r0.z, vThreadID.x, CB0[0][0].z
++  ine r1.y, CB0[0][1].z, l(0)
++  ieq r1.z, CB0[0][0].z, l(2)
++  and r1.y, r1.z, r1.y
++  if_nz r1.y
++    mov r2.xyzw, l(0,0,0,0)
++    mov r1.y, l(0)
++    loop
++      uge r1.z, r1.y, CB0[0][0].y
++      breakc_nz r1.z
++      mov r3.xyzw, r2.xyzw
++      mov r1.z, l(0)
++      loop
++        uge r1.w, r1.z, CB0[0][0].x
++        breakc_nz r1.w
++        imad r1.w, r1.x, CB0[0][0].x, r1.z
++        ushr r4.x, r1.w, l(2)
++        imad r4.x, r4.x, CB0[0][0].y, r1.y
++        imul null, r4.y, CB0[0][0].y, CB0[0][0].x
++        ishl r4.x, r4.x, l(4)
++        imad r4.x, r0.w, r4.y, r4.x
++        bfi r1.w, l(2), l(2), r1.w, l(0)
++        iadd r1.w, r4.x, r1.w
++        ld_raw r4.x, r1.w, T0[0].xxxx
++        ushr r4.yzw, r4.xxxx, l(0, 8, 16, 24)
++        and r4.xyzw, r4.xyzw, l(255, 255, 255, 255)
++        iadd r3.xyzw, r3.xyzw, r4.xyzw
++        iadd r1.z, r1.z, l(1)
++      endloop
++      mov r2.xyzw, r3.xyzw
++      iadd r1.y, r1.y, l(1)
++    endloop
++    imul null, r1.y, CB0[0][0].y, CB0[0][0].x
++    ushr r1.z, r1.y, l(1)
++    iadd r2.xyzw, r1.zzzz, r2.xyzw
++    udiv r2.xyzw, null, r2.xyzw, r1.yyyy
++    ishl r1.yzw, r2.yyzw, l(0, 8, 16, 24)
++    or r1.y, r1.y, r2.x
++    or r1.y, r1.z, r1.y
++    or r1.y, r1.w, r1.y
++    store_raw U0[0].x, r0.z, r1.y
++    ret
++  endif
++  imad r1.x, r1.x, CB0[0][0].x, CB0[0][1].x
++  ushr r1.y, r1.x, r0.x
++  imad r1.y, r1.y, CB0[0][0].y, CB0[0][1].y
++  imul null, r1.z, CB0[0][0].y, CB0[0][0].x
++  ishl r1.y, r1.y, l(4)
++  imad r0.w, r0.w, r1.z, r1.y
++  bfi r0.x, r0.x, CB0[0][0].z, r1.x, l(0)
++  iadd r0.y, r0.x, r0.w
++endif
++ieq r0.x, CB0[0][0].z, l(3)
++if_nz r0.x
++  ld_raw r0.xw, r0.y, T0[0].xxxy
++  iadd r1.x, r0.z, l(4)
++  store_raw U0[0].x, r1.x, r0.w
++else
++  ld_raw r0.x, r0.y, T0[0].xxxx
++endif
++store_raw U0[0].x, r0.z, r0.x
++ret
++// Approximately 134 instruction slots used
++#endif
++
++const BYTE resolve_unscale_cs[] =
++{
++     68,  88,  66,  67, 242, 232,
++     65,  60,   1,  83,  68, 206,
++    250, 220,  62, 125,  84, 249,
++    144,  98,   1,   0,   0,   0,
++    216,  21,   0,   0,   5,   0,
++      0,   0,  52,   0,   0,   0,
++    124,   4,   0,   0, 140,   4,
++      0,   0, 156,   4,   0,   0,
++     60,  21,   0,   0,  82,  68,
++     69,  70,  64,   4,   0,   0,
++      1,   0,   0,   0, 240,   0,
++      0,   0,   3,   0,   0,   0,
++     60,   0,   0,   0,   1,   5,
++     83,  67,   0, 133,   0,   0,
++     22,   4,   0,   0,  19,  19,
++     68,  37,  60,   0,   0,   0,
++     24,   0,   0,   0,  40,   0,
++      0,   0,  40,   0,   0,   0,
++     36,   0,   0,   0,  12,   0,
++      0,   0,   0,   0,   0,   0,
++    180,   0,   0,   0,   7,   0,
++      0,   0,   6,   0,   0,   0,
++      1,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      1,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0, 198,   0,
++      0,   0,   8,   0,   0,   0,
++      6,   0,   0,   0,   1,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   1,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0, 214,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   1,   0,   0,   0,
++      1,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95, 115,
++    111, 117, 114,  99, 101,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95, 100,
++    101, 115, 116,   0,  88, 101,
++     82, 101, 115, 111, 108, 118,
++    101,  85, 110, 115,  99,  97,
++    108, 101,  67, 111, 110, 115,
++    116,  97, 110, 116, 115,   0,
++    214,   0,   0,   0,  12,   0,
++      0,   0,   8,   1,   0,   0,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++    232,   2,   0,   0,   0,   0,
++      0,   0,   4,   0,   0,   0,
++      2,   0,   0,   0,   4,   3,
++      0,   0,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0,  40,   3,
++      0,   0,   4,   0,   0,   0,
++      4,   0,   0,   0,   2,   0,
++      0,   0,   4,   3,   0,   0,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0,  59,   3,   0,   0,
++      8,   0,   0,   0,   4,   0,
++      0,   0,   2,   0,   0,   0,
++      4,   3,   0,   0,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++     86,   3,   0,   0,  12,   0,
++      0,   0,   4,   0,   0,   0,
++      2,   0,   0,   0,   4,   3,
++      0,   0,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 109,   3,
++      0,   0,  16,   0,   0,   0,
++      4,   0,   0,   0,   2,   0,
++      0,   0,   4,   3,   0,   0,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 129,   3,   0,   0,
++     20,   0,   0,   0,   4,   0,
++      0,   0,   2,   0,   0,   0,
++      4,   3,   0,   0,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    149,   3,   0,   0,  24,   0,
++      0,   0,   4,   0,   0,   0,
++      2,   0,   0,   0,   4,   3,
++      0,   0,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 168,   3,
++      0,   0,  28,   0,   0,   0,
++      4,   0,   0,   0,   2,   0,
++      0,   0,   4,   3,   0,   0,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 186,   3,   0,   0,
++     32,   0,   0,   0,   4,   0,
++      0,   0,   2,   0,   0,   0,
++      4,   3,   0,   0,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    210,   3,   0,   0,  36,   0,
++      0,   0,   4,   0,   0,   0,
++      2,   0,   0,   0,   4,   3,
++      0,   0,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 234,   3,
++      0,   0,  40,   0,   0,   0,
++      4,   0,   0,   0,   0,   0,
++      0,   0,   4,   3,   0,   0,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    255, 255, 255, 255,   0,   0,
++      0,   0,   3,   4,   0,   0,
++     44,   0,   0,   0,   4,   0,
++      0,   0,   0,   0,   0,   0,
++      4,   3,   0,   0,   0,   0,
++      0,   0, 255, 255, 255, 255,
++      0,   0,   0,   0, 255, 255,
++    255, 255,   0,   0,   0,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95, 115,
++     99,  97, 108, 101,  95, 120,
++      0, 100, 119, 111, 114, 100,
++      0, 171, 171, 171,   0,   0,
++     19,   0,   1,   0,   1,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++    251,   2,   0,   0, 120, 101,
++     95, 117, 110, 115,  99,  97,
++    108, 101,  95, 115,  99,  97,
++    108, 101,  95, 121,   0, 120,
++    101,  95, 117, 110, 115,  99,
++     97, 108, 101,  95, 112, 105,
++    120, 101, 108,  95, 115, 105,
++    122, 101,  95, 108, 111, 103,
++     50,   0, 120, 101,  95, 117,
++    110, 115,  99,  97, 108, 101,
++     95, 112, 105, 120, 101, 108,
++     95,  99, 111, 117, 110, 116,
++      0, 120, 101,  95, 117, 110,
++    115,  99,  97, 108, 101,  95,
++    115,  97, 109, 112, 108, 101,
++     95, 120,   0, 120, 101,  95,
++    117, 110, 115,  99,  97, 108,
++    101,  95, 115,  97, 109, 112,
++    108, 101,  95, 121,   0, 120,
++    101,  95, 117, 110, 115,  99,
++     97, 108, 101,  95,  97, 118,
++    101, 114,  97, 103, 101,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95,  99,
++    111, 114, 110, 101, 114,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95,  99,
++    111, 114, 110, 101, 114,  95,
++    112, 105, 116,  99, 104,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95,  99,
++    111, 114, 110, 101, 114,  95,
++    119, 105, 100, 116, 104,   0,
++    120, 101,  95, 117, 110, 115,
++     99,  97, 108, 101,  95,  99,
++    111, 114, 110, 101, 114,  95,
++    104, 101, 105, 103, 104, 116,
++      0, 120, 101,  95, 117, 110,
++    115,  99,  97, 108, 101,  95,
++    112,  97, 100, 100, 105, 110,
++    103,   0,  77, 105,  99, 114,
++    111, 115, 111, 102, 116,  32,
++     40,  82,  41,  32,  72,  76,
++     83,  76,  32,  83, 104,  97,
++    100, 101, 114,  32,  67, 111,
++    109, 112, 105, 108, 101, 114,
++     32,  49,  48,  46,  49,   0,
++    171, 171,  73,  83,  71,  78,
++      8,   0,   0,   0,   0,   0,
++      0,   0,   8,   0,   0,   0,
++     79,  83,  71,  78,   8,   0,
++      0,   0,   0,   0,   0,   0,
++      8,   0,   0,   0,  83,  72,
++     69,  88, 152,  16,   0,   0,
++     81,   0,   5,   0,  38,   4,
++      0,   0, 106,   8,   0,   1,
++     89,   0,   0,   7,  70, 142,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   3,   0,   0,   0,
++      0,   0,   0,   0, 161,   0,
++      0,   6,  70, 126,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0, 157,   0,
++      0,   6,  70, 238,  49,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  95,   0,
++      0,   2,  18,   0,   2,   0,
++    104,   0,   0,   2,   5,   0,
++      0,   0, 155,   0,   0,   4,
++     64,   0,   0,   0,   1,   0,
++      0,   0,   1,   0,   0,   0,
++     80,   0,   0,   8,  18,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,   2,   0,  58, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  31,   0,   4,   3,
++     10,   0,  16,   0,   0,   0,
++      0,   0,  62,   0,   0,   1,
++     21,   0,   0,   1,  30,   0,
++      0,  10,  18,   0,  16,   0,
++      0,   0,   0,   0,  42, 128,
++     48, 128,  65,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      1,  64,   0,   0,   4,   0,
++      0,   0,  31,   0,   4,   5,
++     58, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      1,   0,   0,   0,  78,   0,
++      0,  10,  18,   0,  16,   0,
++      1,   0,   0,   0,  18,   0,
++     16,   0,   2,   0,   0,   0,
++     10,   0,   2,   0,  26, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   2,   0,
++      0,   0,  54,   0,   0,   5,
++     34,   0,  16,   0,   2,   0,
++      0,   0,  10,   0,  16,   0,
++      1,   0,   0,   0,  78,   0,
++      0,  10,  98,   0,  16,   0,
++      0,   0,   0,   0,   0, 208,
++      0,   0,   6,   1,  16,   0,
++      2,   0,   0,   0,   6, 129,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0, 140,   0,   0,  11,
++     34,   0,  16,   0,   0,   0,
++      0,   0,  10,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   0,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  26,   0,  16,   0,
++      0,   0,   0,   0,  42,   0,
++      0,  10,  98,   0,  16,   0,
++      1,   0,   0,   0,  86,   5,
++     16,   0,   0,   0,   0,   0,
++      2,  64,   0,   0,   0,   0,
++      0,   0,   5,   0,   0,   0,
++      3,   0,   0,   0,   0,   0,
++      0,   0,  42,   0,   0,  10,
++     98,   0,  16,   0,   2,   0,
++      0,   0, 166,  10,  16,   0,
++      0,   0,   0,   0,   2,  64,
++      0,   0,   0,   0,   0,   0,
++      5,   0,   0,   0,   2,   0,
++      0,   0,   0,   0,   0,   0,
++     85,   0,   0,   9, 130,   0,
++     16,   0,   0,   0,   0,   0,
++     10, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      2,   0,   0,   0,   1,  64,
++      0,   0,   5,   0,   0,   0,
++     35,   0,   0,   9,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   2,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     30,   0,   0,   9, 130,   0,
++     16,   0,   1,   0,   0,   0,
++     42, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   7,   0,   0,   0,
++     41,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  58,   0,  16,   0,
++      1,   0,   0,   0,  41,   0,
++      0,  10, 162,   0,  16,   0,
++      2,   0,   0,   0, 166,  10,
++     16,   0,   0,   0,   0,   0,
++      2,  64,   0,   0,   0,   0,
++      0,   0,   2,   0,   0,   0,
++      0,   0,   0,   0,   7,   0,
++      0,   0,   1,   0,   0,  10,
++    226,   0,  16,   0,   2,   0,
++      0,   0,  86,  14,  16,   0,
++      2,   0,   0,   0,   2,  64,
++      0,   0,   0,   0,   0,   0,
++     56,   0,   0,   0,   2,   0,
++      0,   0,   0,   8,   0,   0,
++     41,   0,   0,   9,  34,   0,
++     16,   0,   2,   0,   0,   0,
++     26,   0,  16,   0,   2,   0,
++      0,   0,  42, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++    140,   0,   0,  13,  34,   0,
++     16,   0,   2,   0,   0,   0,
++      1,  64,   0,   0,   3,   0,
++      0,   0,  42, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   0,   0,
++      0,   0,  26,   0,  16,   0,
++      2,   0,   0,   0,  41,   0,
++      0,   7,  18,   0,  16,   0,
++      3,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++      1,  64,   0,   0,   1,   0,
++      0,   0,   1,   0,   0,   7,
++     18,   0,  16,   0,   3,   0,
++      0,   0,  10,   0,  16,   0,
++      3,   0,   0,   0,   1,  64,
++      0,   0, 224, 255, 255, 255,
++     30,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  10,   0,  16,   0,
++      3,   0,   0,   0,   1,   0,
++      0,   7,  34,   0,  16,   0,
++      2,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++      1,  64,   0,   0,  15,   0,
++      0,   0,  30,   0,   0,   7,
++     34,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++    140,   0,   0,  11,  34,   0,
++     16,   0,   2,   0,   0,   0,
++      1,  64,   0,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      4,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  30,   0,   0,   7,
++     34,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++     41,   0,   0,  10,  50,   0,
++     16,   0,   3,   0,   0,   0,
++     86,   5,  16,   0,   1,   0,
++      0,   0,   2,  64,   0,   0,
++      3,   0,   0,   0,   2,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0, 140,   0,
++      0,  11,  34,   0,  16,   0,
++      2,   0,   0,   0,   1,  64,
++      0,   0,  12,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  58,   0,  16,   0,
++      2,   0,   0,   0,  10,   0,
++     16,   0,   3,   0,   0,   0,
++      1,   0,   0,   7, 130,   0,
++     16,   0,   2,   0,   0,   0,
++     26,   0,  16,   0,   3,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   7,   0,   0,  30,   0,
++      0,   7,  34,   0,  16,   0,
++      2,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++     58,   0,  16,   0,   2,   0,
++      0,   0,  30,   0,   0,   7,
++     66,   0,  16,   0,   1,   0,
++      0,   0,  42,   0,  16,   0,
++      1,   0,   0,   0,  42,   0,
++     16,   0,   2,   0,   0,   0,
++    140,   0,   0,  11,  66,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   2,   0,
++      0,   0,   1,  64,   0,   0,
++      6,   0,   0,   0,  42,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  30,   0,   0,   7,
++     66,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      2,   0,   0,   0,  42,   0,
++     16,   0,   1,   0,   0,   0,
++    140,   0,   0,  11,  34,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   6,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     42,   0,  16,   0,   1,   0,
++      0,   0,  35,   0,   0,  12,
++     34,   0,  16,   0,   0,   0,
++      0,   0,  10, 128,  48, 128,
++     65,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   2,   0,
++      0,   0,  35,   0,   0,  12,
++     66,   0,  16,   0,   0,   0,
++      0,   0,  26, 128,  48, 128,
++     65,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0,  85,   0,   0,   7,
++     66,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      0,   0,   0,   0,  10,   0,
++     16,   0,   0,   0,   0,   0,
++     35,   0,   0,  11,  66,   0,
++     16,   0,   0,   0,   0,   0,
++     42,   0,  16,   0,   1,   0,
++      0,   0,  26, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     42,   0,  16,   0,   0,   0,
++      0,   0,  38,   0,   0,  12,
++      0, 208,   0,   0,  66,   0,
++     16,   0,   1,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  41,   0,   0,   7,
++     66,   0,  16,   0,   0,   0,
++      0,   0,  42,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   4,   0,   0,   0,
++     35,   0,   0,   9,  66,   0,
++     16,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  42,   0,  16,   0,
++      1,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++    140,   0,   0,  13,  34,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   0,   0,
++      0,   0,  42, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   0,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  30,   0,
++      0,   7,  34,   0,  16,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   0,   0,   0,   0,
++     42,   0,  16,   0,   0,   0,
++      0,   0,  42,   0,   0,  10,
++     98,   0,  16,   0,   1,   0,
++      0,   0,   6,   0,  16,   0,
++      2,   0,   0,   0,   2,  64,
++      0,   0,   0,   0,   0,   0,
++      5,   0,   0,   0,   3,   0,
++      0,   0,   0,   0,   0,   0,
++     42,   0,   0,  10,  98,   0,
++     16,   0,   2,   0,   0,   0,
++      6,   0,  16,   0,   1,   0,
++      0,   0,   2,  64,   0,   0,
++      0,   0,   0,   0,   5,   0,
++      0,   0,   2,   0,   0,   0,
++      0,   0,   0,   0,  35,   0,
++      0,   9,  66,   0,  16,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   2,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0,  41,   0,
++      0,   7,  66,   0,  16,   0,
++      0,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   1,   0,
++      0,   0,  41,   0,   0,  10,
++    162,   0,  16,   0,   1,   0,
++      0,   0,   6,   0,  16,   0,
++      1,   0,   0,   0,   2,  64,
++      0,   0,   0,   0,   0,   0,
++      2,   0,   0,   0,   0,   0,
++      0,   0,   7,   0,   0,   0,
++      1,   0,   0,  10, 162,   0,
++     16,   0,   1,   0,   0,   0,
++     86,  13,  16,   0,   1,   0,
++      0,   0,   2,  64,   0,   0,
++      0,   0,   0,   0,  56,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   8,   0,   0,  41,   0,
++      0,   9, 130,   0,  16,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     42, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0, 140,   0,
++      0,  13, 130,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   3,   0,   0,   0,
++     42, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10,   0,
++     16,   0,   2,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  41,   0,   0,   7,
++     34,   0,  16,   0,   1,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   1,   0,   0,   0,
++      1,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++    224, 255, 255, 255,  30,   0,
++      0,   7,  66,   0,  16,   0,
++      0,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,   1,   0,   0,   7,
++    130,   0,  16,   0,   0,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,  15,   0,   0,   0,
++     30,   0,   0,   7,  66,   0,
++     16,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  42,   0,  16,   0,
++      0,   0,   0,   0, 140,   0,
++      0,  11, 130,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   4,   0,
++      0,   0,  10,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   0,   0,   0,   0,
++     30,   0,   0,   7,  66,   0,
++     16,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  42,   0,  16,   0,
++      0,   0,   0,   0,  41,   0,
++      0,  10,  50,   0,  16,   0,
++      1,   0,   0,   0, 166,  10,
++     16,   0,   0,   0,   0,   0,
++      2,  64,   0,   0,   3,   0,
++      0,   0,   2,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0, 140,   0,   0,  11,
++    130,   0,  16,   0,   0,   0,
++      0,   0,   1,  64,   0,   0,
++     12,   0,   0,   0,   1,  64,
++      0,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   1,   0,
++      0,   0,  10,   0,  16,   0,
++      1,   0,   0,   0,   1,   0,
++      0,   7,  18,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   0,   7,
++      0,   0,  30,   0,   0,   7,
++    130,   0,  16,   0,   0,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,  10,   0,
++     16,   0,   1,   0,   0,   0,
++      1,   0,   0,   7,  18,   0,
++     16,   0,   1,   0,   0,   0,
++     42,   0,  16,   0,   2,   0,
++      0,   0,   1,  64,   0,   0,
++      2,   0,   0,   0,  30,   0,
++      0,   7,  18,   0,  16,   0,
++      1,   0,   0,   0,  42,   0,
++     16,   0,   1,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0, 140,   0,   0,  11,
++     18,   0,  16,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      2,   0,   0,   0,   1,  64,
++      0,   0,   6,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  30,   0,
++      0,   7, 130,   0,  16,   0,
++      0,   0,   0,   0,  58,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0, 140,   0,   0,  11,
++     66,   0,  16,   0,   0,   0,
++      0,   0,   1,  64,   0,   0,
++      6,   0,   0,   0,   1,  64,
++      0,   0,   0,   0,   0,   0,
++     42,   0,  16,   0,   0,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,  18,   0,
++      0,   1,  85,   0,   0,   6,
++    130,   0,  16,   0,   0,   0,
++      0,   0,  10,   0,   2,   0,
++     10,   0,  16,   0,   0,   0,
++      0,   0,  41,   0,   0,   7,
++    130,   0,  16,   0,   0,   0,
++      0,   0,  58,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   4,   0,   0,   0,
++    138,   0,   0,   8,  18,   0,
++     16,   0,   1,   0,   0,   0,
++     10,   0,  16,   0,   0,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  10,   0,
++      2,   0,  41,   0,   0,   8,
++     66,   0,  16,   0,   0,   0,
++      0,   0,  10,   0,   2,   0,
++     42, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  39,   0,
++      0,   9,  34,   0,  16,   0,
++      1,   0,   0,   0,  42, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  32,   0,
++      0,   9,  66,   0,  16,   0,
++      1,   0,   0,   0,  42, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   1,  64,   0,   0,
++      2,   0,   0,   0,   1,   0,
++      0,   7,  34,   0,  16,   0,
++      1,   0,   0,   0,  42,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  31,   0,   4,   3,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  54,   0,   0,   8,
++    242,   0,  16,   0,   2,   0,
++      0,   0,   2,  64,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  54,   0,
++      0,   5,  34,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   0,   0,   0,   0,
++     48,   0,   0,   1,  80,   0,
++      0,   9,  66,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   3,   0,
++      4,   3,  42,   0,  16,   0,
++      1,   0,   0,   0,  54,   0,
++      0,   5, 242,   0,  16,   0,
++      3,   0,   0,   0,  70,  14,
++     16,   0,   2,   0,   0,   0,
++     54,   0,   0,   5,  66,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  48,   0,   0,   1,
++     80,   0,   0,   9, 130,   0,
++     16,   0,   1,   0,   0,   0,
++     42,   0,  16,   0,   1,   0,
++      0,   0,  10, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      3,   0,   4,   3,  58,   0,
++     16,   0,   1,   0,   0,   0,
++     35,   0,   0,  11, 130,   0,
++     16,   0,   1,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0,  10, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     42,   0,  16,   0,   1,   0,
++      0,   0,  85,   0,   0,   7,
++     18,   0,  16,   0,   4,   0,
++      0,   0,  58,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   2,   0,   0,   0,
++     35,   0,   0,  11,  18,   0,
++     16,   0,   4,   0,   0,   0,
++     10,   0,  16,   0,   4,   0,
++      0,   0,  26, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,  38,   0,   0,  12,
++      0, 208,   0,   0,  34,   0,
++     16,   0,   4,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  41,   0,   0,   7,
++     18,   0,  16,   0,   4,   0,
++      0,   0,  10,   0,  16,   0,
++      4,   0,   0,   0,   1,  64,
++      0,   0,   4,   0,   0,   0,
++     35,   0,   0,   9,  18,   0,
++     16,   0,   4,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  26,   0,  16,   0,
++      4,   0,   0,   0,  10,   0,
++     16,   0,   4,   0,   0,   0,
++    140,   0,   0,  11, 130,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   2,   0,
++      0,   0,   1,  64,   0,   0,
++      2,   0,   0,   0,  58,   0,
++     16,   0,   1,   0,   0,   0,
++      1,  64,   0,   0,   0,   0,
++      0,   0,  30,   0,   0,   7,
++    130,   0,  16,   0,   1,   0,
++      0,   0,  10,   0,  16,   0,
++      4,   0,   0,   0,  58,   0,
++     16,   0,   1,   0,   0,   0,
++    165,   0,   0,   8,  18,   0,
++     16,   0,   4,   0,   0,   0,
++     58,   0,  16,   0,   1,   0,
++      0,   0,   6, 112,  32,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  85,   0,   0,  10,
++    226,   0,  16,   0,   4,   0,
++      0,   0,   6,   0,  16,   0,
++      4,   0,   0,   0,   2,  64,
++      0,   0,   0,   0,   0,   0,
++      8,   0,   0,   0,  16,   0,
++      0,   0,  24,   0,   0,   0,
++      1,   0,   0,  10, 242,   0,
++     16,   0,   4,   0,   0,   0,
++     70,  14,  16,   0,   4,   0,
++      0,   0,   2,  64,   0,   0,
++    255,   0,   0,   0, 255,   0,
++      0,   0, 255,   0,   0,   0,
++    255,   0,   0,   0,  30,   0,
++      0,   7, 242,   0,  16,   0,
++      3,   0,   0,   0,  70,  14,
++     16,   0,   3,   0,   0,   0,
++     70,  14,  16,   0,   4,   0,
++      0,   0,  30,   0,   0,   7,
++     66,   0,  16,   0,   1,   0,
++      0,   0,  42,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   1,   0,   0,   0,
++     22,   0,   0,   1,  54,   0,
++      0,   5, 242,   0,  16,   0,
++      2,   0,   0,   0,  70,  14,
++     16,   0,   3,   0,   0,   0,
++     30,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26,   0,  16,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      1,   0,   0,   0,  22,   0,
++      0,   1,  38,   0,   0,  12,
++      0, 208,   0,   0,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  85,   0,   0,   7,
++     66,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   1,   0,   0,   0,
++     30,   0,   0,   7, 242,   0,
++     16,   0,   2,   0,   0,   0,
++    166,  10,  16,   0,   1,   0,
++      0,   0,  70,  14,  16,   0,
++      2,   0,   0,   0,  78,   0,
++      0,   8, 242,   0,  16,   0,
++      2,   0,   0,   0,   0, 208,
++      0,   0,  70,  14,  16,   0,
++      2,   0,   0,   0,  86,   5,
++     16,   0,   1,   0,   0,   0,
++     41,   0,   0,  10, 226,   0,
++     16,   0,   1,   0,   0,   0,
++     86,  14,  16,   0,   2,   0,
++      0,   0,   2,  64,   0,   0,
++      0,   0,   0,   0,   8,   0,
++      0,   0,  16,   0,   0,   0,
++     24,   0,   0,   0,  60,   0,
++      0,   7,  34,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     10,   0,  16,   0,   2,   0,
++      0,   0,  60,   0,   0,   7,
++     34,   0,  16,   0,   1,   0,
++      0,   0,  42,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     60,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     58,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0, 166,   0,
++      0,   8,  18, 224,  33,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  42,   0,  16,   0,
++      0,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     62,   0,   0,   1,  21,   0,
++      0,   1,  35,   0,   0,  13,
++     18,   0,  16,   0,   1,   0,
++      0,   0,  10,   0,  16,   0,
++      1,   0,   0,   0,  10, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  10, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   1,   0,   0,   0,
++     85,   0,   0,   7,  34,   0,
++     16,   0,   1,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0,  10,   0,  16,   0,
++      0,   0,   0,   0,  35,   0,
++      0,  13,  34,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  26, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   1,   0,
++      0,   0,  38,   0,   0,  12,
++      0, 208,   0,   0,  66,   0,
++     16,   0,   1,   0,   0,   0,
++     26, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10, 128,
++     48,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  41,   0,   0,   7,
++     34,   0,  16,   0,   1,   0,
++      0,   0,  26,   0,  16,   0,
++      1,   0,   0,   0,   1,  64,
++      0,   0,   4,   0,   0,   0,
++     35,   0,   0,   9, 130,   0,
++     16,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  42,   0,  16,   0,
++      1,   0,   0,   0,  26,   0,
++     16,   0,   1,   0,   0,   0,
++    140,   0,   0,  13,  18,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   0,   0,
++      0,   0,  42, 128,  48,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   1,   0,
++      0,   0,   1,  64,   0,   0,
++      0,   0,   0,   0,  30,   0,
++      0,   7,  34,   0,  16,   0,
++      0,   0,   0,   0,  10,   0,
++     16,   0,   0,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  21,   0,   0,   1,
++     32,   0,   0,   9,  18,   0,
++     16,   0,   0,   0,   0,   0,
++     42, 128,  48,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   3,   0,   0,   0,
++     31,   0,   4,   3,  10,   0,
++     16,   0,   0,   0,   0,   0,
++    165,   0,   0,   8, 146,   0,
++     16,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   0,   0,
++      0,   0,   6, 116,  32,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  30,   0,   0,   7,
++     18,   0,  16,   0,   1,   0,
++      0,   0,  42,   0,  16,   0,
++      0,   0,   0,   0,   1,  64,
++      0,   0,   4,   0,   0,   0,
++    166,   0,   0,   8,  18, 224,
++     33,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  10,   0,
++     16,   0,   1,   0,   0,   0,
++     58,   0,  16,   0,   0,   0,
++      0,   0,  18,   0,   0,   1,
++    165,   0,   0,   8,  18,   0,
++     16,   0,   0,   0,   0,   0,
++     26,   0,  16,   0,   0,   0,
++      0,   0,   6, 112,  32,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,  21,   0,   0,   1,
++    166,   0,   0,   8,  18, 224,
++     33,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,  42,   0,
++     16,   0,   0,   0,   0,   0,
++     10,   0,  16,   0,   0,   0,
++      0,   0,  62,   0,   0,   1,
++     83,  84,  65,  84, 148,   0,
++      0,   0, 134,   0,   0,   0,
++      5,   0,   0,   0,   0,   0,
++      0,   0,   1,   0,   0,   0,
++      0,   0,   0,   0,  61,   0,
++      0,   0,  26,   0,   0,   0,
++      6,   0,   0,   0,   5,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   3,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      6,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   0,   0,   0,   0,
++      0,   0,   3,   0,   0,   0
++};

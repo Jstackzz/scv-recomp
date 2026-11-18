@@ -282,6 +282,10 @@ class SeriesPlayer:
     wins: int = 0
     ready: bool = False
     choice: str = ""  # casual, once ready: "rematch" (the same fighters) or "select" (both pick again)
+    # ready with the game still at the last match's result screen, its connection to the other game open (a launcher
+    # that says so plays the next match there: the game's own way back to Character Select, no new punch)
+    in_place: bool = False
+    last_ping: dict[str, Any] | None = None  # the last match's route to the other game (its ping report)
 
 
 @dataclass(eq=False)
@@ -307,6 +311,8 @@ class Series:
     # next match while the loser picks again; None when the games did not agree on the fighters (both pick then)
     winner_keeps: tuple[SeriesPlayer, str] | None = None
     death_traps: bool = True
+    last_rtt: int = 0  # the last match's ping between the two
+    last_direct: bool = False  # the last match went straight between the two (no relay, no tunnel): in place possible
 
     def player_for(self, account_id: int | None) -> SeriesPlayer | None:
         for p in self.players:
@@ -1911,6 +1917,14 @@ class Server:
         series.match = None
         series.played += 1
         series.last_picks = fighters
+        # the route the two games still hold, should both want the next match where they are (at the result screen)
+        series.last_rtt = m.rtt_ms
+        series.last_direct = (status in ("agreed", "draw") and m.relay is None and not any(p.tunnel for p in m.players)
+                              and all(p.ping is not None and p.ping.get("ok") for p in m.players))
+        for mp in m.players:
+            sp = series.player_for(mp.account_id)
+            if sp is not None:
+                sp.last_ping = dict(mp.ping) if mp.ping is not None else None
         if fault is not None and series.ranked:
             sp = series.player_for(fault.account_id)
             if sp is not None and first and fault.game_state != "in_match":
@@ -1961,6 +1975,7 @@ class Server:
         for p in series.players:
             p.ready = False
             p.choice = ""
+            p.in_place = False
         series.deadline = now + (self.cfg.set_next_timeout if series.ranked else self.cfg.rematch_timeout)
         self._send_series(series)
 
@@ -1982,16 +1997,22 @@ class Server:
 
     def _series_picks(self, series: Series) -> tuple[str, str]:
         """P1's and P2's characters in a series' next match ("" picks on the select screen). A mode whose players can
-        pick on the game's select screen goes back there for every match after the first, casual or ranked (the
-        rematch is character select); in a ranked set only the last match's loser picks there, its winner keeps the
-        fighter they won with (the autopilot picks it in both games). Other modes, casual: the last match's fighters
-        when both want a rematch, the select screen when either wants to select (the characters they queued with when
-        the last match's are not known); ranked: the queued ones."""
+        pick on the game's select screen: in a ranked set the next match goes back there, where only the last match's
+        loser picks, its winner keeping the fighter they won with (the autopilot picks it in both games); casual, the
+        last match's fighters again when both want a rematch (as the game's own Rematch: the autopilot picks them in
+        both games, on the same stage when the games are still at the result screen), the select screen when either
+        wants to select. Other modes, casual: the last match's fighters when both want a rematch, the select screen
+        when either wants to select (the characters they queued with when the last match's are not known); ranked:
+        the queued ones."""
         p1, p2 = sorted(series.players, key=lambda p: p.side)
         if series.mode in P.SELECT_SCREEN_MODES:
-            if series.ranked and series.winner_keeps is not None:
-                keeper, fighter = series.winner_keeps
-                return (fighter, "") if keeper.side == 1 else ("", fighter)
+            if series.ranked:
+                if series.winner_keeps is not None:
+                    keeper, fighter = series.winner_keeps
+                    return (fighter, "") if keeper.side == 1 else ("", fighter)
+                return "", ""
+            if all(p.choice == "rematch" for p in series.players) and series.last_picks:
+                return series.last_picks
             return "", ""
         if series.ranked:
             return p1.character, p2.character
@@ -2018,15 +2039,25 @@ class Server:
         series.state = "playing"
         series.match = m
         self._register_match(m)
+        # both games still at the last match's result screen, connected straight to each other: the match goes on
+        # there (no UDP hello, no punch: the route is the last match's), else as any match, after both games parked
+        in_place = (series.last_direct and all(p.in_place and p.last_ping is not None for p in series.players))
         for p in players:
             assert p.session is not None
             p.session.send({
                 "type": "match_found", "match": m.id, "game": m.game, "mode": m.mode, "ranked": m.ranked,
                 "side": p.side, "accept_timeout": 0, "accept_required": False, "lobby": None, "series": series.id,
-                "death_traps": m.death_traps, "opponent": self._opponent(m, m.other(p)),
+                "death_traps": m.death_traps, "opponent": self._opponent(m, m.other(p)), "in_place": in_place,
             })
-        log.info("%s %s: match %s (%d played)", "set" if series.ranked else "series", series.id, m.id, series.played)
+        log.info("%s %s: match %s (%d played)%s", "set" if series.ranked else "series", series.id, m.id, series.played,
+                 ", at the result screens" if in_place else "")
         self._send_series(series)
+        if in_place:
+            for mp in players:
+                sp = series.player_for(mp.account_id)
+                assert sp is not None and sp.last_ping is not None
+                mp.ping = dict(sp.last_ping)
+            self._go(m, series.last_rtt, now)
 
     def _leave_series(self, series: Series, p: SeriesPlayer, now: float) -> None:
         """A player leaves: a ranked set with a match counted is lost, whatever its score (one match won and gone
@@ -2107,11 +2138,13 @@ class Server:
         choice = msg.get("choice", "rematch")
         if choice not in ("rematch", "select"):
             raise P.ProtocolError("bad_request", "choice must be rematch or select.")
+        in_place = P.get_bool(msg, "in_place", default=False)
         if series.state == "between":
             if s.match is not None or s.lobby is not None or s.queue is not None:
                 raise P.ProtocolError("busy", "Leave the queue, lobby or match first.")
             p.ready = True
             p.choice = choice
+            p.in_place = in_place
             if not series.ranked:  # who wanted a rematch, when a series ends without one
                 log.info("series %s: %s chose %s", series.id, p.name, choice)
         self._reply(s, msg, {"type": "series_ack", "series": series.id})

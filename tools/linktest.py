@@ -6,7 +6,15 @@ line both games write, with the time.
     python -I tools/linktest.py [--name linktest] [--mode versus|sparring] [--p1 Siegfried] [--p2 Mitsurugi]
                                 [--rounds 1] [--lag 0] [--pick1 SLOT[.COSTUME]] [--pick2 ...] [--rematch] [--again]
                                 [--park-after S] [--back-at FRAME] [--watch] [--dlc2 DIR] [--env NAME=VALUE]
-                                [--seconds 600] [--keep]
+                                [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
+                                [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
+                                [--env1 NAME=VALUE] [--env2 NAME=VALUE]
+
+--fight1/--fight2: other fight scripts (tools/py/netlog2script.py makes them from a match's net log, so a desync between
+two PCs plays again here; tools/py/mash.py makes varied ones); --heap-shift2 moves game 2's heap, as a second PC's lies
+elsewhere; --exe a copy of the game, so a build can go on meanwhile; --args1/--args2 each game's own command line and
+--env1/--env2 its own variables (two PCs' display settings side by side: --env2 SC5_RENDER_SCALE=2, as the launcher
+passes them, docs/PROTOCOL.md 3.1); --port-base and --runs let two tests run at once (tools/heapsweep.sh).
 
 --p1/--p2 "-": that side picks on the game's own select screen; --pick1/--pick2 then stand in for each PC's player
 there (SC5_TEST_LOCAL_PICK). The fight's inputs are tools/synctest.sh's scripted ones (player 1's in game 1, player
@@ -132,10 +140,23 @@ def main():
     ap.add_argument("--seconds", type=int, default=600)
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for both games (repeatable)")
+    ap.add_argument("--env1", action="append", default=[], help="NAME=VALUE for game 1 only (repeatable)")
+    ap.add_argument("--env2", action="append", default=[], help="NAME=VALUE for game 2 only (repeatable)")
+    # tests of two PCs' determinism (docs/GAME.md, "Two PCs"): other fights, seeds, ports and builds
+    ap.add_argument("--fight1", default="", help="player 1's fight script (default: tools/synctest.sh's)")
+    ap.add_argument("--fight2", default="", help="player 2's fight script")
+    ap.add_argument("--seed", type=int, default=12345, help="the start line's seed")
+    ap.add_argument("--port-base", type=int, default=7001, help="game 1's UDP port; game 2's the next")
+    ap.add_argument("--exe", default="", help="another sc5.exe (a copy, so a build can go on meanwhile)")
+    ap.add_argument("--args1", default="", help="game 1's extra command line (graphics settings, say)")
+    ap.add_argument("--args2", default="", help="game 2's extra command line")
+    ap.add_argument("--runs", default="", help="where the session folders and logs go (default build/runs)")
     a = ap.parse_args()
 
     relay = FeedRelay() if a.watch else None
-    runs = os.path.join(ROOT, "build", "runs")
+    runs = a.runs or os.path.join(ROOT, "build", "runs")
+    os.makedirs(runs, exist_ok=True)
+    exe = a.exe or EXE
     games, sessions = [], []
     count = 3 if a.watch else 2
     t0 = time.time()
@@ -158,11 +179,11 @@ def main():
             "SC5_CACHE_DIR": os.path.join(s, "cache"), "SC5_NET_LOG": os.path.join(s, "net-{match}.log"),
         })
         if i <= 2:
-            script = FIGHT_P1 if i == 1 else FIGHT_P2
+            script = (a.fight1 or FIGHT_P1) if i == 1 else (a.fight2 or FIGHT_P2)
             if i == 1 and a.back_at:
                 script += f",{a.back_at}:BACK,{a.back_at + 6}:-"
             env[f"SC5_FIGHT_INPUT_P{i}"] = script
-        for kv in a.env:
+        for kv in a.env + (a.env1 if i == 1 else a.env2 if i == 2 else []):
             k, _, v = kv.partition("=")
             env[k] = v.replace("{i}", str(i))
         if a.lag and i <= 2:
@@ -172,8 +193,9 @@ def main():
         pick = a.pick1 if i == 1 else a.pick2 if i == 2 else ""
         if pick:
             env["SC5_TEST_LOCAL_PICK"] = pick
-        p = subprocess.Popen([EXE, "--fullscreen=false", "--window_width=960", "--window_height=540"],
-                             cwd=os.path.dirname(EXE), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        extra = (a.args1 if i == 1 else a.args2 if i == 2 else "").split()
+        p = subprocess.Popen([exe, "--fullscreen=false", "--window_width=960", "--window_height=540"] + extra,
+                             cwd=os.path.dirname(exe), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         games.append(p)
         sessions.append(s)
         time.sleep(2)
@@ -196,15 +218,15 @@ def main():
                 break
             if stage == "boot" and all(x == "ready" for x in st):
                 for i in (0, 1):
-                    line = (f"start game=sc5 mode={a.mode} side={i + 1} local_port={7001 + i} "
-                            f"remote=127.0.0.1:{7002 - i} delay={a.delay} seed=12345 p1={a.p1} p2={a.p2} "
+                    line = (f"start game=sc5 mode={a.mode} side={i + 1} local_port={a.port_base + i} "
+                            f"remote=127.0.0.1:{a.port_base + 1 - i} delay={a.delay} seed={a.seed} p1={a.p1} p2={a.p2} "
                             f"rounds={a.rounds} ranked=0 match={match}")
                     if relay:
                         line += f" feed=127.0.0.1:{relay.players}"
                     write_atomic(os.path.join(sessions[i], "cmd.txt"), line)
                 if relay:
                     write_atomic(os.path.join(sessions[2], "cmd.txt"),
-                                 f"start game=sc5 mode={a.mode} watch=1 feed=127.0.0.1:{relay.watcher} seed=12345 "
+                                 f"start game=sc5 mode={a.mode} watch=1 feed=127.0.0.1:{relay.watcher} seed={a.seed} "
                                  f"p1={a.p1} p2={a.p2} rounds={a.rounds} ranked=0 match={match}")
                 print(f"{time.time() - t0:7.1f}s start sent", flush=True)
                 stage = "match"

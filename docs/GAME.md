@@ -96,6 +96,14 @@ main menu (`ready`) in 41 s.
   that its disc reads back whole (`sub_823260B8`); the SDK's stubs returned garbage. Implemented as a check that
   found nothing (SDK patch).
 - **Crash as a fight starts**: a battle object's state save reads its owner's field with no owner (guards.cpp).
+- **Black eyes**: every fighter's eyes were black in close-ups, with only the highlights showing. The game finishes
+  its costume textures' small mips on the CPU from images the GPU drew, and the GPU's resolves never reached the
+  CPU's memory. The SDK now reads those images back while the textures are made (SDK patch, SDK.md).
+- **Over-exposed scenes**: everything was brighter than on the console (paler skin, Mitsurugi's hair silver-white
+  instead of dark with grey streaks). The game's auto exposure reads the scene's brightness, which the GPU shrinks
+  to one small tile every frame, on the CPU (`sub_8233E140`), and that resolve never reached the CPU's memory either.
+  The SDK now reads small resolves made every frame back a frame late, without waiting for the GPU (SDK patch,
+  SDK.md). Only drawing reads the exposure: nothing the netplay compares depends on it.
 
 ## Unlocks and downloadable content
 
@@ -249,7 +257,9 @@ identical but for one frame stamp. What differs between runs, and why:
 - **Frame counters**: the game keeps several (`0x82771B40`, `+4`, `+8`, `0x8280DE94`, `0x8281929C`, ...) that start
   during boot, so each runs ahead of the main loop's frames by however many frames the boot took (95 to 135 here).
   A battle object in physical memory (its serializer `sub_82469AA0`, the field at +0x1D6) stamps one into the
-  snapshots. The fight does not show it; comparing snapshots across PCs must align or leave it out.
+  snapshots. The fight does not show it; comparing snapshots across PCs must align or leave it out. Some count frames
+  shown, not frames run: `0x82771B44` (the present adds one when the GPU took the frame; the battle reads it, below,
+  "The barrier") and the GPU's own `0x8280DE94`, `0x8281929C`, `0x8281991C` (below, "Rollback").
 - **The heap's layout**: what loads on other threads allocates in another order, so the players' raw objects
   (0x82937070, 0x82994BA0) differ in pointers (a 512 KB shift in one run) and in a few floats of secondary
   animation. The game's snapshots write pointers as block and offset, and show none of it.
@@ -263,8 +273,11 @@ A log file named on the command line is added to, not replaced: give each test r
 
 A frame of a fight is saved at its top with the game's own snapshot (sub_82159DF0, about 92 KB) and, with
 `SC5_BATTLE_RAW=1`, the memory the snapshot leaves out, copied raw (`kRaw` in battle.cpp, about 800 KB). Put back,
-the frames since are run again with the same inputs (frame::RunAgain: no drawing, no present). What had to be added
-to the game's snapshot, each found with the diagnostics below:
+the frames since are run again with the same inputs (frame::RunAgain: no drawing, no present). (The frame's own
+drawing is left out; phase 0x400 still runs when sub_8249E110 calls it: a task's request of the drawing,
+sub_8249EB48, waits there in a loop of phase 0x400 and a short sleep until the drawing has taken it, and left out it
+was never taken: Elysium against Edge Master with 40 ms each way waited for good at fight frame 160, 2026-11-18.)
+What had to be added to the game's snapshot, each found with the diagnostics below:
 
 - **The input pipeline.** sub_8216E2F8 puts each player's input into a delay ring of 61 slots, `delay` slots ahead
   (0x828FD130: per player a write count, the slots, a flag; the delay per player at 0x8275C15C, 2 offline): a frame
@@ -278,8 +291,55 @@ to the game's snapshot, each found with the diagnostics below:
   +100) and a Mersenne Twister (`[0x82773FB0]`, 4992 bytes and its index). All are seeded by sub_824A35A8. The
   battle's effects, the stage and the AI draw from them too, dozens of times a frame.
 - **The fighters' AI** (sub_822DC390): it runs every frame for both players, human or not (each has a virtual pad
-  at 0x82A18518 + 152), with its state at 0x82A15980-0x82A19140.
+  at 0x82A18518 + 152), with its state at 0x82A15980-0x82A190E0.
 - The players' objects whole (0x82937070 and 0x82994BA0), the battle's state machine, a few frame counters.
+- **The KO replay's manager** (sub_8211A8A8, once a frame from the battle's task: a heap object, `[task + 128] + 4`,
+  0x41780004 so far). While a round is fought it saves the battle into the next of five streams (0x2800C bytes each
+  from +0x2CC; a sixth holds the present during a replay) whenever its own frame counter (+0xF0318) is 84 past the
+  last save's stamp (five stamps at +0x2B4, the next stream at +0x2B0); after a KO it plays one back. Nothing put
+  its fields back, so every frame run again counted twice and its saves came earlier in a game that had rolled back
+  more: two games saved at fight frames 2213 and 2218 and replayed the KO from there, and the check during the
+  replay parted them (render scale 1 against 2, no lag; in a launcher test, one game replayed a KO for 3 frames and
+  the other not). Its 0x2CC bytes before the streams, each stream's 12-byte header and the 0x7C after them are kept
+  with each frame (DynamicRegions); a frame run again where the first run saved saves the same stream again.
+- **The battle's cameras.** Which side of the screen each player is on turns the stick's left and right into back
+  and forward: each player's +0xC4 (sub_8216E2F8: 1 for the player sub_8216C378 names), from the sign of a cross
+  product of the two fighters' positions and the camera's (sub_8216B338: the view at +16 of the cameras' director,
+  its x and z through vtable slots +80 and +88), or player 1 while the camera with the greatest blend weight
+  (sub_824A4660: eight at +608, the weight at +156) is in its modes 1 and 3. The camera follows the fighters
+  smoothly, and nothing put it back: a frame run again moved it on once more, so after their rollbacks two games'
+  cameras stood a little apart, and as the fighters crossed over the games turned them on different frames and read
+  the same stick as other directions (Ezio against Viola with 40 ms each way: P1's inputs at +0x240C apart from frame
+  3480; a KO's replay is another matter, below, "A KO's replay is not fought"). The
+  director is the battle scene's task from +224 (`[0x82927BB8]`, 0x540 bytes to the task's end: positions, targets,
+  blends; pointers only to itself, its cameras and what the fight loaded), its cameras two arrays in physical memory,
+  8 of 0x320 bytes (`[+0x2B4]`) and 9 of 0x280 (`[+0x384]`), whose pointers are to static objects (a camera's target,
+  a player's object): kept with each frame.
+- **The battle's save slots.** A move's script can save the whole battle and a few frames on go back to it (the
+  move-script interpreter sub_82129B10: command 9002 saves into one of four slots, sub_82479360; 9003 puts a slot
+  back, sub_82479488, keeping a few of the present's fields, each player's +468, +1588, +4188 and one of +1788's;
+  9004 empties them all). Each slot is a stream like the KO replay's, at 0x49CA0 + slot * 0x2800C in the buffer of the
+  battle's setup (`[0x82767D1C] + 140`); per slot a count at 0x8273C21C (-1 empty, 0 saved, one more each time it is
+  put back), a word at 0x82927BDC (0 saved, 1 put back), and the KO replay manager's copy of the counts at 0x828FD084.
+  Nothing put them back: a frame run again after its first run had gone back to a slot found the count and word as
+  that run had left them, and the move's script went on without going back. With the same inputs one game went back
+  7 frames (saved at 6015, put back at 6022) and the other, which had run 6022 on a guess first, did not (Xiba against
+  Leixia with 40 ms each way: P1's counters 7 apart from frame 6023, the check at 6030 apart). The counts and words
+  are kept with each frame, and so is each slot that holds a save.
+
+What must not be put back:
+
+- **The game's allocator.** The AI's region once ran to 0x82A19140, over the first 0x60 bytes of the game's main
+  allocator (a TLSF pool of 3 MB: its control block at 0x82A190E0, sub_8237B250 / sub_8237B268 / sub_8237B278
+  allocate, free and resize in it): the free lists of small blocks went back to the frame kept, a block taken since
+  was handed out again, and a later allocation inside a restore wrote through a "next free" read from a block in use
+  (Aeon Calcos against Siegfried with 40 ms each way: "write of guest 0x3ED82A23" from sub_8237AB38).
+- **The GPU's frame counters**, though they too start at boot: 0x8281929C (the low word of the frame sync's count of
+  frames presented, 0x82819200 + 152, sub_82542D50), 0x8280DE94 (sub_82550DF8) and 0x8281991C (sub_82543CB0). Only
+  the present moves them (sub_824945F8, never in a frame run again), so each rollback set them back by its frames,
+  and after a few hundred frames run again the game's wait for its GPU (sub_82542D50, at a KO's replay or a match's
+  loading) waited for a frame it had already presented: the main thread blocked there for good. Nothing in the fight
+  reads them; nor does the barrier agree them any more, nor the battle setup (versus.cpp).
 
 - **Random numbers apart for what rollback cannot put back** (rng.cpp). The effects, the stage's wind and two of the
   step's tasks keep their state in heap objects that come and go, so a frame run again can draw a different number of
@@ -289,7 +349,27 @@ to the game's snapshot, each found with the diagnostics below:
   sub_8219D508, sub_824A5ED0) now draw from a second set of the four generators' states, swapped in around them and
   never put back; the fight's set is what rollback keeps. Since then every call site the fight draws from draws the
   same number of times in a frame and its rerun. (This changes which numbers the fight gets compared with the
-  original game, the same way on every PC; `SC5_RNG_SHARED=1` turns it off.)
+  original game, the same way on every PC; `SC5_RNG_SHARED=1` turns it off.) Two more, 2026-11-18 (battle.cpp,
+  found by counting each call site's draws in both games' last run of every frame, Aeon Calcos against Siegfried with
+  40 ms each way, which parted at frame 240 on a Park-Miller draw for P1's +0x5DAF0): the forces' own updates (slot 1
+  of each force's class: sub_82191358 for the wind and the force by the floor, sub_82191BE0 and sub_82193200, the
+  gusts' sub_821929F0) add a random wobble to their vectors (sub_82190EB8, TT800: three draws a force a frame, 27 in
+  one game and 32 to 37 in the other, as each kept its own forces after its rollbacks); and an emitter of effects
+  (sub_82373660: positions and directions at random for an effect id from the table at 0x82763440) fires when a
+  cooldown in its own object allows (sub_82376F88): 17 Park-Miller draws at frame 219 in one game, none in the other.
+  And the drawing (phases 0x200 and 0x400) and the present (frame.cpp): a frame's first run draws and its rerun does
+  not, so drawing from the fight's generators left them wherever the frame's last run had: a game's TT800 and
+  Mersenne Twister went by which of its frames had been run again (Elysium against Edge Master with 40 ms each way:
+  TT800 a draw apart from frame 1189, the Twister two from 434). Nothing in a round drew from them where it showed,
+  but the picks between rounds did (below, "The fight's random numbers seeded again").
+- **The pose in frames run again** (frame.cpp). Left out of them since the 0.1.1 work (two thirds of a frame run
+  again), it reached the fight after all: each frame builds the skeleton (sub_822C3AC0 from the fighter's task
+  sub_82123140, then sub_822C7988 from sub_8213B3D8) from the pose before it, which the pose's last stage changes
+  (a bone scaled, sub_822B7918), and sub_82145EB8 takes an angle of bone 2 into the fight (+0x3070; its sectors at
+  +0x3066 / +0x3068 are read by the move scripts' interpreter, sub_8215CD68). After a frame run again without its
+  pose, that bone came out a bit or two apart, by how far each game had rolled back (Aeon Calcos against Siegfried,
+  40 ms each way: P1+0x3078 at frame 210; with Siegfried against Siegfried nothing showed). It is worked out again;
+  `SC5_RERUN_POSE=0` leaves it out (tests).
 
 The check (`SC5_SYNCTEST=<n>`, every fight frame put back n frames and run again; tools/synctest.sh runs a scripted
 fight with and without it and prints both timelines) goes on from the frame as it ran again and compares the raw
@@ -313,6 +393,13 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
   - About 200 bytes a frame of the players' objects outside the snapshot (raw memory: the same secondary animation).
 - Cost (release build): a 1-frame rollback about 3 ms, a 4-frame one about 8 ms, a save 0.2 ms; the game kept 60
   frames a second with a 4-frame rollback every frame.
+- 2026-11-18, n = 1: with two human players (`SC5_TEST_P2_HUMAN=1`, 240 s) both runs again keep every battle event on
+  the same frame from the fight's start (the time-out at +3599, round 2's call at +3842), and no check finds the fight
+  apart. With the script's own setup (player 2 the CPU's) they do not: the run with every frame run again fights the
+  round otherwise (its KO at +1371 against +1559, the same in every run of each), though there too no frame's rerun
+  differs from its first run in the fight. Not the drawing left out (`SC5_REPLAY_DRAW=1`: the same +1371) nor the
+  vertical blanks' counter put back; the CPU's AI takes in something else, not found yet (no match online has a CPU
+  player).
 
 ## Netplay (net/netplay.cpp)
 
@@ -326,11 +413,22 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
 - **The barrier** is the first frame of round 1's call (the fight loaded and its intro played: the intro goes as the
   characters' voice lines play, and from the second match on it ran on different frames on two PCs). The games meet
   there whatever time their menus, loading and intro took, and agree: player 1's seed (the game's seeding, sub_824A35A8, run again with it), player 1's
-  counters that start at boot (0x82771B40-0x82771B5F, 0x8280DE94, 0x8281929C, 0x8281991C, 0x828E8790, 0x835B3EB4),
-  the larger input delay, and the game's own input delay (0x8275C15C, 2 offline) set to 0: the netplay's stands in.
+  counters that start at boot (0x82771B40-0x82771B5F, 0x828E8790, 0x835B3EB4; not the GPU's frame counters, above,
+  "Rollback"), the larger input delay, and the game's own input delay (0x8275C15C, 2 offline) set to 0: the netplay's
+  stands in. One of the counters, 0x82771B44, counts frames shown (the present adds one when the GPU took the frame),
+  and the battle throttles with it (sub_82155B80, sub_82114200, sub_821CA8F0: "4 or more since the stamp", the stamp
+  kept in its objects); a frame run again shows nothing and a busy GPU skips a count, so in a match it is the match's
+  frame from its agreed value, set in every frame run (netplay.cpp `SetFrameInputs`).
   The battle's second player is the second pad's (the VS menus would leave it to the CPU: versus.cpp's hook of
-  sub_8243D430 while a match is on). The barrier also agrees the battle's state machine (0x82767D08, 0x200 bytes) and
-  makes the fight's state alike: both games save the battle and hash each block of the fight in it, player 2's game
+  sub_8243D430 while a match is on). The barrier also agrees the battle's state machine (0x82767D08, 0x200 bytes) but
+  for its word at +0x14, the address of a heap object (the menus' object the fight was set up from): player 1's left
+  player 2's game pointing at whatever its own heap held there, and with the two heaps apart (two PCs) player 2's KO
+  replays stopped playing, which parted the games at every KO (player 2's log names the agreed words it took that
+  differed). Nor +0x10, which goes with it: that object counts as the fight's setup only while its +48 is the state
+  machine's +0x10 (sub_82479360 and the KO replay's start test it); in a rematch the two games had numbered it apart
+  (0x569 and 0x54B), player 2's game took player 1's and played no KO replay, and reached the result 397 frames before
+  the other (Ezio against Viola with 40 ms each way, render scale 2 on game 2, 2026-11-18). Nor +0x138 and +0x13C
+  (below, "Checks"). It also makes the fight's state alike: both games save the battle and hash each block of the fight in it, player 2's game
   sends its hashes (SUMS), player 1's game its bytes of every block that differs (FIX), written where they came from
   before the first frame (FIXOK). A first match from a fresh start and a rematch have had nothing to send so far; a
   match after a park had 4 blocks (21 KB): what the intro and a game's earlier matches left otherwise.
@@ -338,25 +436,105 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
   keeps 1 at 0x82767D38, else 2. That follows the audio's timing, and after a first match the two games' round calls
   ran apart (the second match desynced at its first check); versus.cpp makes it 2 always (the sound is stopped all
   the same). VS Battle's own Rematch keeps the fight loaded and goes from the result to "between rounds", whose state
-  counts on from the result screens; a rematch goes through Character Select instead (the same picks), loads, and meets
-  at the intro.
+  counts on from the result screens; a rematch goes through Character Select instead, loads, and meets at the intro:
+  the same picks (and with `stage=keep` the same stage: the autopilot's stage select goes as many to the right of
+  Random as for the last match), or per side the one the launcher names, or `-` for that side's player to pick again.
+  The launcher sends it for a queue series' next match while both games wait at their result screens (the netplay
+  keeps the two games in touch there with its hellos: 20 s without a word from the other ends it).
 - **Frames**: while a round is fought (battle state "fighting") they run ahead on a guess (the other's last input),
   8 frames at most, and a wrong guess puts the battle back and runs the frames since again within the frame. Outside
-  it (the round's call, a KO, between rounds) both games run on neutral inputs without waiting (lockstep
-  there made the intro wait at almost every frame with a round trip over the delay). START and BACK never leave a PC
-  (no pausing a match).
+  it (the round's call, a KO and its replay, between rounds) both games run on neutral inputs without waiting
+  (lockstep there made the intro wait at almost every frame with a round trip over the delay). START and BACK never
+  leave a PC (no pausing a match).
+- **A KO's replay is not fought** (netplay.cpp `RoundFought`, battle::InKoReplay: the replay's manager in its state
+  2, though the state machine says "fighting"), and nobody can cut it short online. Fought, with rollbacks in it,
+  the two games' replays came apart (2026-11-18): a player's press ends a replay early (its manager also waits on
+  camera slot 0's blend weight), and where the frame that ended it ran again after a rollback, the cameras came out
+  of it otherwise than from its first run (part of what they take in is worked out in the drawing, which a frame run
+  again leaves out: with `SC5_REPLAY_DRAW=1` they came out alike). The next round's cameras stood apart, and the round
+  went its own way after a crossing over (Cervantes against Yoshimitsu with 40 ms each way, from frame 5790); and in
+  a replay each player's +0xC4 (the side of the screen, sub_8216C378: player 1 while the camera with the greatest
+  weight is in its modes 1 and 3) differed in its one check (Aeon Calcos against Siegfried, frame 2730). At the
+  replay's end the game puts the present back.
+- **The fight's random numbers seeded again** (netplay.cpp `ReseedAtStateChange`) wherever the battle's state changes
+  outside a round's fighting (the KO, the KO's replay and its end, between rounds, the round's call, the round's first
+  frame fought), at the frame's top, from the match's seed and the frame, as the barrier seeds them (sub_824A35A8); a
+  spectator does the same. The two games reach each of these on the same frame with the same fight, while within a
+  round their generators come apart though the fight stays alike: some draws from the C library's rand, TT800 and the
+  Mersenne Twister come in a frame's first run and not in its rerun, or the other way round (who draws them is not
+  known yet), and some between rounds come in one game only; the check does not hash the generators. Between rounds
+  the game picks from them: Elysium's and Edge Master's style for the next round (each player's +0x1B8 and +0x17AC),
+  which the two games picked apart (0x23 and 0x34), loaded for 19 and 14 frames and started round 3 on frames 5 apart
+  (Elysium against Edge Master with 40 ms each way: TT800 a draw apart from frame 1189, the Twister two from 434,
+  2026-11-18).
 - **Keeping the two even**: a game ahead by more than 1.25 frames (both ways, averaged over 8) holds a frame back:
   one vertical blank left out (the SDK's `IGraphicsSystem::HoldVblanks`, added for this): the screen shows a frame
   once more and the game runs one fewer. A sleep in the frame did nothing: the game's main thread runs a frame or two
   ahead of its GPU (it waits on a fence, sub_82543CB0) and made the time up with the frames after.
 - **Checks**: every 30 frames of fighting both compare `battle::FightHash`: the snapshot's blocks of the fight, not the
-  players' poses, heap objects, the stack, nor 13 words in each player's object and one at 0x829F552C that the
-  snapshot carries as raw pointers into loaded data (found with `SC5_TEST_HEAP_SHIFT`, which moves one game's heap:
-  equal on one PC, different on two), nor the float at 0x829F59D4 that sub_82210320 takes from the stage while the
-  fight loads (-40.0 when the stage's data is not in yet: how far the loading had got; two games with -40.0 and -5.5
-  there stayed alike in all else). Test dumps: `SC5_NET_DUMP_AT=<frames>` with `SC5_NET_DUMP_DIR` writes the snapshot
-  and its blocks at those match frames (net<side>_m<match>at<frame>), which tools\py\cmpsnap.py compares block by
-  block.
+  players' poses, heap objects, the stack, nor 14 words in each player's object, two at 0x829F5528 and the state
+  machine's at 0x82767D1C and 0x82767E44 that the snapshot carries as raw pointers (found with `SC5_TEST_HEAP_SHIFT`,
+  which moves one game's heap: equal on one PC, different on two; below, "Two PCs"), nor the count at 0x82767E40 that
+  comes with the second (sub_8231F8D8 stores the pair between rounds, which sub_82148B90 works out from a player's
+  pose: 1142 and 1126 in two games alike in all else, Kilik against Ezio with 40 ms each way; neither is agreed at the
+  barrier), nor the float at 0x829F59D4 that sub_82210320 takes from the stage while the fight loads (-40.0 when the
+  stage's data is not in yet: how far the loading had got; two games with -40.0 and -5.5 there stayed alike in all
+  else), nor the two words at 0x829F55D0 that sub_8220F370 sets between rounds to a flag and a number that differs
+  from game to game and run to run in the same way (Elysium against Edge Master as their next styles loaded: 1468
+  against 1477; the fights alike in all else and the next round on the same frame). Test dumps: `SC5_NET_DUMP_AT=<frames>` with `SC5_NET_DUMP_DIR` writes the snapshot
+  and its blocks at the top of those match frames as the two games end up with them (net<side>_m<match>at<frame>,
+  and the raw memory kept beside it as `.raw.bin` / `.raw.blocks`): each run of such a frame keeps its top, and it is
+  written once that frame's input and every one before it are known, so a wrong guess shows in neither game's files.
+  tools\py\cmpsnap.py compares the snapshots block by block.
+- **Two PCs** (2026-11-17, the first matches between two PCs, on one home network, 3 ms): two of three desynced, each
+  a few frames after a throw landed (its LT shortcut), with no rollback at all. A throw stores the address of a heap
+  object at +0x5BE90 of the thrower's object, which the check counted: each PC's heap lies elsewhere, so every landed
+  throw "parted" two games that went on alike. Found by playing the match's own inputs again on one PC, two games
+  through the link (the net log as fight scripts: testinput's `LX=`/`LY=`/`RX=`/`RY=`/`LT=`/`RT=` tokens carry the
+  analog values), with game 2's heap moved (`linktest.py --heap-shift2`): the desync came at the same frame with the
+  same hash as on the player's PC, and that word alone differed, by the shift. Then every character in 14 pairs,
+  both mashing (walks, throws, quarter circles, Critical Edge motions, guards) for 7,000 frames with game 2's heap
+  2 MB higher, each check's snapshot dumped (`SC5_NET_DUMP_DIR`, `SC5_NET_DESYNC_CONTINUE=1`) and compared: that found
+  0x829F5528 (Ezio's) and the state machine's +0x14 (the KO replays, above); with all three left out the matches stay
+  alike to their end (`tools/heapsweep.sh`; `tools/py/netlog2script.py` turns a match's net log into fight scripts,
+  `mash.py` makes varied ones, `snapsweep.py` compares the dumps). With 40 ms each way (rollbacks every few frames,
+  2026-11-18) the same sweep found what rollback did not keep (above, "Rollback"): the pose left out of frames run
+  again (Aeon Calcos against Siegfried, P1+0x3078 at frame 210), visual systems drawing from the fight's random
+  numbers (the same pair at frame 240), the KO replay's frame counter, the cameras (Ezio against Viola at 3480), a
+  KO's replay fought with rollbacks in it (Cervantes against Yoshimitsu, 5790; above, "A KO's replay is not fought"),
+  and two things put back that must not be: the allocator's lists (a crash inside a restore) and the GPU's frame
+  counters (a freeze at a KO's replay). The words that differed for one check at 0 ms in two pairs were stamps of
+  the count of frames shown, which a busy GPU and frames run again moved apart (above, "The barrier": the battle's
+  throttles at +0x22E9C and on, `sub_82155B80` keeps one at its +156); the floats at +0x22D60 and +0x231B8 and player
+  2's +0x23B20 and +0x5CC08 are fight state, timers the fighters' tasks write (sub_8236E610 / sub_823704D0,
+  sub_82143808 / sub_82143A18), and stay in the check. Then Xiba against Leixia parted at frame 6030 of round 3: the
+  per-frame dumps (`SC5_NET_DUMP_AT`, the frames' final runs) were alike to the top of 6022 and 7 frames apart after
+  it, one game having gone back to a move's save slot and the other not (above, "The battle's save slots"). The
+  sweep of all 14 pairs then found three more: Elysium against Edge Master waited for good at fight frame 160 (a
+  task's request of the drawing in a frame run again, above, "Rollback") and then picked the two mimics' next styles
+  apart (above, "The fight's random numbers seeded again"), and Kilik against Ezio's count at the state machine's
+  +0x138 (above, "Checks"). With all that (2026-11-18, three pairs at a time): all 14 pairs kept in step to the same
+  result with 40 ms each way (172 to 385 checks each) and with none (167 to 394), no word apart.
+  Render scale 1 against 2 with 40 ms each way, two rounds and a rematch (tools\linktest.py `--env2
+  SC5_RENDER_SCALE=2 --rematch`): both games played every KO's replay and started each round on the same frame, in
+  both matches. Graphics settings apart (`--render_target_path_d3d12=rov` against RTV, `--resolution_scale=2` against
+  1, each side, and the two together; Mitsurugi against a standing Hilde, one and three rounds, none and 40 ms each
+  way): 13 matches in step to the same result, where on the build of 2026-11-17 4 matches of 16 with settings apart had
+  parted at frame 1350.
+- **Rollback over a throw** (battle.cpp `Restore`): the game's own restore makes a throw's heap object again and
+  sets its owner's +0x5BE90 to it; the raw copy of the players' objects put back after it held the address from when
+  the frame was kept, freed since, and a call through it crashed the game (Aeon Calcos's back throw: "invalid call ...
+  0x00000032"). Where the game's restore set that word, its value stays.
+- **The way into a fight** (autopilot.cpp): the VS screen (both fighters on their cards while the fight loads) takes
+  START as on the console once the fight has loaded (A, B, X, Y do nothing there), and so do the stage's fly-over and
+  the fighters' intros: the autopilot presses it on both pads every third of a second while they are up (the VS screen
+  359 frames to 101, the intros 484 to about 40: from the start line to `in_match` 31-38 s before, 31 s now). In the
+  one launcher test with the intros skipped (2026-11-17), the two games took a KO's replay differently (one went to a
+  3-frame replay, the other straight between rounds) and the rematch after it parted: not the skip, nor the display
+  settings as such (render scale 2 there), but the KO replay's frame counter, which rollback did not put back (above,
+  "Rollback"): the game with more frames run again saved its replay points earlier. (A 1- or 2-frame "replay" after
+  a KO is the game's own: a save just before the KO, the same with no START at all.) Render scale 1 against 2 since:
+  the same replays, in sync to the result (tools\linktest.py `--env2 SC5_RENDER_SCALE=2`).
 - **Sound** (sound.cpp): CRI AtomEx 1.18. The game gives a player its cue (sub_8256C4E8, criAtomExPlayer_SetCueId:
   r3 the player, r4 the cue sheet, r5 the cue) and starts it (sub_8256CDF8, criAtomExPlayer_Start; the error text
   "E2010021604" found it; the playback id back). It stops one sound with sub_8256C348 (criAtomExPlayback_Stop, the
@@ -383,13 +561,15 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
   frame over 20 ms. Both games played round 1 to the same KO frame and went on into round 2. Further apart
   (tools\linktest.py `--lag`, 15 ms of jitter, 2% loss): 100 ms each way at delay 2 played smoothly; 150 ms each way
   at delay 2 rolled back the full 8 frames (about 16 ms each) and had to wait and drop frames now and then, so the
-  launcher's own delay (the one-way trip in frames less one, 6 at most) is what kept such a match smooth. With the pose
-  left out of frames run again (below): 150 ms each way at delay 2 with a spectator, 8-frame rollbacks of 8.4 ms on
-  average and 11.5 at worst (13.2 and 18.2 before), every frame of the fight on time at 60 a second, the three games in
-  sync to the same result.
+  launcher's own delay (the one-way trip in frames less one, 6 at most) is what kept such a match smooth. While the
+  pose was left out of frames run again (0.1.1; it is worked out again since, below): 150 ms each way at delay 2 with a
+  spectator, 8-frame rollbacks of 8.4 ms on average and 11.5 at worst (13.2 and 18.2 with it), every frame of the fight
+  on time at 60 a second, the three games in sync to the same result.
 - **What a rollback costs** (release build, the log every 600 frames while rolling): putting the battle back 0.46 ms,
-  keeping a frame 0.12-0.13 ms, running a frame again 0.64 ms (1.43-1.75 ms before the pose was left out of it, below).
-  Running the frames again is most of it: an 8-frame rollback is 6-8 ms on top of the frame (13-16 before). A frame is
+  keeping a frame 0.12-0.13 ms, running a frame again 1.43-1.75 ms with its pose (0.64 ms while the pose was left out
+  of it, below). Running the frames again is most of it: an 8-frame rollback is 13-16 ms on top of the frame. (Six
+  games at once on one PC, 40 ms each way: 2.0 ms a frame run again with the pose, 1.15 without, 59.2-59.4 frames a
+  second.) The launcher's delay (the one-way trip in frames less one) keeps most rollbacks to 1-3 frames. A frame is
   kept only where a rollback could go back to it: the other player's input for it was a guess, or it is a check frame
   (the check hashes the kept frame). Where both inputs were known the keep is left out, at the frame's top and in a
   rerun (`SC5_NET_KEEP_ALL=1` keeps every frame, for tests). This mostly saves time at short distances: far apart,
@@ -407,9 +587,10 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
   byte the same but for the poses and a second buffer the pose fills for the drawing (each player's +0x1B310, three of
   0x800 bytes taken in turn; now counted as pose, not in the checks' hash), and the KO came on the same frame: a frame
   run again 0.64 ms, a 4-frame rollback 3.1 ms on average (7.4 before). The next tasks (sub_82123140, a fighter's,
-  0.15 ms; sub_8213B3D8, 0.12 ms) change the fight when left out: they stay. What a frame shows after a rollback has
-  its pose worked out afresh; the cloth and hair go on from where the rollback's first frame had them (a small jump
-  in their swing at most). `SC5_RERUN_POSE=1` works the pose out in frames run again (tests).
+  0.15 ms; sub_8213B3D8, 0.12 ms) change the fight when left out: they stay. That held for Siegfried against
+  Siegfried; with Aeon Calcos the next frame's skeleton took the missing pose into the fight (above, "Rollback": bone
+  2's angle, P1+0x3078), so the pose is worked out in frames run again once more (2026-11-18). `SC5_RERUN_POSE=0`
+  leaves it out (tests: what it costs).
 - **Compared with GGPO**: the same core (a guess that repeats the last input, 8 frames at most, the time sync that
   holds the side ahead back, inputs sent with a window of earlier ones, spectators fed from a player's game), plus
   the fight checks every 30 frames and the sound reconciled after a rollback. GekkoNet (a C++ library in GGPO's line,
@@ -509,7 +690,8 @@ then 0x160). The rounds each side won: +0x75C in each player's object (+0x784 th
 gives `winner=0`, which the server does not take yet.
 
 **Tests** (tools\linktest.py: two games on this PC through cmd.txt and status.txt, each with its own session folder
-and an empty save, the scripted fight), 2026-11-17: boot to `ready` in 40 s; start to `in_match` in 31-38 s; picks
+and an empty save, the scripted fight), 2026-11-17: boot to `ready` in 40 s; start to `in_match` in 31-38 s (31 s
+since START skips the intros too, 2026-11-18); picks
 by roster id and on the select screen (`-`, Xiba in costume 2 and Voldo; a Pyrrha mirror: costumes 1 and 2) in sync
 to the result, also with 60 ms each way (rollbacks of at most 2 frames, 4.5 ms on average, 60 frames a second, none
 over 20 ms); Rematch in sync; park from the result back to `ready` in 20 s, from a fight in 7 s; a second match after

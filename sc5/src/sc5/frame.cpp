@@ -3,6 +3,7 @@
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/rerun_profile.h"
+#include "sc5/rng.h"
 
 #include <algorithm>
 #include <atomic>
@@ -88,6 +89,13 @@ void SetCount(uint64_t n) { g_frames.store(n, std::memory_order_relaxed); }
 
 void ProfileRerun(double whole_ms);  // below, SC5_TEST_RERUN_PROFILE
 
+// The game's count of frames shown (0x82771B44): the present adds one when the GPU took the frame, and the battle
+// throttles by it (sub_82155B80 and others: "4 or more since the stamp"). A frame run again presents nothing, so after
+// a rollback put the count back it stood still, and the throttles did otherwise than in the frames' first runs (the
+// synctest's KO 188 frames earlier than without rollback, 2026-11-18): a frame run again counts as shown. (In a match
+// the netplay sets it from the match's frame anyway, net/netplay.cpp.)
+constexpr uint32_t kFramesShown = 0x82771B44;
+
 void RunAgain(PPCContext& ctx, uint8_t* base) {
   const auto t0 = std::chrono::steady_clock::now();
   g_replaying.store(true, std::memory_order_relaxed);
@@ -95,6 +103,10 @@ void RunAgain(PPCContext& ctx, uint8_t* base) {
   ctx.lr = kLoopTop;
   __imp__sub_82163C00(ctx, base);
   ctx.lr = lr;
+  if (auto* ks = REX_KERNEL_STATE()) {
+    uint32_t* shown = ks->memory()->TranslateVirtual<uint32_t*>(kFramesShown);
+    *shown = __builtin_bswap32(__builtin_bswap32(*shown) + 1);
+  }
   const uint64_t n = g_frames.fetch_add(1, std::memory_order_relaxed) + 1;
   sc5::game::OnFrameEnd(n);
   g_replaying.store(false, std::memory_order_relaxed);
@@ -151,32 +163,50 @@ bool ReplayDraws() {
   return draws;
 }
 }  // namespace
+// The drawing and the present draw their random numbers from the visual states (sc5/rng.h), as the other visual
+// systems do: a frame's first run draws and its rerun does not, so any number they took from the fight's generators
+// would leave those wherever the frame's last run had (two games' TT800 and Mersenne Twister came apart under
+// rollback, Elysium against Edge Master with 40 ms each way, 2026-11-18; net/netplay.cpp ReseedAtStateChange).
 REX_HOOK_RAW(sub_8249B8A8) {
   if (sc5::frame::Replaying() && !ReplayDraws()) return;
+  sc5::rng::EnterVisual(ctx, base);
   __imp__sub_8249B8A8(ctx, base);
+  sc5::rng::LeaveVisual();
 }
+// ... but phase 0x400 runs when sub_8249E110 calls it: a request a task made of the drawing (sub_8249EB48: set up,
+// then waited for, then its answer read) waits there in a loop of phase 0x400 and a short sleep until the drawing has
+// taken it. Left out in a frame run again, the request was never taken and the game waited for good (Elysium against
+// Edge Master with 40 ms each way, fight frame 160 in a frame run again: sub_82353C58's task through sub_82355988 and
+// sub_8249EBF0, the main thread asleep in sub_8267AC68 from then on, 2026-11-18).
+constexpr uint32_t kDrawRequestWait = 0x8249E12C;  // where sub_8249E110's call of phase 0x400 returns
 REX_HOOK_RAW(sub_8249E548) {
-  if (sc5::frame::Replaying() && !ReplayDraws()) return;
+  if (sc5::frame::Replaying() && !ReplayDraws() && uint32_t(ctx.lr) != kDrawRequestWait) return;
+  sc5::rng::EnterVisual(ctx, base);
   __imp__sub_8249E548(ctx, base);
+  sc5::rng::LeaveVisual();
 }
 REX_HOOK_RAW(sub_824945F8) {
   if (sc5::frame::Replaying()) return;
+  sc5::rng::EnterVisual(ctx, base);
   __imp__sub_824945F8(ctx, base);
+  sc5::rng::LeaveVisual();
 }
 
-// Nor does it work out the models' pose (sub_822BCF88: a model's bones, which the main thread hands worker threads as
-// some 54 jobs a fighter, then the cloth and hair and what hangs on the bones, such as the weapons; its callers do not
-// read what it returns). That was two thirds of a frame run again: 1.1 of 1.75 ms (SC5_TEST_RERUN_PROFILE). Nothing
-// in the fight reads it: with every fight frame put back 4 frames and run again without it (SC5_SYNCTEST=4), the
-// fight's state stayed byte for byte the same but for the poses and the buffers the pose fills for the drawing
-// (battle.cpp, KindOf), and the KO came on the same frame. The frame shown after a rollback works its pose out afresh;
-// the cloth and hair go on from where the rollback's first frame had them. SC5_RERUN_POSE=1 works it out (tests).
+// It does work out the models' pose (sub_822BCF88: a model's bones, which the main thread hands worker threads as some
+// 54 jobs a fighter, then the cloth and hair and what hangs on the bones), though that is two thirds of a frame run
+// again (1.1 of 1.75 ms, SC5_TEST_RERUN_PROFILE). Left out (2026-11-17), the fight stayed the same for Siegfried
+// against Siegfried, but the next frame builds its skeleton from the pose before it (three buffers taken in turn,
+// each player's +0x3190: the pose's last stage scales some bones, sub_822B7918), and sub_82145EB8 takes an angle of
+// bone 2 into the fight (+0x3070, its sectors at +0x3066 / +0x3068, which the move scripts read: sub_8215CD68): after
+// a frame run again without its pose, that bone came out a bit or two apart, by how far each game had rolled back
+// (Aeon Calcos against Siegfried with 40 ms each way parted at frame 210, P1+0x3078). SC5_RERUN_POSE=0 leaves it out
+// (tests: what it costs).
 REX_EXTERN(__imp__sub_822BCF88);
 namespace {
 bool RerunPose() {
   static const bool on = [] {
     const char* v = std::getenv("SC5_RERUN_POSE");
-    return v && v[0] == '1';
+    return !(v && v[0] == '0');
   }();
   return on;
 }
