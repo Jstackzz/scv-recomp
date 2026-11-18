@@ -179,6 +179,18 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
     Updater::cleanUp();  // what an update set aside, once free; the old launcher may still be closing:
     if (!opts_.updatedFrom.isEmpty())
         for (int s : {2, 5, 10, 20}) QTimer::singleShot(s * 1000, this, [] { Updater::cleanUp(); });
+    // an update that changed the game (sc5.exe, or the game's code): it is built again on Build game before anything
+    // starts it (as MK9 Online's launcher)
+    QTimer::singleShot(1500, this, [this] {
+        if (!paths::isPackage() || !GameProcess::needsRebuild(gameId_)) return;
+        applog::write(QStringLiteral("build %1: built from another release than this one's: building again").arg(gameId_));
+        showNotice(tr("This update changed the game itself: it is being put together again on Build game (once, a "
+                      "few minutes at most)."),
+                   false);
+        for (int i = 0; i < pages_.size(); i++)
+            if (pages_[i] == build_) selectPage(i);
+        build_->rebuild();
+    });
     connect(server_, &ServerClient::message, this, &MainWindow::onServerMessage);
     connect(server_, &ServerClient::connectionError, this, [this](const QString& text) {
         lastError_ = text;

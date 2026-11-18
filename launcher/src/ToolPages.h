@@ -31,6 +31,7 @@ public:
     ~BuildPage() override;
     void setGame(const QString& gameId) override;
     void extractImage(const QString& path);  // fill in the image and start, as if CHECK AND BUILD was clicked
+    void rebuild();  // compile the game's code again when idle, as *Compile the game's code* (after an update)
     bool busy() const { return step_ != Step::Idle; }  // checking, extracting or compiling
 
 signals:

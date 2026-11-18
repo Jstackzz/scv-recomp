@@ -186,9 +186,10 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
    on the leaderboard. **Online Practice** (`sparring`): two friends by the code, no timer, health refills, nobody is
    knocked out, BACK goes back to character select, nothing recorded. *Leave* closes the game the lobby started.
-4. **Single player**: PLAY starts the game plainly (its own menus); PRACTICE goes to training's select screen with
-   every character unlocked (`SC5_TRAINING=1`); VERSUS to the two-player select screen with everything unlocked
-   (`SC5_VERSUS=1`), player 2 on the controller chosen below. *Close the game* closes it. A queue search can run
+4. **Single player**: everything on the disc is unlocked in all three (the game's `unlocks.cpp`, every mode; paid
+   DLC from the player's own packages). PLAY starts the game plainly (its own menus); PRACTICE goes to training's
+   select screen (`SC5_TRAINING=1`); VERSUS to the two-player select screen (`SC5_VERSUS=1`), player 2 on the
+   controller chosen below. *Close the game* closes it. A queue search can run
    alongside (standby): the match found freezes single player and thaws it afterwards. In a source build the
    **Local test** box starts two instances on this PC (UDP 7001/7002) with matching start lines, no server needed.
 5. **Leaderboard**: top 100 by Elo, or by Respect Points (on a server with King of the Hill), with each rank's badge.
@@ -250,8 +251,10 @@ and `exit_code`, from the last lines of its log.
 page); UPDATE NOW downloads the zip into `update\` beside the launcher, checks its size and SHA-256 against the
 server's (whose certificate is pinned; the download host is not trusted), unpacks it, checks its `VERSION.txt`
 (`SC5-Online <version>, ...`) and swaps the release's files in once nothing uses the game (each old file renamed to
-`<name>.sc5-old` and deleted at the next start); then the new launcher starts with `--updated <old version>`. A
-source build only links to the release page.
+`<name>.sc5-old` and deleted at the next start); then the new launcher starts with `--updated <old version>`, and
+when the release changed the game (`games\sc5\built.txt`, which `build-game.cmd` copies from `project\VERSION`,
+names another release) it builds the game again on Build game before anything starts it (`GameProcess::needsRebuild`,
+as MK9 Online's launcher). A source build only links to the release page.
 
 ### Without the game
 
@@ -317,10 +320,8 @@ files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them
 - No match has been played between two PCs over the internet yet: the tests so far ran two or three games on one PC
   with lag added (up to 150 ms each way), and the server answers from outside.
 - Build game compiles the game only in a player package (its `games\sc5\build-game.cmd`, tested 2026-11-17 on a
-  laid-out package; `tools\package.ps1`), not in a source build, where `sc5\build.cmd` does. The launcher does not
-  build again after an update changes the game (`build-game.cmd` writes `built.txt`, the game's release, for it, as
-  MK9 Online's launcher reads it); a player presses *Compile the game's code*. Before the first build a package says
-  `sc5.exe` is missing, as if an antivirus had taken it.
+  laid-out package; `tools\package.ps1`), not in a source build, where `sc5\build.cmd` does. Before the first build
+  a package says `sc5.exe` is missing, as if an antivirus had taken it.
 - Dampierre (downloadable) is picked in the game only, by players who both have him.
 - Each match of a series is a `park` and a new `start` (about 20 s and 35 s with the real game); the game's own
   Rematch (`rematch`, no loading) is not used by the launcher yet.

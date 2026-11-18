@@ -12,6 +12,7 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 #include <rex/system/kernel_state.h>
+#include <rex/ui/window.h>
 
 #include "sc5/autopilot.h"
 #include "sc5/controls.h"
@@ -166,6 +167,12 @@ void Sc5App::OnPostSetup() {
   }
   REXLOG_INFO("sc5: game data {}, update {}, saves {}", game_data_root().string(), update_data_root().string(),
               user_data_root().string());
+  // no mouse pointer over the game, which takes no mouse input (as MK9 Online's): over the window's title bar and
+  // outside the window it shows as usual. The window is there already (SetupPresentation), on this thread
+  if (auto* w = window())
+    w->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
+  else
+    REXLOG_WARN("sc5: no window yet to hide the mouse pointer over");
   // the player's own downloadable content (dlc.h): SC5_DLC_DIR, else the dlc folder beside the game's
   {
     fs::path dlc = EnvPath("SC5_DLC_DIR");

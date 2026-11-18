@@ -92,6 +92,15 @@ bool GameProcess::codeStale(const QString& exe) {
     return fields[0] != QByteArray::number(size) || fields[1] != QByteArray::number(time);
 }
 
+bool GameProcess::needsRebuild(const QString& gameId) {
+    const QDir folder(cfg::gameFolder(gameId));
+    QFile want(folder.filePath(QStringLiteral("project/VERSION")));
+    if (!QFileInfo::exists(cfg::gameExe(gameId)) || !want.open(QIODevice::ReadOnly)) return false;  // never built
+    QFile built(folder.filePath(QStringLiteral("built.txt")));
+    const QByteArray w = want.readAll().trimmed();
+    return !built.open(QIODevice::ReadOnly) || built.readAll().trimmed() != w;
+}
+
 QString GameProcess::xexFile(const QString& gameId) {
     const QString xex = QDir(cfg::gameDataDir(gameId)).filePath(QStringLiteral("default.xex"));
     return QFileInfo::exists(xex) ? xex : QString();

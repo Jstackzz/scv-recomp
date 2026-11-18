@@ -736,7 +736,9 @@ SinglePlayerPage::SinglePlayerPage(MatchController* controller, QWidget* parent)
     root->setSpacing(14);
     root->addWidget(ui::pageHeader(tr("Single player"),
                                    tr("The whole game on this PC with its own menus, as on the console: arcade, "
-                                      "practice, its other modes. What you unlock and set is saved in the game's "
+                                      "practice, its other modes. Everything on the disc is unlocked in all of them, "
+                                      "PLAY too: every character, stage, music track and creation part (paid DLC "
+                                      "from your own packages). What you set and earn is saved in the game's "
                                       "folder.")));
     auto* columns = new QHBoxLayout;
     columns->setSpacing(16);
@@ -760,11 +762,10 @@ SinglePlayerPage::SinglePlayerPage(MatchController* controller, QWidget* parent)
     row->addWidget(versus_, 1);
     row->addWidget(close_);
     solo->addLayout(row);
-    auto* practiceNote = ui::label(tr("PRACTICE goes straight to training's select screen with every character "
-                                      "unlocked: pick yours, then the dummy, with one controller. VERSUS goes straight "
-                                      "to the two-player select screen with every character and stage unlocked: "
-                                      "player 1 on the first controller (and the keyboard), player 2 on the controller "
-                                      "chosen below. What your profile has unlocked stays as it is."),
+    auto* practiceNote = ui::label(tr("PLAY starts at the game's title screen. PRACTICE goes straight to training's "
+                                      "select screen: pick yours, then the dummy, with one controller. VERSUS goes "
+                                      "straight to the two-player select screen: player 1 on the first controller "
+                                      "(and the keyboard), player 2 on the controller chosen below."),
                                    "Muted");
     practiceNote->setWordWrap(true);
     solo->addWidget(practiceNote);

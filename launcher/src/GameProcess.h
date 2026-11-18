@@ -54,6 +54,9 @@ public:
     static bool codeStale(const QString& exe);
     // the game's extracted default.xex (Build game), in the folder the game reads (SC5_GAME_DIR); empty before then
     static QString xexFile(const QString& gameId);
+    // a game built from another release than the package's (games\sc5\built.txt, which build-game.cmd copies from
+    // project\VERSION, differs from project\VERSION): an update changed the game, and it must be built again
+    static bool needsRebuild(const QString& gameId);
 
 signals:
     void statusChanged(const QString& line);

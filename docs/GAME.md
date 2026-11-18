@@ -15,7 +15,9 @@ sc5\build.cmd release            # -> sc5\out\build\win-amd64-release\sc5.exe (+
 The game reads its disc files from `SC5_GAME_DIR` (default `<exe>\game\disc`: the extracted ISO with the title
 update's `default.xexp` beside `default.xex`), the title update's other files (`patch.cpk`) from `SC5_UPDATE_DIR`
 (`<game>\..\update`) and keeps saves in `SC5_USER_DIR` (`<exe>\user`). Always run it windowed while testing:
-`--fullscreen=false --window_width=960 --window_height=540`.
+`--fullscreen=false --window_width=960 --window_height=540`. The game takes no mouse input and shows no mouse pointer
+over its window (`sc5_app.cpp`, the SDK window's hidden cursor, as MK9 Online); over the title bar and outside the
+window the pointer shows as usual.
 
 ## What a player's PC needs to build the game
 

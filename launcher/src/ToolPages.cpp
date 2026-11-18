@@ -561,6 +561,8 @@ void BuildPage::updateProgress() {
                              .arg(humanBytes(done), humanBytes(totalBytes_)));
 }
 
+void BuildPage::rebuild() { compileGame(); }
+
 void BuildPage::compileGame() {
     if (compiler_ || step_ != Step::Idle) return;
     const QString script = cfg::buildScript(gameId_);

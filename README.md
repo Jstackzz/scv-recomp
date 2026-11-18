@@ -24,8 +24,9 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 
 ## Playing
 
-1. Unpack the `SC5-Online` zip somewhere you can write to (Documents, say). It has everything: the launcher, the
-   ReXGlue runtime and the compiler that builds the game. Nothing else gets installed.
+1. Download `SC5-Online-<version>-windows.zip` from [Releases](../../releases) and unpack it somewhere you can write
+   to (Documents, say). It has everything: the launcher, the ReXGlue runtime and the compiler that builds the game.
+   Nothing else gets installed.
 2. Start `SC5Launcher.exe` and open **Build game**: pick your disc image, the title update and (optionally) your DLC
    packages, then **CHECK AND BUILD**. The launcher checks each one, extracts the disc and compiles the game's code
    for your PC. That happens once and takes a few minutes.
@@ -33,7 +34,8 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
    Practice, watching), or **Single player** (the game's own modes, Training with every character, and two-player
    versus on one PC).
 
-No release zip is published yet. `tools\package.ps1` makes one from a source build (below).
+The launcher updates itself from this repository's releases; when an update changes the game, it builds the game
+again by itself before you play.
 
 ## What works
 
@@ -44,9 +46,11 @@ No release zip is published yet. `tools\package.ps1` makes one from a source bui
   start twice and a wrong guess's are stopped. How it works and how it was tested: [docs/GAME.md](docs/GAME.md#rollback-battlecpp-netsynctestcpp).
 - **Every mode online**: versus (Ranked, Casual, lobbies), Online Practice (no timer, health refills), spectators,
   King of the Hill with Respect Points, and Training offline while you wait for a match.
-- **Everything on the disc unlocked** (the hidden characters among them), without touching your save. Dampierre
-  and the DLC parts come only from your own packages; an online match allows Dampierre only when both players have
-  him.
+- **Everything on the disc unlocked** in every mode, single player's PLAY included (the hidden characters among
+  them), without touching your save. Dampierre and the DLC parts come only from your own packages; an online match
+  allows Dampierre only when both players have him.
+- **No mouse pointer over the game**: it takes no mouse input. Over its title bar and outside it the pointer shows
+  as usual.
 - **Display settings that cannot desync a match**: window mode and size, internal resolution (720p as on the console
   up to 4x), anti-aliasing, texture filtering, V-sync, brightness. Each changes only how a frame looks, never what
   the game computes, so two players may pick differently. Music, effects and voices levels apply at once.
