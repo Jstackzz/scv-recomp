@@ -198,7 +198,8 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    BUILD*. The launcher reads the disc's file system and the Xbox Live packages itself (no Python): the disc's
    `default.xex` must be the World release's (SHA-1 `dfe4d5e1...`, version 0.0.0.2), the update must be a `LIVE`
    title update of title `4E4D083D` whose `default.xexp` (SHA-1 `47a09662...`) patches 0.0.0.2 into 0.0.1.2, a DLC
-   package must be downloadable content (`00000002`) of the same title; anything else is named and refused (another
+   package must be downloadable content (`00000002`) of the same title (the packages `tools/py/ps3dlc.py` makes from a
+   player's PS3 DLC are taken the same way, GAME.md); anything else is named and refused (another
    game, region, print, update or a modified copy), since both players of a match must run the same code. It checks
    the free space, extracts the disc into `disc\` on a worker thread with a progress bar (the dashboard update,
    `$SystemUpdate`, left out; a file already there with the right size kept, so a stopped extraction goes on),

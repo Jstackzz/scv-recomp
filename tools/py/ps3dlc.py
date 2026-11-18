@@ -10,13 +10,14 @@ entries, and each pack bought adds a license file, license_NN.edat, which only t
 (exdata/<content id>.rap) opens; the index's entries name the license file that grants them (a pack's set entry,
 whose items it lists).
 
-This tool reads the player's PS3 packs and licenses and writes, for every group, one 360 package with the entries that
-the player's licenses grant (a set and its items, a music track), in the launcher's game/dlc layout:
-<dlc>/PS3-DLCnn/index_nn_X360.dat and <dlc>/PS3-DLCnn.header (an STFS header with the display name "DLCnn:..."),
-which the game installs like the player's own 360 packages (sc5/src/sc5/dlc.cpp). A group that already has a 360
-package of the player's is left to it. Nothing is granted without the license file the player's own .rap opens.
+This tool reads the player's PS3 packs and licenses and writes, for every group, one Xbox 360 package with the entries
+that the player's licenses grant (a set and its items, a music track): PS3-DLCnn, an STFS package laid out as the game's
+own DLC packages are (a LIVE header with the display name "DLCnn:...", one file, index_nn_X360.dat). The player adds
+them on the launcher's Build game page with their 360 packages (3. Your downloadable content packages, ADD...), and the
+game installs them as it does those (sc5/src/sc5/dlc.cpp). A group that a 360 package of the player's in the output
+folder already has is left to it. Nothing is granted without the license file the player's own .rap opens.
 
-    python -I tools/py/ps3dlc.py <PS3 .pkg folder> <exdata folder with the .rap licenses> <game/dlc>
+    python -I tools/py/ps3dlc.py <PS3 .pkg folder> <exdata folder with the .rap licenses> <output folder>
         [--eboot <the PS3 game's EBOOT.elf>] [--klic <hex>] [--dry-run]
 
 The free catalog packs (the indexes of DLC06 to DLC13) are opened with the game's own key, which the game builds from a
@@ -251,21 +252,72 @@ def x360_index(slots, entries):
     return out
 
 
-def stfs_header(display):
-    """What the launcher keeps of a 360 package (dlc.cpp reads the display name): an STFS LIVE header's fields."""
-    h = bytearray(0xA000)
+def stfs_package(display, files):
+    """An Xbox 360 package (STFS) of the game's downloadable content holding `files` ([(name, data)], at its root), laid
+    out as the game's own DLC packages are (launcher/src/X360.cpp reads them): a LIVE header with its metadata (version
+    1, no pictures), one hash table, the file table in block 0, then each file's blocks one after another. Its hashes
+    are a console's (each block's in the hash table, the table's in the volume descriptor, the header's from 0x344 to
+    the first block); the signature is left empty, which neither the launcher nor the runtime reads."""
+    header_size = 0x971A
+    first = (header_size + 0xFFF) & ~0xFFF  # where the hash table starts, the blocks after it
+    table = bytearray(0x1000)
+    data = []
+    last = {0}  # each chain's last block: the file table's, then each file's
+    start = 1
+    for i, (name, blob) in enumerate(files):
+        raw = name.encode("ascii")
+        n = (len(blob) + 0xFFF) // 0x1000
+        if not n or len(raw) > 0x28 or i >= 0x40:
+            raise ValueError(f"{name}: empty, too long a name, or more files than one file table block lists")
+        e = memoryview(table)[i * 0x40:(i + 1) * 0x40]
+        e[0:len(raw)] = raw
+        e[0x28] = 0x40 | len(raw)  # its blocks follow each other
+        e[0x29:0x2C] = n.to_bytes(3, "little")
+        e[0x2C:0x2F] = n.to_bytes(3, "little")
+        e[0x2F:0x32] = start.to_bytes(3, "little")
+        struct.pack_into(">hI", e, 0x32, -1, len(blob))  # in the root; its size
+        data.append(blob + bytes(n * 0x1000 - len(blob)))
+        start += n
+        last.add(start - 1)
+    blocks = bytes(table) + b"".join(data)
+    count = len(blocks) // 0x1000
+    if count > 0xAA:
+        raise ValueError("more blocks than one hash table covers")
+    hashes = bytearray(0x1000)
+    for b in range(count):
+        o = b * 0x18
+        hashes[o:o + 0x14] = hashlib.sha1(blocks[b * 0x1000:(b + 1) * 0x1000]).digest()
+        hashes[o + 0x14] = 0x80  # in use
+        hashes[o + 0x15:o + 0x18] = (0xFFFFFF if b in last else b + 1).to_bytes(3, "big")  # the chain's next block
+    h = bytearray(first)
     h[0:4] = b"LIVE"
-    struct.pack_into(">I", h, 0x340, len(h))  # header size
-    struct.pack_into(">I", h, 0x344, 0x00000002)  # marketplace content
+    struct.pack_into(">QII", h, 0x22C, 0xFFFFFFFFFFFFFFFF, 1, 1)  # licensed to every profile, as the game's own are
+    struct.pack_into(">IIIQ", h, 0x340, header_size, 0x00000002, 1, 0x1000 + len(blocks))  # marketplace content
     struct.pack_into(">I", h, 0x360, 0x4E4D083D)  # Soulcalibur V
+    # the STFS volume descriptor: its size, block separation 1 (one hash table per level), the file table's block count
+    # (u16 LE) and first block (u24 LE), the hash table's hash, the blocks in use and free
+    h[0x379:0x381] = bytes([0x24, 0, 1, 1, 0, 0, 0, 0])
+    h[0x381:0x395] = hashlib.sha1(hashes).digest()
+    struct.pack_into(">II", h, 0x395, count, 0)
     name = display.encode("utf-16-be")[:0xFE]
     h[0x411:0x411 + len(name)] = name
-    return bytes(h)
+    title = "SOULCALIBUR V".encode("utf-16-be")
+    h[0x1691:0x1691 + len(title)] = title
+    h[0x1711] = 0xC0  # transfer flags, as the game's own
+    h[0x32C:0x340] = hashlib.sha1(h[0x344:first]).digest()
+    return bytes(h) + bytes(hashes) + blocks
 
 
-def display_name_of_header(path):
-    h = open(path, "rb").read(0x411 + 0x100)
-    return h[0x411:0x511].decode("utf-16-be", "replace").split("\0")[0] if len(h) >= 0x511 else ""
+def display_name(path):
+    """A 360 package's display name, or that of an installed one's header (beside its files); "" for anything else."""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(0x511)
+    except OSError:
+        return ""
+    if len(h) < 0x511 or h[:4] not in (b"LIVE", b"PIRS", b"CON "):
+        return ""
+    return h[0x411:0x511].decode("utf-16-be", "replace").split("\0")[0]
 
 
 # ----------------------------------------------------------------------------- main
@@ -273,7 +325,7 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("packages", help="the folder with the PS3 .pkg files")
     ap.add_argument("exdata", help="the folder with the .rap licenses")
-    ap.add_argument("dlc", help="the game's dlc folder (game/dlc)")
+    ap.add_argument("out", help="the folder to write the 360 packages to (the one with your own 360 packages, say)")
     ap.add_argument("--eboot", help="the PS3 game's decrypted EBOOT.elf (for the free catalogs)")
     ap.add_argument("--klic", help="the game's own key, hex (instead of --eboot)")
     ap.add_argument("--dry-run", action="store_true", help="say what would be written")
@@ -309,12 +361,16 @@ def main(argv):
         if not opened and any(n.split("/")[-1].startswith("license_") for n, _ in pkg_files(path)):
             no_license.append(cid)
 
-    os.makedirs(a.dlc, exist_ok=True)
-    taken_by_360 = set()
-    for header in glob.glob(os.path.join(a.dlc, "*.header")):
-        if os.path.basename(header).startswith("PS3-DLC"):
+    if any(os.path.isdir(p) for p in glob.glob(os.path.join(a.out, "PS3-DLC*"))):
+        print(f"{a.out} is a game's dlc folder (what the launcher installed): write the packages to another folder, "
+              "then add them on the launcher's Build game page")
+        return 2
+    os.makedirs(a.out, exist_ok=True)
+    taken_by_360 = set()  # the groups the player's own 360 packages there have
+    for path in glob.glob(os.path.join(a.out, "*")):
+        if os.path.basename(path).startswith("PS3-DLC") or not os.path.isfile(path):
             continue
-        name = display_name_of_header(header)
+        name = display_name(path)
         if name.startswith("DLC") and name[3:5].isdigit():
             taken_by_360.add(int(name[3:5]))
 
@@ -343,18 +399,18 @@ def main(argv):
         display = f"DLC{group:02d}:PS3 " + " ".join(packs)
         print(f"{pkg}: {len(packs)} packs, {len(chosen)} entries, {ids} release ids  ({display[:100]})")
         if not a.dry_run:
-            os.makedirs(os.path.join(a.dlc, pkg), exist_ok=True)
-            with open(os.path.join(a.dlc, pkg, f"index_{group:02d}_X360.dat"), "wb") as f:
-                f.write(x360_index(slots, chosen))
-            with open(os.path.join(a.dlc, pkg + ".header"), "wb") as f:
-                f.write(stfs_header(display[:127]))
+            with open(os.path.join(a.out, pkg), "wb") as f:
+                f.write(stfs_package(display[:127], [(f"index_{group:02d}_X360.dat", x360_index(slots, chosen))]))
         written.append(pkg)
     # a pack whose license opens in neither region's copy (a missing or wrong .rap)
     have = {c.split("-")[-1] for g in owned.values() for c in g.values()}
     for cid in no_license:
         if cid.split("-")[-1] not in have:
             print(f"no license opens {cid}: its .rap is missing or belongs to another pack")
-    print(f"{len(written)} packages {'would be ' if a.dry_run else ''}written to {a.dlc}")
+    print(f"{len(written)} packages {'would be ' if a.dry_run else ''}written to {a.out}")
+    if written and not a.dry_run:
+        print("Add them on the launcher's Build game page (3. Your downloadable content packages, ADD...), with your "
+              "360 packages, then CHECK AND BUILD.")
     return 0
 
 

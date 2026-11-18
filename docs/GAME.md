@@ -127,14 +127,18 @@ among the granted entries' n2 ids.
 string offsets) and, in the free catalog packs of DLC06 to DLC13, a version-2 header (a leading zero word); a pack
 bought adds `license_NN.edat`, which only the buyer's license (`exdata\<content id>.rap`) opens, and the index's entry
 for the pack (a set, with its items' slots in n1) names that license file. The tool opens the player's licenses, takes
-from each group's index the entries they grant (a set and its items, a music track), and writes one 360 package per
-group, `game\dlc\PS3-DLCnn\index_nn_X360.dat` with `PS3-DLCnn.header` (display name "DLCnn:PS3 ..."); a group with a
-360 package of the player's own is left to it. From the European Dampierre pack the tool writes the 360 Dampierre
-index byte for byte. The catalogs are opened with the game's own key, which the PS3 game builds at run time through a
+from each group's index the entries they grant (a set and its items, a music track), and writes one Xbox 360 package
+per group, `PS3-DLCnn`, laid out as the game's own are (an STFS LIVE package: the header with the display name
+"DLCnn:PS3 ...", one hash table, the file table, one file `index_nn_X360.dat`; its hashes filled in, no signature).
+The player adds them on Build game with their 360 packages (or `x360.py dlc-install`), which installs them as it does
+those; a group that a 360 package of the player's in the tool's output folder has is left to it. From the European
+Dampierre pack the tool writes the 360 Dampierre index byte for byte. The catalogs are opened with the game's own key, which the PS3 game builds at run time through a
 substitution table (`key[i] = table[source[i]]`, stored at +0x328 of its DRM object, both tables through its TOC);
 `--eboot` reads it from the game's executable decrypted by RPCS3 (`rpcs3.exe --decrypt EBOOT.BIN`). With the
 owner's 37 US and 41 European packs: 11 packages (DLC02 to DLC13 but 05, the US-only Dampierre pack whose license is
-missing), 361 release ids; the game's own check (`SC5_DBG_DLC=1`, below) grants every one tried. Only DLC equipment for
+missing), 361 release ids; the game's own check (`SC5_DBG_DLC=1`, below) grants every one tried. Build game of the
+published 0.1.1 takes them with the owner's 360 Dampierre package as it takes that one (a fresh unzip of the release:
+12 packages installed, the same index files as before, the game at its main menu in 41 s with all 12 listed). Only DLC equipment for
 created characters, music and Dampierre: nothing a versus pick on the select screen changes but Dampierre, whom an
 online match allows only when both players have him.
 

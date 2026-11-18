@@ -16,8 +16,8 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
   players of a match must run the same code.
 - **Title update 1**: the Xbox Live package `TU_174Q21T_0000008000000.0000000000082` (from your console).
 - **Your own DLC**, if you have it: your Xbox 360 DLC packages. Paid DLC is only ever yours: nothing here unlocks it
-  for anyone else. If you bought the DLC on PS3, `tools/py/ps3dlc.py` turns your own packs and licenses into the
-  360 game's (docs/GAME.md, "Unlocks and downloadable content").
+  for anyone else. If you bought the DLC on PS3, `tools/py/ps3dlc.py` turns your own packs and licenses into Xbox 360
+  packages, which you add on Build game with any 360 ones (docs/GAME.md, "Unlocks and downloadable content").
 - Windows 10 or 11, 64-bit.
 
 [docs/TARGET.md](docs/TARGET.md) lists every hash the launcher checks.

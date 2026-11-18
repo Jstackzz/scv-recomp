@@ -111,7 +111,7 @@ class Stfs:
         self.block_separation = vd[2]
         self.ft_block_count = struct.unpack("<H", vd[3:5])[0]
         self.ft_block = _u24le(vd, 5)
-        self.alloc_blocks = struct.unpack(">I", vd[0x1A:0x1E])[0]
+        self.alloc_blocks = struct.unpack(">I", vd[0x1C:0x20])[0]  # after the top hash table's hash (vd[8:0x1C])
         self.sex = (~self.block_separation) & 1          # 0 = female (one hash table per level), 1 = male (two)
         self.first_block = (self.header_size + 0xFFF) & ~0xFFF
         self.display_name = h[0x411:0x411 + 0x80].decode("utf-16-be", "replace").split("\0")[0]
