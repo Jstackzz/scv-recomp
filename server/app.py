@@ -97,8 +97,8 @@ class ServerConfig:
     login_fail_limit: int = 10
     login_fail_window: float = 300.0
     chat_interval: float = 0.5
-    default_rounds: int = 3
-    set_wins: int = 3             # a ranked set goes to the first to win this many matches (2 before 0.1.21)
+    default_rounds: int = 5       # best of 5 rounds, first to 3: the console's Battle Count (best of 3 before 0.1.3)
+    set_wins: int = 3            # a ranked set goes to the first to win this many matches (2 before 0.1.21)
     # casual: both choose a rematch within this, or the series ends; it starts with the result, and the launcher asks
     # once the game has played the match's end (the knockout, the winner's pose: up to 30 s)
     rematch_timeout: float = 60.0
@@ -1999,11 +1999,10 @@ class Server:
         """P1's and P2's characters in a series' next match ("" picks on the select screen). A mode whose players can
         pick on the game's select screen: in a ranked set the next match goes back there, where only the last match's
         loser picks, its winner keeping the fighter they won with (the autopilot picks it in both games); casual, the
-        last match's fighters again when both want a rematch (as the game's own Rematch: the autopilot picks them in
-        both games, on the same stage when the games are still at the result screen), the select screen when either
-        wants to select. Other modes, casual: the last match's fighters when both want a rematch, the select screen
-        when either wants to select (the characters they queued with when the last match's are not known); ranked:
-        the queued ones."""
+        last match's fighters again when both want a rematch (the game's own Rematch, the same stage too, when the
+        games are still at the result screen), the select screen when either wants to select. Other modes, casual: the
+        last match's fighters when both want a rematch, the select screen when either wants to select (the characters
+        they queued with when the last match's are not known); ranked: the queued ones."""
         p1, p2 = sorted(series.players, key=lambda p: p.side)
         if series.mode in P.SELECT_SCREEN_MODES:
             if series.ranked:

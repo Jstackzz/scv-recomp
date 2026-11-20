@@ -18,12 +18,12 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "Jstackzz"
-            VALUE "FileDescription", "SC5 Online launcher"
+            VALUE "FileDescription", "SCV Online launcher"
             VALUE "FileVersion", "@PROJECT_VERSION@"
             VALUE "InternalName", "SC5Launcher"
             VALUE "LegalCopyright", "Copyright (c) 2026 Jstackzz"
             VALUE "OriginalFilename", "SC5Launcher.exe"
-            VALUE "ProductName", "SC5 Online"
+            VALUE "ProductName", "SCV Online"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
         END
     END

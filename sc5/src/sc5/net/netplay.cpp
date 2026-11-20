@@ -11,9 +11,10 @@
 //            run (for keeping the two sides even)
 //   4 CHECK  u32 frame, u32 hash low, u32 hash high   the sender's hash of the fight at the top of that frame
 //   5 BYE    u32 frame                          the sender left the match
-//   6 PICK   u8 side, i8 phase, i8 slot, i8 costume, u32 pickable
+//   6 PICK   u8 side, i8 phase, i8 slot, i8 costume, u32 pickable, u32 dlc
 //            the select screen before the coming match (its number in the header): where the sender's player is with
-//            their pick (Pick), and the slots the sender's game can load; repeated while connecting
+//            their pick (Pick), the slots the sender's game can load and its downloadable parts for created
+//            characters (a fingerprint: the same on two PCs with the same parts); repeated while connecting
 //   7 SETUP  u32 stage, u32 round time, u32 wins, u8 n, n x u32
 //            player 1's battle settings for the coming match and its values of what both games must have alike from
 //            the battle setup on (sc5/versus.cpp); repeated
@@ -22,6 +23,13 @@
 //   9 FIX    u16 chunk, u16 chunks, u32 source, u16 offset, u16 len, len bytes
 //            player 1's bytes of a fight block player 2's differs in (chunks 0: none differs), repeated until FIXOK
 //  10 FIXOK  -                                  player 2's game took them all
+//  11 STAGE  u8 chooser, i8 phase, i8 cursor, i8 stage
+//            the stage select before the coming match (StagePick): who picks the stage there (player 1's game
+//            decides) and where they are with it; repeated while connecting
+//  12 CREATED u8 side, u8 chunk, u8 chunks, u16 len, len bytes
+//            the sender's player's created character for the coming match (a PICK's costume -2): its record in 12
+//            chunks (net/created_transfer.h), each sent every 100 ms until CREATED_ACK says the other game has it
+//  13 CREATED_ACK u8 side, u16 mask   the chunks of that side's record this game has
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -29,6 +37,7 @@
 #include <ws2tcpip.h>
 
 #include "sc5/net/netplay.h"
+#include "sc5/net/created_transfer.h"
 
 #include <algorithm>
 #include <array>
@@ -74,7 +83,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
-                 kFixOk = 10 };
+                 kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -83,8 +92,8 @@ constexpr uint32_t kMaxPredict = 8;        // frames run ahead of the other's la
 constexpr int kRing = 16;                  // battle snapshots kept (> kMaxPredict)
 constexpr uint32_t kCheckEvery = 30;
 
-// what the two games make alike at the barrier: player 1's game's values of the counters that start at boot
-// (docs\GAME.md, "Determinism"), which player 2's game takes; not the three that count frames presented to the GPU
+// what the two games make alike at the barrier: the counters that start at boot (docs\GAME.md, "Determinism"), each
+// at the larger of the two games' values (CountsUp); not the three that count frames presented to the GPU
 // (0x8280DE94, 0x8281929C, 0x8281991C: battle.cpp's kRaw says why), which each game's own GPU waits by
 constexpr uint32_t kAgreedWords[] = {
     0x82771B40, 0x82771B44, 0x82771B48, 0x82771B4C, 0x82771B50, 0x82771B54, 0x82771B58, 0x82771B5C,
@@ -107,6 +116,18 @@ constexpr uint32_t kAgreedMachine = 0x82767D08, kAgreedMachineSize = 0x200;
 // result 397 frames before the other (Ezio against Viola with 40 ms each way and render scale 2 on game 2,
 // 2026-11-18). The snapshot does not carry it.)
 constexpr uint32_t kMachineOwnWords[] = {0x82767D18, 0x82767D1C, 0x82767E40, 0x82767E44};
+
+// The counters among the agreed words only count up, and none may go back at the barrier: each game takes the larger
+// of the two games' values (READY carries each game's) and never less than its own now; a spectator takes the larger
+// of the two. With player 1's values player 2's went back whenever player 2's game reached the barrier first (its
+// loading or intro the faster), and the post-effects' blends (frame.cpp) then took an effect started before the
+// barrier with a fade-in of 0 to elapsed below 0: -inf, the colour matrix of the final picture NaN, player 2's scene
+// black under its HUD until the next round's call (0.1.2's testers; the exposure session found it, 2026-11-19: 7 of 7
+// matches set back by 2 frames or more went black, none of 15 others). The main thread's counters stand still while a
+// game waits here, so both games come out alike; two, 0x82771B40 and 0x828E8790, count on during the wait (other
+// threads keep them: 137 frames in a game that waited 2.3 s), and they part the games whatever the barrier does, as
+// they did before. 0x82771B5C holds packed bytes another thread changes: player 1's, as the state machine's words.
+bool CountsUp(uint32_t a) { return (a >= 0x82771B40 && a <= 0x82771B58) || a == 0x828E8790 || a == 0x835B3EB4; }
 
 std::vector<uint32_t> AgreedAddresses() {
   std::vector<uint32_t> out(std::begin(kAgreedWords), std::end(kAgreedWords));
@@ -180,8 +201,10 @@ struct Peer {
   // before the coming match: their picks, the slots their game can load, player 1's setup
   Pick picks[2];
   uint32_t pickable = 0;
+  uint32_t dlc = 0;  // their game's downloadable parts for created characters (a fingerprint; 0 before they said)
   bool has_setup = false;
   Setup setup;
+  StagePick stage;            // their stage select (player 1's game's: who picks the stage)
   bool heard_coming = false;  // heard since the coming match was set up
 };
 
@@ -234,9 +257,14 @@ bool KeepAll() {
 //   7 INPUTS u32 first frame, u8 n, n x (u32 buttons | lt << 16 | rt << 24, u32 sticks lx ly rx ry)   the player's own
 //   8 CHECK  u32 frame, u32 hash low, u32 hash high
 //   9 END    u32 frame   the frame the game left the match at
+//  10 STAGE  u8 chooser, i8 phase, i8 cursor, i8 stage   the stage select (StagePick), from the game whose player picks
 // A player's game writes its own; a spectator's (watch) reads both players' and plays every frame from them.
 constexpr uint32_t kFeedMagic = 0x52354353;  // "SC5R"
-enum : uint8_t { kFeedPick = 5, kFeedMeet = 6, kFeedInputs = 7, kFeedCheck = 8, kFeedEnd = 9 };
+enum : uint8_t { kFeedPick = 5, kFeedMeet = 6, kFeedInputs = 7, kFeedCheck = 8, kFeedEnd = 9, kFeedStage = 10,
+                 kFeedCreated = 11 };
+
+// A created character's record on its way (CREATED chunks, the feed's type 11): 12 chunks of 1,200 bytes, the last 140.
+// Exactly those: a chunk count, number or length otherwise, or a chunk again with other bytes, refuses it.
 enum : uint8_t { kMeetReady = 0, kMeetSetup = 1, kMeetBlock = 2 };
 constexpr size_t kFeedOutMax = 8u << 20;
 SOCKET g_feed = INVALID_SOCKET;
@@ -254,6 +282,7 @@ struct Watched {
   bool ready[2] = {false, false};
   uint32_t seed = 0;            // player 1's
   std::vector<uint32_t> words;  // player 1's
+  std::vector<uint32_t> words2;  // player 2's (its counters: CountsUp)
   int delay[2] = {-1, -1};
   bool has_setup = false;
   Setup setup;
@@ -262,6 +291,8 @@ struct Watched {
   bool ended[2] = {false, false};
   uint32_t end_frame[2] = {0, 0};
   Pick picks[2];
+  StagePick stage;  // the stage select, from the game whose player picks the stage
+  Incoming created[2];  // each player's created character, from that player's game
 };
 std::map<uint16_t, Watched> g_watched;
 uint32_t g_watch_stream = 0;
@@ -282,7 +313,15 @@ std::array<uint64_t, kRing> g_ring_count{};  // frame::Count() at that frame's t
 // before the coming match: this game's picks and settings for the other (PICK, SETUP)
 Pick g_local_picks[2];
 uint32_t g_local_pickable = 0;
+uint32_t g_local_dlc = 0;
 bool g_picks_changed = false;
+StagePick g_local_stage, g_fed_stage;  // this game's stage select for the coming match, and as last fed
+// created characters for the coming match: this game's player's record (sent until acknowledged, fed once) and the
+// other player's as it comes
+std::vector<uint8_t> g_local_created[2];
+uint16_t g_created_acked[2] = {0, 0};
+bool g_created_fed[2] = {false, false};
+Incoming g_incoming[2];
 Clock::time_point g_last_pick_send{}, g_last_setup_send{}, g_opened_at{};
 Setup g_my_setup;
 bool g_my_setup_set = false;
@@ -538,6 +577,20 @@ void HandleFeed(const uint8_t* b, int n) {
         p.costume = int8_t(b[11]);
       }
       break;
+    case kFeedCreated:
+      if (n >= 13 && b[8] <= 1 && b[8] == side) {
+        const int len = b[11] | b[12] << 8;
+        if (13 + len <= n) w.created[b[8]].Take(b[9], b[10], b + 13, len);
+      }
+      break;
+    case kFeedStage:
+      if (n >= 12 && b[8] <= 1) {
+        w.stage.chooser = b[8];
+        w.stage.phase = int8_t(b[9]);
+        w.stage.cursor = int8_t(b[10]);
+        w.stage.stage = int8_t(b[11]);
+      }
+      break;
     case kFeedMeet:
       if (n < 9) break;
       if (b[8] == kMeetReady && n >= 14) {
@@ -550,6 +603,8 @@ void HandleFeed(const uint8_t* b, int n) {
         if (side == 0) {
           w.seed = u32(9);
           w.words = std::move(words);
+        } else {
+          w.words2 = std::move(words);
         }
       } else if (b[8] == kMeetSetup && side == 0 && n >= 22) {
         w.has_setup = true;
@@ -678,6 +733,27 @@ void HandlePacket(const uint8_t* b, int n) {
     pk.slot = int8_t(b[10]);
     pk.costume = int8_t(b[11]);
     p.pickable = u32(12);
+    if (n >= 20) p.dlc = u32(16);
+  } else if (type == kCreated && n >= 13) {
+    // their player's created character (only their own side's: a game sends its own player's)
+    if (match != coming || b[8] != uint8_t(1 - g_slot)) return;
+    const int len = b[11] | b[12] << 8;
+    if (13 + len > n) return;
+    Incoming& in = g_incoming[b[8]];
+    in.Take(b[9], b[10], b + 13, len);
+    Writer a = HeaderComing(kCreatedAck);
+    a.U8(b[8]);
+    a.U16(in.mask);
+    Send(a);
+  } else if (type == kCreatedAck && n >= 11) {
+    if (match != coming || b[8] != uint8_t(g_slot)) return;
+    g_created_acked[b[8]] = uint16_t(g_created_acked[b[8]] | (b[9] | b[10] << 8));
+  } else if (type == kStage && n >= 12) {
+    if (match != coming) return;
+    p.stage.chooser = b[8] <= 1 ? b[8] : -1;
+    p.stage.phase = int8_t(b[9]);
+    p.stage.cursor = int8_t(b[10]);
+    p.stage.stage = int8_t(b[11]);
   } else if (type == kSetup && n >= 21) {
     if (match != coming) return;
     p.has_setup = true;
@@ -747,6 +823,53 @@ void SendComing() {
       f.U32(g_local_pickable);
       Feed(f);
     }
+    // the stage select: who picks the stage (player 1's game says), where they are; the spectators: the chooser's own
+    if (g_local_stage.chooser >= 0) {
+      Writer w = HeaderComing(kStage);
+      w.U8(uint8_t(g_local_stage.chooser));
+      w.U8(uint8_t(int8_t(g_local_stage.phase)));
+      w.U8(uint8_t(int8_t(g_local_stage.cursor)));
+      w.U8(uint8_t(int8_t(g_local_stage.stage)));
+      Send(w);
+      const StagePick& f = g_local_stage;
+      if (f.chooser == g_slot && f.phase >= 0 &&
+          (f.phase != g_fed_stage.phase || f.cursor != g_fed_stage.cursor || f.stage != g_fed_stage.stage)) {
+        g_fed_stage = f;
+        Writer fs = FeedHeader(kFeedStage, uint16_t(g_match + 1));
+        fs.U8(uint8_t(f.chooser));
+        fs.U8(uint8_t(int8_t(f.phase)));
+        fs.U8(uint8_t(int8_t(f.cursor)));
+        fs.U8(uint8_t(int8_t(f.stage)));
+        Feed(fs);
+      }
+    }
+    // this game's player's created character: every chunk the other game does not have yet; the spectators once
+    for (int s = 0; s < 2; s++) {
+      const std::vector<uint8_t>& rec = g_local_created[s];
+      if (rec.size() != size_t(kCreatedSize)) continue;
+      for (int c = 0; c < kCreatedChunks; c++) {
+        const int off = c * kCreatedChunk, len = std::min(kCreatedChunk, kCreatedSize - off);
+        const bool acked = (g_created_acked[s] >> c & 1) != 0, feed = !g_created_fed[s];
+        if (acked && !feed) continue;
+        Writer w = HeaderComing(kCreated);
+        w.U8(uint8_t(s));
+        w.U8(uint8_t(c));
+        w.U8(uint8_t(kCreatedChunks));
+        w.U16(uint16_t(len));
+        w.Bytes(rec.data() + off, len);
+        if (!acked) Send(w);
+        if (feed) {
+          Writer f = FeedHeader(kFeedCreated, uint16_t(g_match + 1));
+          f.U8(uint8_t(s));
+          f.U8(uint8_t(c));
+          f.U8(uint8_t(kCreatedChunks));
+          f.U16(uint16_t(len));
+          f.Bytes(rec.data() + off, len);
+          Feed(f);
+        }
+      }
+      g_created_fed[s] = true;
+    }
     for (int s = 0; s < 2; s++) {
       if (s != g_slot && g_local_picks[s].phase < 0) continue;
       Writer w = HeaderComing(kPick);
@@ -755,6 +878,7 @@ void SendComing() {
       w.U8(uint8_t(int8_t(g_local_picks[s].slot)));
       w.U8(uint8_t(int8_t(g_local_picks[s].costume)));
       w.U32(g_local_pickable);
+      w.U32(g_local_dlc);
       Send(w);
     }
   }
@@ -768,7 +892,15 @@ void SendComing() {
 
 // what was passed for a match is done with once it met
 void ClearComing() {
+  for (int s = 0; s < 2; s++) {
+    g_local_created[s].clear();
+    g_created_acked[s] = 0;
+    g_created_fed[s] = false;
+    g_incoming[s] = Incoming{};
+  }
   for (Pick& p : g_local_picks) p = Pick{};
+  g_local_stage = g_fed_stage = StagePick{};
+  g_peer.stage = StagePick{};
   g_my_setup_set = false;
   for (Pick& p : g_peer.picks) p = Pick{};
   g_peer.has_setup = false;
@@ -1469,18 +1601,23 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   if (g_slot == 1)
     for (int i = 0; i < 3; i++) Send(Header(kFixOk));
   const uint32_t seed = g_slot == 0 ? my_seed : p.seed;
-  if (g_slot == 1) {
-    // what this game had otherwise, in the log (the words a game far along its own way differs in)
+  {
+    // the agreed words: each counter the larger of the two games' (READY's: what each had on coming) and never below
+    // this game's own now (CountsUp); the rest player 1's, which player 2's game takes. The log names what this game
+    // had otherwise (a counter that went up, or the words a game far along its own way had)
     std::string differed;
     int n = 0;
-    for (size_t i = 0; i < agreed.size() && i < p.words.size(); i++) {
+    for (size_t i = 0; i < agreed.size() && i < words.size() && i < p.words.size(); i++) {
       const uint32_t mine = Get32(agreed[i]);
-      if (mine != p.words[i] && n++ < 16) differed += fmt::format(" {:08X}:{:08X}>{:08X}", agreed[i], mine, p.words[i]);
-      Put32(agreed[i], p.words[i]);
+      const uint32_t p1 = g_slot == 0 ? words[i] : p.words[i], p2 = g_slot == 0 ? p.words[i] : words[i];
+      const uint32_t v = CountsUp(agreed[i]) ? std::max({p1, p2, mine}) : g_slot == 0 ? mine : p1;
+      if (mine == v) continue;
+      if (n++ < 16) differed += fmt::format(" {:08X}:{:08X}>{:08X}", agreed[i], mine, v);
+      Put32(agreed[i], v);
     }
-    if (n) REXLOG_INFO("sc5 net: match {}: {} agreed words taken from player 1's game:{}", g_match, n, differed);
+    if (n) REXLOG_INFO("sc5 net: match {}: {} agreed words changed:{}", g_match, n, differed);
   }
-  g_shown_base = Get32(kFramesShown);  // player 1's, in both games
+  g_shown_base = Get32(kFramesShown);  // the larger count, in both games
   // the fight's random numbers from the agreed seed on both PCs (the game's own seeding: sub_824A35A8)
   game::SetSeed(int64_t(seed));
   game::Reseed(ctx, base, seed);
@@ -1532,7 +1669,8 @@ bool WatchMeet(PPCContext& ctx, uint8_t* base) {
   }
   Watched& w = g_watched[g_match];
   const std::vector<uint32_t> agreed = AgreedAddresses();
-  for (size_t i = 0; i < agreed.size() && i < w.words.size(); i++) Put32(agreed[i], w.words[i]);
+  for (size_t i = 0; i < agreed.size() && i < w.words.size(); i++)
+    Put32(agreed[i], CountsUp(agreed[i]) && i < w.words2.size() ? std::max(w.words[i], w.words2[i]) : w.words[i]);
   g_shown_base = Get32(kFramesShown);
   uint32_t bytes = 0;
   for (auto& [chunk, piece] : w.blocks) {
@@ -1702,8 +1840,9 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
     // the fight has loaded and played its intro: the first frame of round 1's call. (The intro goes as the characters'
     // voice lines play: on two PCs it ran on different frames from the second match on. The block sync at the
-    // barrier makes what it left alike.) A rematch goes through Character Select and loads again: VS Battle's own
-    // Rematch keeps the fight loaded, and its "between rounds" counts on from the result screens.
+    // barrier makes what it left alike.) A rematch either loads again (through Character Select) or is VS Battle's own
+    // Rematch, the fight kept loaded: its "between rounds" counts on from the result screens, however long each game
+    // stayed there, and the barrier's agreed state machine and block sync make that alike too.
     if (game::BattleState() != game::kBattleRoundCall) return;
     if (!Meet(ctx, base)) return Lost(Status::Disconnected);
   }
@@ -1953,6 +2092,59 @@ Pick RemotePick(int side) {
   return g_peer.picks[side];
 }
 uint32_t RemotePickable() { return g_peer.pickable; }
+void SetLocalDlc(uint32_t fingerprint) {
+  if (g_local_dlc != fingerprint) {
+    g_local_dlc = fingerprint;
+    g_picks_changed = true;
+  }
+}
+uint32_t RemoteDlc() { return g_peer.dlc; }
+
+void SetLocalStage(const StagePick& s) {
+  StagePick& l = g_local_stage;
+  if (l.chooser != s.chooser || l.phase != s.phase || l.cursor != s.cursor || l.stage != s.stage) {
+    l = s;
+    g_picks_changed = true;
+  }
+}
+
+void SetLocalCreated(int side, const std::vector<uint8_t>& record) {
+  if (side < 0 || side > 1) return;
+  if (record.size() != size_t(kCreatedSize)) {
+    g_local_created[side].clear();
+    return;
+  }
+  if (g_local_created[side] == record) return;
+  g_local_created[side] = record;
+  g_created_acked[side] = 0;
+  g_created_fed[side] = false;
+  g_picks_changed = true;
+}
+
+int RemoteCreated(int side, std::vector<uint8_t>& out, std::string& why) {
+  if (side < 0 || side > 1) return 0;
+  const Incoming* in = &g_incoming[side];
+  if (g_cfg.watch) {  // a spectator: from the feed
+    auto it = g_watched.find(uint16_t(g_match + 1));
+    if (it == g_watched.end()) return 0;
+    in = &it->second.created[side];
+  }
+  if (!in->refused.empty()) {
+    why = in->refused;
+    return -1;
+  }
+  if (!in->Whole()) return 0;
+  out = in->Joined();
+  return 1;
+}
+
+StagePick RemoteStage() {
+  if (g_cfg.watch) {  // a spectator: the chooser's, from the feed
+    auto it = g_watched.find(uint16_t(g_match + 1));
+    return it != g_watched.end() ? it->second.stage : StagePick{};
+  }
+  return g_peer.stage;
+}
 
 void SendSetup(const Setup& s) {
   g_my_setup = s;

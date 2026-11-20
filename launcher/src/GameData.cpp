@@ -37,7 +37,7 @@ QString Game::otherRelease(const QByteArray& xex) const {
     } else {
         what = tr("a modified copy of %1 (the same version, changed: a patched or damaged executable)").arg(title);
     }
-    return tr("This disc is %1, not %2 (%3). SC5 Online builds the game from that release's default.xex only "
+    return tr("This disc is %1, not %2 (%3). SCV Online builds the game from that release's default.xex only "
               "(SHA-1 %4): both players of a match must run the very same code, and the title update fits that "
               "version only. Use a disc image of %2 (%3).")
         .arg(what, title, edition, xexSha1);
@@ -57,6 +57,8 @@ QList<Character> Game::roster(const QString& modeId) const {
 }
 
 QString Game::characterName(const QString& characterId) const {
+    // a created character (the game's result line names it c.<its checksum>)
+    if (characterId.startsWith(QLatin1String("c."))) return QStringLiteral("Created character");
     if (!characterId.isEmpty() && characterId.front().isDigit()) {
         bool ok = false;
         const int gameId = characterId.section(QLatin1Char('.'), 0, 0).toInt(&ok);

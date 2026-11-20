@@ -471,9 +471,10 @@ void LobbyPage::showLobby(const QJsonObject& lobby) {
     if (hill) extras += tr("  |  King of the Hill");
     if (inLine) extras += tr("  |  %1 in line").arg(inLine);
     if (watching) extras += tr("  |  %1 watching").arg(watching);
-    lobbyInfo_->setText(tr("%1  |  %2  |  best of %3  |  %4%5  |  %6%7")
+    const int wins = (lobby.value(QStringLiteral("rounds")).toInt() + 1) / 2;  // best of N: first to (N+1)/2
+    lobbyInfo_->setText(tr("%1  |  %2  |  %3  |  %4%5  |  %6%7")
                             .arg(g ? g->shortName : s(lobby, "game"), m ? m->name : s(lobby, "mode"))
-                            .arg(lobby.value(QStringLiteral("rounds")).toInt())
+                            .arg(wins == 1 ? tr("1 round to win") : tr("%1 rounds to win").arg(wins))
                             .arg(GameData::regionName(s(lobby, "region")),
                                  lobby.value(QStringLiteral("locked")).toBool() ? tr(", password") : QString(),
                                  s(lobby, "state").replace(QLatin1Char('_'), QLatin1Char(' ')), extras));

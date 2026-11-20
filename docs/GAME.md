@@ -1,4 +1,4 @@
-# SC5 on PC: the game side
+# SCV on PC: the game side
 
 Soulcalibur V (Xbox 360, title 4E4D083D, `default.xex` 0.0.0.2 with title update 1, docs\TARGET.md) recompiled
 to native x64 code with the ReXGlue SDK (docs\SDK.md). This page covers what the game executable (`sc5\`) adds on
@@ -71,6 +71,8 @@ main menu (`ready`) in 41 s.
 | `display.cpp` | the launcher's display and sound settings at the start and from `SC5_DISPLAY_FILE` as it changes |
 | `rerun_profile.cpp` | tests (`SC5_TEST_RERUN_PROFILE`): the game's tasks timed one by one in frames run again (below, "Netplay") |
 | `select.cpp` | the character select screen: cursors, picks, the 32 slots and their characters |
+| `creation.cpp` | created characters online: the player's own brought into the online game's save, this PC's tables read, the other PC's record checked and placed (below, "Created characters online") |
+| `creation_check.cpp` | the check of a created character from another PC, field by field (plain C++; `sc5\tests\creation_check_test.cpp`) |
 | `versus.cpp` | a VS fight's setup online: rounds to win, player 1's settings and random numbers, player 2 on the second pad |
 | `net/synctest.cpp` | the rollback check on one PC (`SC5_SYNCTEST`, below) |
 | `debug_watch.cpp` | diagnostics (temporary): hardware write watches, the whole-memory diff, memory peeks, the two-player test switch |
@@ -104,6 +106,17 @@ main menu (`ready`) in 41 s.
   to one small tile every frame, on the CPU (`sub_8233E140`), and that resolve never reached the CPU's memory either.
   The SDK now reads small resolves made every frame back a frame late, without waiting for the GPU (SDK patch,
   SDK.md). Only drawing reads the exposure: nothing the netplay compares depends on it.
+- **Algol's face black** (0.1.2 testers): on a PC whose shader cache was cold, the GPU dropped the first costume
+  textures' draws while their shaders were compiling, and those textures kept whatever their memory held: Algol's
+  face black, or blocks of noise. The SDK now makes draws into the targets textures are made in wait for their
+  shaders (SDK patch, SDK.md).
+- **Specks on white costumes** (0.1.2 testers): black and blue specks on white clothes (a white cat suit, Ezio's
+  robe). The game writes its compressed textures' blocks as 16-bit floats, and the Xbox 360's 16-bit float holds
+  values a PC's can't (no infinity or NaN), which white's colour needs. The SDK now writes them as the Xbox 360 does,
+  on both render target paths (SDK patch, SDK.md).
+- **Creation's pictures black** (0.1.2 testers): the character's picture on Creation Home and Shoot Picture's
+  thumbnail panel stayed black. The game draws the character once and makes the picture from that on the CPU; the
+  SDK now reads such a picture back to the CPU when it is taken (never in fights) (SDK patch, SDK.md).
 
 ## Unlocks and downloadable content
 
@@ -408,17 +421,33 @@ copy-on-write memory. Packets (UDP, "SC5N"): HELLO, READY (seed, words, delay), 
 inputs), CHECK (a frame's hash), BYE. Tests set it from the environment (`SC5_NET_BIND`, `SC5_NET_PEER`,
 `SC5_NET_SIDE`, `SC5_NET_DELAY`, `SC5_NET_LOCKSTEP`, `SC5_NET_LOG`, a simulated network `SC5_NET_LAG` / `_JITTER` /
 `_LOSS`); the launcher's matches from its start line (below, "The launcher's game"). Before the barrier the games
-also pass each other the select screen's picks (PICK) and player 1's battle settings (SETUP).
+also pass each other the select screen's picks (PICK), the stage select's (STAGE) and player 1's battle settings
+(SETUP).
 
 - **The barrier** is the first frame of round 1's call (the fight loaded and its intro played: the intro goes as the
   characters' voice lines play, and from the second match on it ran on different frames on two PCs). The games meet
-  there whatever time their menus, loading and intro took, and agree: player 1's seed (the game's seeding, sub_824A35A8, run again with it), player 1's
-  counters that start at boot (0x82771B40-0x82771B5F, 0x828E8790, 0x835B3EB4; not the GPU's frame counters, above,
-  "Rollback"), the larger input delay, and the game's own input delay (0x8275C15C, 2 offline) set to 0: the netplay's
-  stands in. One of the counters, 0x82771B44, counts frames shown (the present adds one when the GPU took the frame),
-  and the battle throttles with it (sub_82155B80, sub_82114200, sub_821CA8F0: "4 or more since the stamp", the stamp
-  kept in its objects); a frame run again shows nothing and a busy GPU skips a count, so in a match it is the match's
-  frame from its agreed value, set in every frame run (netplay.cpp `SetFrameInputs`).
+  there whatever time their menus, loading and intro took, and agree: player 1's seed (the game's seeding, sub_824A35A8,
+  run again with it), the counters that start at boot (0x82771B40-0x82771B58, 0x828E8790, 0x835B3EB4: the larger of the
+  two games' values, and never below a game's own: 0x82771B40 and 0x828E8790 count on while a game waits there, kept by
+  other threads, and part the two games anyway; 0x82771B5C, packed bytes, player 1's; not the GPU's frame counters,
+  above, "Rollback"), the larger input delay, and the game's own input delay (0x8275C15C, 2 offline) set to 0: the
+  netplay's stands in. Until 0.1.3 player 2's game took player 1's counters, which set them back whenever it reached the
+  barrier first (its loading or intro the faster), and a counter going back blacked out its scene. Two blends of the
+  post-effects run every frame as step tasks (sub_82345578 -> sub_82345710, the effects' parameters; sub_82348198 ->
+  sub_82348280, the colour grading) and weigh each effect by `elapsed = [0x82771B48] - its start` against its fade-in:
+  an effect started before the barrier with a fade-in of 0 gave `elapsed / fade-in` = -inf, NaN in the blended
+  parameters (the post-effect manager [0x82A18834] +256), the colour grading and the colour matrix of the final
+  composite (sub_82347570): every scene pixel black, the HUD drawn on top, until the KO or the next round's call set the
+  effect again. No desync (the fight never reads them). The exposure session found it (2026-11-19): 7 of 7 matches set
+  back by 2 frames or more went black, none of 15 others. frame.cpp also guards both blends (an effect whose start is
+  still to come weighs nothing yet), since a rollback sets the counters back as well (kRaw) and so does player 2's game
+  taking player 1's setup at the stage select (versus.cpp). Algol against Pyrrha Omega, 40 ms each way, player 2's game
+  on this PC's AMD iGPU (2026-11-19): player 2's scene black all round 1 before (0x82771B48 set back 17 frames); lit all
+  round with the counters' change alone, with the guard alone (it caught a fade-in-0 effect 8 frames ahead in each blend
+  at the barrier), and with both. One of the counters, 0x82771B44, counts frames shown (the present adds one when the
+  GPU took the frame), and the battle throttles with it (sub_82155B80, sub_82114200, sub_821CA8F0: "4 or more since the
+  stamp", the stamp kept in its objects); a frame run again shows nothing and a busy GPU skips a count, so in a match it
+  is the match's frame from its agreed value, set in every frame run (netplay.cpp `SetFrameInputs`).
   The battle's second player is the second pad's (the VS menus would leave it to the CPU: versus.cpp's hook of
   sub_8243D430 while a match is on). The barrier also agrees the battle's state machine (0x82767D08, 0x200 bytes) but
   for its word at +0x14, the address of a heap object (the menus' object the fight was set up from): player 1's left
@@ -431,16 +460,22 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
   (below, "Checks"). It also makes the fight's state alike: both games save the battle and hash each block of the fight in it, player 2's game
   sends its hashes (SUMS), player 1's game its bytes of every block that differs (FIX), written where they came from
   before the first frame (FIXOK). A first match from a fresh start and a rematch have had nothing to send so far; a
-  match after a park had 4 blocks (21 KB): what the intro and a game's earlier matches left otherwise.
+  match after a park had 4 blocks (21 KB): what the intro and a game's earlier matches left otherwise; VS Battle's own
+  Rematch with one game 20 s longer on its result screen than the other, 9 blocks (25 KB).
 - **The round's call** (sub_82323DD0) asks whether a sound from before still plays: if so it stops it and its state
   keeps 1 at 0x82767D38, else 2. That follows the audio's timing, and after a first match the two games' round calls
   ran apart (the second match desynced at its first check); versus.cpp makes it 2 always (the sound is stopped all
-  the same). VS Battle's own Rematch keeps the fight loaded and goes from the result to "between rounds", whose state
-  counts on from the result screens; a rematch goes through Character Select instead, loads, and meets at the intro:
-  the same picks (and with `stage=keep` the same stage: the autopilot's stage select goes as many to the right of
-  Random as for the last match), or per side the one the launcher names, or `-` for that side's player to pick again.
-  The launcher sends it for a queue series' next match while both games wait at their result screens (the netplay
-  keeps the two games in touch there with its hellos: 20 s without a word from the other ends it).
+  the same). **A rematch** with the same two fighters on the same stage (`rematch` with `stage=keep`: both players
+  chose REMATCH) is VS Battle's own Rematch, as on the console: the fight stays loaded, the result screen's menu goes
+  to "between rounds" and round 1's call, and the games meet there as after a loading, however long each stayed on
+  its result screen (the barrier agrees the state machine's counts and makes the fight's blocks alike); about 16 s
+  from the end of a match to the next fight, half the way through Character Select. Ezio against Viola with 40 ms
+  each way, best of 3, 2026-11-19: rematches with both lines at once, with one 8 s after the other and with one 20 s
+  after the other, every match in step (the same rounds on the same frames, no check apart). Any other
+  rematch goes through Character Select, loads, and meets at the intro: per side the same fighter, the one the
+  launcher names, or `-` for that side's player to pick again; then the stage select (below, "The stage"). The
+  launcher sends it for a queue series' next match while both games wait at their result screens (the netplay keeps
+  the two games in touch there with its hellos: 20 s without a word from the other ends it).
 - **Frames**: while a round is fought (battle state "fighting") they run ahead on a guess (the other's last input),
   8 frames at most, and a wrong guess puts the battle back and runs the frames since again within the frame. Outside
   it (the round's call, a KO and its replay, between rounds) both games run on neutral inputs without waiting
@@ -606,6 +641,113 @@ also pass each other the select screen's picks (PICK) and player 1's battle sett
   fight (here the models' pose, above). Not taken: its snapshot reuse (off there: not faster and not safe), its ENet
   transport and GekkoNet, which it plans to move to.
 
+## Created characters online (creation.cpp, creation_check.cpp)
+
+docs\PROTOCOL.md 3.3, *Created characters*, has what the players see; this is what the game does.
+
+**The save.** `savedata.bin` (0x22C200 bytes, plain) keeps 50 creation slots from 0x516C, 29,832 bytes apart: a
+132-byte header, the record (TK_CreationCharacterDNA_st, 13,340 bytes, its schema sub_822256B0) at +132, the picture
+Creation takes (16,360 bytes) at +13,472. A created character's header ends with +112 a number, +116 1 (a customized
+fighter) or +120 1 (an original character), +124 and +128 0x01000000 (the screens test +128). In memory the save
+object ([0x8273EF10]) keeps the image from +0x48 and the release table right after it (+0x22C248, "Unlocks"). Creation
+and the select screen read the slots there as they go.
+
+**The record**, by the game's schema (field, offset, size): versions 11.0 at 0 and 2; select no 4, variation 5, model
+6, base type 7 (0 male, 1 female for an original character, 5 a customized fighter), facial 8, character type 9 (32 an
+original character, listed under the Creation slot; a fighter's id: one of that fighter's costumes), voice 10, pitch
+11, formant 12, flanger 13, eyebrow 14, DLC parts flag 15, style (RyuuhaType) 16, attack rate 17; the parts sets worn
+20 (20 x u32, -1 none: `enCreationPartsSetID`); the body 100 (16 floats: shoulder breadth, five bone scales, the
+blending rate and nine rates; then muscle type and level, matrix scale, figure mode); colours 168 (120 x
+TK_CreationColorData_st: palette, a flag byte, row, column, saturation); break levels 1128 (4 x 288: 34 parts of
+ModelData u32 and slot u8, then oppai swing, foot sound, hit material, equip weight); equipped category diff 2280;
+parts sounds 2288 (20 x 4); parts coordinates 2368 (19 x 96: valid, parts id, parent bone, order, 7 vectors); weapon
+4192 (700: style, variation, additional effect, 4 colours at +8, 4 stickers at +40, trace colours +408, effect +624);
+update time 4892; break effects 4920 (3 x 16 x 12); stickers 5496 (84 x 92, CCreationBakingInfo: illustration id, map,
+bake type, colour categories, guide region and id, OLT key +14, OLT index +16, OLT relation +17, slot, mirror, ten
+floats of placement, 4 colours at +60); height 13224; facial motion name 13225 (5); a short name 13230 (15, empty in
+Creation's); the name 13245 and as typed 13290 (45 each, UTF-8: the game turns `%`, `#`, `$` into their full-width
+forms, sub_8233BA50); checksum 13336 (sub_82245F98: each word turned left by an amount the word before sets, XORed).
+The game's repair pass (sub_82221D88: r3 the record, r4 a byte whose 0x10 makes it check the checksum and refuse a
+wrong one) clamps the attack rate (80-200), pitch and formant (-50 to 50), flanger (0-2) and six body sizes (shoulders
+0.08-0.15, upper 0.9-1.2, lower 0.9-1.1, face 0.9-1.1, hand 0.7-1.1, body 0.8-1.2). A ModelData is four bytes: parts
+set type, table index, variation, segment. The 360 game did not check records from other consoles (sub_822958C8 only
+replaced one with a template of the same style when its player chose not to see created characters). The check runs
+this pass too, on a copy in a buffer of the SDK's own heap (a save slot would not do: the creation manager copies
+slots as it goes), after its own checks, and refuses a record the pass refuses or would change; its own checks hold
+the same limits, so the pass is a second opinion.
+
+**What the game has.** At the select screen, its object's [+1264] is the creation context (sub_8223BE80,
+sub_8223BF60): +12 the parts sets of each base type (6 x {type, count, entries of 2,496 bytes}: the id at +0, the
+category +4, the release +16, the members +20, a count and 14 of 9 models each; character exclusive +2452, forbidden
++2460), from its builder [+28] (+14788), whose +14860/+14864 are the weapons (count, entries of 160 bytes: style,
+variation, release +12). In the test PC's game: 645 male and 677 female parts sets, 2,897 models, 203 weapons (189
+released) in 29 styles, the palette (sub_8222C450's [0x82767918]: +8 the last row, +10 the last column) 65 x 33.
+Creation's illustrations (stickers: CreationIllustrationInfo, 204 bytes) are loaded in Creation mode only (the baking
+guide manager, sub_8222B858, at a Creation object's +15048, its table at +140: count +52, entries +56): 446, each with
+its own texture (OLT index, relation, key, which a record's sticker repeats) and release; the check carries them
+(creation_stickers.inc, tools\py\creation_stickers.py from a dump of that table) and asks the game which of their
+releases this PC has. sub_8245BED0 answers whether a release id is released (unlocks.cpp opens everything but
+downloadable content, state 3, and hidden entries). A parts set's models in the record must be among its base type's
+(the body's 0x020000xx included).
+
+**A customized fighter's costumes.** A customized fighter (a regular fighter re-dressed in Creation: the fighter's own
+character type, base type 5) wears that fighter's own costumes, which the select screen does not read. Its builder
+keeps the creation data's archive ([+14868]'s object, its data at +12: a count of files, then their offsets;
+sub_8223BC98 and sub_8223BD28 give a base type's data and its size, base types 0 to 4 files 0 to 4 and 5 file 11,
+scrambled text that only the game's reader parses) and reads only base types 0 and 1 from it (sub_8223D080); Creation
+reads 5 as well (sub_82249BB0). So once at the select screen creation.cpp reads base type 5 with the game's own loader
+(sub_8221E190: r3 a table {type, count, entries}, r4 the base type, r5 and r6 the data and its size) into a table in
+the SDK's heap; the loader takes the entries from the game's heap (294 KB), which go back to it at once
+(sub_8266A1B0). The test PC's game has 118 parts sets there, none downloadable: 89 of category 19 (+4), each a
+fighter's whole costume (id 0x0013vvcc: cc the fighter's costume code, vv the costume; one model, parts set type 0, in
+slot 31), and the 29 of category 21 that every base type's table has, the fighters' hair (0x020200cc, models
+0x01nn0000 in slot 15). Each fighter's costume code is in the game's character table (sub_823507F0: 33 entries of 36
+bytes from 0x82743828, the character type at +0 and the code at +4; Patroklos, 18, has 0x35, as his models 0x0035vv00,
+his facial motion r035 and sub_822958C8's templates carry). Only a fighter's first two costumes (vv 0 and 1, the
+select screen's own two) load in a fight: with the third (vv 4, Patroklos's 0x00130435 and model 0x00350300) both
+games gave up loading the fight after 40 s, so vv 4 and 5 are left out. A customized fighter must have base type 5,
+wear one of its own two costumes in every break level (without one the game does not list it), wear nothing else but
+the hair, and have a voice the game knows (sub_82351040 keeps 1-8, 11-23, 26, 34-36, 40-41, 47-66, 96-111 and 255 and
+turns any other into 257, with which a customized fighter's fight never loads; an original character takes it).
+Another fighter's costume or a creation body's parts are refused though the game copes with them (it loaded
+Mitsurugi's costume on Patroklos), and so is another base type. `SC5_TEST_KNOWN_OUT=<file>` writes what the check
+read, as text: sc5\tests\data\known.txt is the test PC's (2026-11-20: 1,322 parts sets and 2,897 models for original
+characters, 28 fighters' own costumes), which creation_check_test checks the game's records against.
+
+**What breaks the game.** Records with one area garbled and their checksum made right (tools\creationfuzz.py), loaded
+in two games with the check off (`SC5_TEST_CREATION_UNCHECKED=1`), 2026-11-19: unknown models (ModelData) hang the
+game for good at the costume panel; unknown stickers (ids, textures) keep the fight from loading (the stage select
+waits forever); a weapon garbled whole crashes the game as the fight is set up (it reads the weapon's file through a
+bad pointer, sub_82149550); garbage body sizes and rates (huge, NaN) hang both games as the fight starts. The check
+refuses all of these. The game itself copes with the rest, each fought in sync: unknown parts sets (ignored), a weapon
+variation its style lacks, the weapon's effect and trail bytes, a sticker's other bytes and huge or NaN placement,
+parts coordinates (sub_822429C0 skips a part not worn or a bone not allowed and clamps the offsets), colours
+(sub_82249FF0 and sub_8222C450 check the palette and the place), the small ids (select number, model, facial motion,
+voice, eyebrow, height), break effects, parts sounds, the break levels' tails, the body's muscle and figure bytes,
+names (shown as they are); a character type or style the game lacks is not listed at all. The check holds most of
+these to Creation's limits too. The customized Patroklos (`--record patroklos`, 2026-11-20) did the same in every area
+(unknown models and stickers stall the game, a weapon garbled whole crashes it, garbage body sizes hang it, a garbage
+type is not listed, the rest fought in sync), and more: an unknown voice (the header's small ids, then the voice
+alone) and his third costume made both games give up loading the fight, and with no parts at all he is not listed; his
+second costume, any voice the game knows (none, a created character's, Mitsurugi's), another fighter's hair, another
+fighter's costume and a creation body's base type fought in sync. The check refuses the first three, and of the rest
+another fighter's costume and the other base type.
+
+**The select screen's list.** A on the Creation slot or a fighter asks the screen's provider, the creation manager
+([object + 1256], vtable 0x820BFBDC), for that character's entries (sub_82221408, up to 50) and refuses an empty list
+(sub_823000B0). The manager keeps its own copy of each slot (50 x 13,544 bytes from +4: the record, then what it works
+out from it: the parts it loads at +13340 with their count at +13476, which its lists take as "used", the type +13480,
+the DLC flag +13528), filled from the save as a VS Battle's menus come. A record placed during the select screen needs
+its entry filled too: the game's own sub_82220B50 (r3: a word holding the entry's address, r4: the record), called
+from the frame's top on the main thread; an earlier match's entry is dropped (+13476 = 0) when its slot is cleared.
+The costume panel lists a fighter's standard costumes first, then its created ones in slot order; the other PC's
+record goes into slot 49 (player 1's) or 50 (player 2's), so each game knows where it is. The player's own records
+that fail the check are taken out at the select screen, once its manager is there: the slot's header cleared and the
+entry emptied. An entry left with parts stays on the costume panel, and the panel then no longer matches the slots: a
+created pick of that fighter would be taken for a standard costume, its record not sent (seen 2026-11-20, the two
+games showing different costumes). The manager is filled from the save again for the next match, the cleared header
+notwithstanding, so SyncEntries empties those entries again each frame of the select screen, before any pick.
+
 ## Sound levels (sound.cpp)
 
 The game's sound is CRI AtomEx with one configuration (the ACF, registered from memory; `SC5_DBG_SOUND=1` logs its
@@ -640,7 +782,8 @@ submenu's at +0x98 (Quick Battle 2, VS Battle 3); UP lowers them. Back from VS B
 on VS Battle, so the autopilot goes by these cursors, not by a fixed path: Offline Play, A; VS Battle, A; VS Battle's
 settings menu (Start Match, Player "Player VS CPU", Battle Count 3, Round Time 60, CPU Strength, Default), A on Start
 Match; the select screen; the stage select; loading; the fight. After the last round the winner's pose, the Results
-screen (A: Next), then a menu: Rematch ("fight again with the same character and settings": no loading, no intro; not used online),
+screen (A: Next), then a menu: Rematch ("fight again with the same character and settings": no loading, no intro;
+online when both players chose REMATCH, above, "The round's call"),
 Character Select, Return to Astral Home (it asks again, Yes / No, the cursor on No). START in a fight pauses it: Return
 to Game, Move List, Options, Character Select, Return to Astral Home (the same question). `park` leaves a fight through
 that menu, the result through the result's, the select screens with B.
@@ -661,7 +804,7 @@ character id, +0x24 the release id, +0x26 the icon), row by row, as the screen n
 | 2 | Mitsurugi (0) | Maxi (1) | Yoshimitsu (24) | (empty) | (empty) | Dampierre (13) | Voldo (2) | Astaroth (7) |
 | 3 | Creation | Alpha Patroklos (19) | Elysium (25) | Edge Master (5) | Algol (12) | Kilik (26) | Pyrrha Omega (17) | Random |
 
-Devil Jin is not on it (in SC5 a style for created characters only), though data\sc5.json lists him.
+Devil Jin is not on it (in SCV a style for created characters only), though data\sc5.json lists him.
 
 **Picks.** A side the start line names (a roster id, or `<character id>.<costume>` from a result line) the autopilot
 picks on both PCs: the cursor one press toward the slot at a time, A, the costume panel to the costume (in a mirror
@@ -674,8 +817,21 @@ other game follows: their cursor as it moves, then their character and costume (
 **The stage** must be the stage select's own choice in both games: with Random each game draws its own (seeding all
 four generators in the frame of the press did not make the draws alike), and player 2's game taking player 1's stage
 id at the battle setup was not enough (the fighters started elsewhere: the stage select sets up more than the id the
-battle setup copies). The autopilot waits 5 s on the stage select (a press before it takes them was lost in one game
-and not the other), then RIGHT 1 + seed % 8 times from Random, A.
+battle setup copies). The stage select (VS Battle's and Training's; select.cpp) is the object sub_8234C028 updates
+every frame it is up: its cursor at +200 goes over 28 places, 0 Random and the 27 stages to its right, wrapping both
+ways (sub_8234C3F0). Online the player whose turn it is picks on their own PC with their own controller (LEFT, RIGHT
+and A; while A is down it goes alone, so a press as the cursor wraps cannot land on Random) and the other game
+follows: its cursor where theirs is, then their stage (STAGE packets, repeated; a spectator's game from the feed).
+Random is the match's seed's (A on it: place 1 + seed % 27, the same in both games; the game's own Random would draw
+on each PC); a player who has not picked after a minute gets it too. Whose turn: player 1's in a match from a start
+line, then the last match's loser's in a rematch through Character Select (player 1's after a draw; player 1's game
+says whose in its STAGE packets). The chooser's game says which place it took as the game takes it (versus.cpp's
+hook of the battle setup, sub_8243D2A0, calls the autopilot's OnSetup before player 2's game waits there for player
+1's setup: player 1's game must have its pick first). The game's own Rematch keeps the stage; a rematch through
+Character Select with `stage=keep` takes both cursors to the last match's place. Presses come 5 s after the stage
+select came up (a press before it takes them was lost in one game and not the other). Offline (Training) the
+autopilot goes RIGHT 1 + seed % 27 times from Random, A. `SC5_TEST_STAGE=<place>|random` stands in for the chooser
+in tests (a press every half second).
 
 **The battle setup** (versus.cpp, sub_8243D2A0 copying the VS settings record into the battle setup; the record:
 per side 88 bytes: +0 1 a player / 2 the CPU, +4 the input, +8 the rounds to win (Battle Count), +12 and +16 health
@@ -685,9 +841,16 @@ seed (Park-Miller and TT800, 0x829249F0-0x82924A87) and of the counters that sta
 for them and takes them (SETUP). Both then seed the C library's rand and the Mersenne Twister with the match's seed.
 
 **The result.** A match is over when a KO goes on to neither its replay nor "between rounds" (battle state 0xBC,
-then 0x160). The rounds each side won: +0x75C in each player's object (+0x784 the same). The result line's
-`p1_char`/`p2_char` are the character ids above with the costume index after a dot; a drawn match (0-0 on time)
-gives `winner=0`, which the server does not take yet.
+then 0x160). Each side's round points: in each player's object +0x75C, the rounds it won, and +0x764, the drawn ones
+(a round that runs out of time even, and a double KO: both players get the point); +0x760 counts the lost ones. The
+game ends the match once a side's points reach the rounds to win, and as a draw when a drawn round takes both there
+(its Results screen: Draw for both players). +0x788 counts the points too, but a KO that ends the match plays its replay
+first, and by the end only +0x75C has that round. The result line's `p1_rounds`/`p2_rounds` are the points and
+`winner` the side with more, 0 a draw, which the server records for nobody (no casual win, no point in a set). Checked
+2026-11-19, both games alike each time: a KO ending a best of 1 (0-1), of 3 (2-1) and of 5 (3-1), a round won on health
+at the time limit (1-0), a won round then a drawn one (2-1), two drawn rounds (2-2) and a double KO (1-1). The line's
+`p1_char`/`p2_char` are the character ids above with the costume index after a dot, a created character's
+`c.<checksum>` ("Created characters online").
 
 **Tests** (tools\linktest.py: two games on this PC through cmd.txt and status.txt, each with its own session folder
 and an empty save, the scripted fight), 2026-11-17: boot to `ready` in 40 s; start to `in_match` in 31-38 s (31 s
@@ -738,13 +901,13 @@ health refilled on the same frames in both, BACK at fight frame 1500 ended it fo
 **A spectator** (`watch=1 feed=...`, netplay.cpp's Watch*): the game goes to VS Battle's select screen as a player's
 does (its autopilot's side is neither player's: both follow the feed's picks, or the start line's), takes player 1's
 battle setup from the feed at its own (versus.cpp's WaitSetup), meets both players' READY at the round's call and
-takes player 1's counters, battle state machine and whole fight there (the players' block sync gives player 2's game
-only the blocks that differ; a spectator cannot ask), then runs every frame on both players' inputs from the feed:
-never a guess, the neutral frames where the players had them, its own checks against theirs. Far behind, it runs up
-to 120 frames a frame unseen (frame::RunAgain) until within 30 frames. Three games (tools\linktest.py --watch, a relay
-in place of the launchers' feed): the spectator's frame log was byte for byte the players', its 221 checks agreed with
-theirs, the same result line, also with 60 ms each way between the players (22 rollbacks) and picks on the select
-screen; the feed was 254 KB.
+takes the counters (the larger of the players'), player 1's battle state machine and whole fight there (the players'
+block sync gives player 2's game only the blocks that differ; a spectator cannot ask), then runs every frame on both
+players' inputs from the feed: never a guess, the neutral frames where the players had them, its own checks against
+theirs. Far behind, it runs up to 120 frames a frame unseen (frame::RunAgain) until within 30 frames. Three games
+(tools\linktest.py --watch, a relay in place of the launchers' feed): the spectator's frame log was byte for byte
+the players', its 221 checks agreed with theirs, the same result line, also with 60 ms each way between the players
+(22 rollbacks) and picks on the select screen; the feed was 254 KB.
 
 **The match's stats**: `stats-<match>.json` in the session folder every 10 s and at the match's end (docs\PROTOCOL.md
 3.4), from net::MatchStatsJson.

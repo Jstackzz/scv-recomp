@@ -3,7 +3,9 @@
 # with game 2's heap 2 MB higher, as a second PC's lies elsewhere, both players mashing varied moves (tools/py/mash.py:
 # throws, quarter circles, Critical Edge motions, guards) for 7,000 fight frames; every check frame's snapshot dumped in
 # both and compared (tools/py/snapsweep.py). Three matches at a time, on a copy of the release build (a build can go on
-# meanwhile). Prints each pair's summary: the check frames compared and every word that differed.
+# meanwhile). SC5_TEST_STAGE=random stands in for the player who picks the stage (else the stage select waits a minute
+# for them and the match runs out of time). Prints each pair's summary: the check frames compared and every word that
+# differed.
 #   tools/heapsweep.sh <work dir> [first pair 0] [last pair 13] [lag ms 0]
 set -u
 W=$1; FIRST=${2:-0}; LAST=${3:-13}; LAG=${4:-0}
@@ -26,7 +28,7 @@ run_pair() {
     --runs "$(cygpath -w "$W/runs$slot")" \
     --fight1 "$(python -I tools/py/mash.py $((i * 2 + 1)) 7000)" --fight2 "$(python -I tools/py/mash.py $((i * 2 + 2)) 7000)" \
     --env "SC5_NET_DUMP_DIR=$(cygpath -w "$dumps")" --env SC5_NET_DUMP_FROM=0 --env SC5_NET_DUMP_COUNT=400 \
-    --env SC5_NET_DESYNC_CONTINUE=1 > "$W/sw$i.out" 2>&1
+    --env SC5_NET_DESYNC_CONTINUE=1 --env SC5_TEST_STAGE=random > "$W/sw$i.out" 2>&1
   { echo "=== pair $i: $p1 vs $p2"; grep -E "result|desync|error|exited" "$W/sw$i.out" | head -4
     python -I tools/py/snapsweep.py "$dumps" 2; } > "$W/sw$i.sum"
   rm -rf "$dumps"

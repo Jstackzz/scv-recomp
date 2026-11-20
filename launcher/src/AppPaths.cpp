@@ -123,6 +123,21 @@ QString gameDataDir(const QString& gameId) { return QDir(gameFolder(gameId)).fil
 QString gameUpdateDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("update")); }
 QString gameDlcDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("dlc")); }
 QString gameUserDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("user")); }
+
+QString gameSaveFile(const QString& gameId) {
+    if (gameId != QLatin1String("sc5")) return {};
+    const QDir user(gameUserDir(gameId));
+    QString newest;
+    QDateTime newestAt;
+    for (const QString& profile : user.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QFileInfo save(user.filePath(profile + QStringLiteral("/4E4D083D/00000001/SC5SaveData/savedata.bin")));
+        if (save.isFile() && (newest.isEmpty() || save.lastModified() > newestAt)) {
+            newest = save.absoluteFilePath();
+            newestAt = save.lastModified();
+        }
+    }
+    return newest;
+}
 QString gameCacheDir(const QString& gameId) { return QDir(gameFolder(gameId)).filePath(QStringLiteral("cache")); }
 
 QString buildScript(const QString& gameId) {

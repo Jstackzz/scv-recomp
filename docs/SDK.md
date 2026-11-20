@@ -1,14 +1,14 @@
 # The ReXGlue SDK
 
-SC5 is recompiled and run with ReXGlue v0.10.0 (https://github.com/rexglue/rexglue-sdk, tag `v0.10.0`,
+SCV is recompiled and run with ReXGlue v0.10.0 (https://github.com/rexglue/rexglue-sdk, tag `v0.10.0`,
 commit `c94f5eb`) with this project's changes on top, in `patches\rexglue-sdk-v0.10.0.patch`:
 
 - MK9 Online's patch (mk9-rollback `patches\rexglue-sdk-v0.10.0.patch` as of MK9 0.5.11, 2026-11-12): file
   reads into write-protected guest pages, the critical section hook rollback uses, GPU fixes, logging limits and
-  the rest that MK9's `docs\GAME.md` lists. SC5 needs the same rollback hooks, so it starts from there.
+  the rest that MK9's `docs\GAME.md` lists. SCV needs the same rollback hooks, so it starts from there.
 - `dcbz` clears 128 bytes (`src\codegen\builders\system.cpp`). The Xbox 360's CPU has no 32-byte cache line
   mode: `dcbz` clears the whole 128-byte line, like `dcbz128` (Xenia Canary 72ce130, the commit from which
-  Soulcalibur V runs there). SC5 clears memory with `dcbz; addi rX,rX,128` loops (630 of them); with a 32-byte
+  Soulcalibur V runs there). SCV clears memory with `dcbz; addi rX,rX,128` loops (630 of them); with a 32-byte
   clear three quarters of every line keep old data and the game never leaves its boot sequence (black screen).
 - Fighters' textures made as a fight loads (`src\graphics\d3d12\command_processor.cpp`, `IssueCopy`). Soulcalibur V
   draws each costume texture on the GPU, mip by mip (the costume's colours over the texture's template), resolves
@@ -90,6 +90,38 @@ commit `c94f5eb`) with this project's changes on top, in `patches\rexglue-sdk-v0
   ROV games beside them. Not covered: scale 4 on RTV, and with 8 to 12 games on the GPU some games stalled while
   loading a fight. A scale-3 game on RTV commits about 7.5 GB of system memory (ROV 3 GB) and uses 5 to 7 GB of
   video memory: four RTV games and two ROV games ran this PC's 31 GB out (stalls of up to 90 s).
+- Draws that make textures wait for their pipeline (`src\graphics\d3d12\command_processor.cpp`, `IssueDraw`,
+  `IsDrawKeptWhilePipelineCreated`; `pipeline_cache.cpp`, `AwaitPipelineCreation`, 2026-11-19). With
+  `async_shader_compilation` (on by default) a draw whose pipeline was still being created was dropped, and the
+  resolve of its pass copied nothing. For the screen that is a frame; for a texture a game draws once and keeps it is
+  for good. On a PC whose shader cache was cold (a fresh install, or the other render target path), the first of
+  Soulcalibur V's costume textures a fight load made were left with what their memory held before: Algol's face
+  black (a 0.1.2 tester's) or in blue and white blocks (ROV here, 36 resolves of one load not copied, against 1 on
+  RTV with a warm cache). Now a draw into a texture compression pass, a square target (the costume images are 32 to
+  1024 square) or one smaller than the screen's (`IsSkippedTarget`) waits for it: the queued pipelines are made on
+  this thread and the creation threads, as `EndSubmission` does at the end of every submission anyway. The screen's
+  draws are still dropped. One load waited 80 times, 0 to 3 ms each.
+- The Xbox 360's 16-bit floats (`src\graphics\pipeline\shader\dxbc_translator_om.cpp`, `ROV_PackPreClampedColor`,
+  `ROV_UnpackColor`, `CompletePixelShader_WriteToRTVs`; `command_processor.cpp`, `IssueDraw`; `pipeline_cache.cpp`;
+  `render_target_cache.cpp`, `SetCommandListRenderTargets`, 2026-11-19). Its 16-bit float has no infinity or NaN:
+  exponent 31 is a number's, 65536 to 131008. Soulcalibur V's texture compression passes draw the DXT blocks as
+  16-bit floats (a 64bpp pixel a DXT1 block or half of a DXT5 one), and white's 565 colour (0xFFFF) and rows of index
+  3 texels have exponent 31. Both paths clamped those to 65504 (0x7BFF or 0xFBFF: about 850,000 words of one load's
+  blocks, against some 600 of the values beside them): a block whose two colours clamped alike turned into DXT1's
+  three-colour mode, whose index 3 is black, and white costumes had black and blue specks (a tester's white cat
+  suit, Ezio's robe and hood). Now on ROV the pack writes exponent 31 (half the number, then 0x400 added) and the
+  unpack reads it; on the host render target path a 16-bit float target drawn unblended is written through its UINT
+  view (the ownership transfer one), the pixel shader packing the bits the same way
+  (`DxbcShaderTranslator::Modification::pixel.color_float16_bits`; blended draws still go through the float view).
+  Ezio's robe is clean on both paths, at render scale 1 and 2. The dotted lines on Creation's floor are its texture's.
+- The pictures Creation takes (`src\graphics\d3d12\command_processor.cpp`, `IsSnapshotResolve`, 2026-11-19). For a
+  character's thumbnail (the one Creation Home shows, and Shoot Picture's Take Thumbnail) Soulcalibur V draws the
+  character once into a 176x256 target, resolves its depth and its color, draws a picture of them (3 draws),
+  resolves that, and makes the panels' picture from them on the CPU, which read zeros: the panels stayed black. Now
+  a color resolve made once (its range not resolved in the two frames before), smaller than the screen's targets, in
+  the frame of a depth resolve of the same rectangle made once too, is read back at once: two 176x256 resolves a
+  picture, on both paths and at render scale 2. In fights the small targets (bloom, the exposure's tiles) are drawn
+  every frame and resolve no depth: whole matches (load, fight, result) read none back.
 
 ## Where it lives
 
@@ -133,8 +165,8 @@ from the repository; the other diffs add the files this project created, which a
 `resolve_unscale_cs.h` is built from `resolve_unscale.cs.hlsl` with the Windows SDK's `fxc` (the command is at the
 top of the `.hlsl`).
 
-(Last refreshed 2026-11-18: 37 files, with the new command list after a texture loaded from guest memory on both
-render target paths.)
+(Last refreshed 2026-11-19: 40 files, with texture-making draws waiting for their pipelines, the Xbox 360's 16-bit
+floats and the pictures Creation takes.)
 
 A change to the code generator needs `rexglue codegen` run again (`sc5\codegen.cmd`) before the game is
 built; a change to the runtime needs only the game linked again.

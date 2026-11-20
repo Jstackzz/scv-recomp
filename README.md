@@ -1,4 +1,4 @@
-# SC5 Online
+# SCV Online
 
 Soulcalibur V (Xbox 360) running natively on Windows PCs, with online play and rollback netcode: Ranked and
 Casual matchmaking, lobbies with spectators and King of the Hill, Online Practice, single player, a leaderboard, and
@@ -11,9 +11,9 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 
 ## What you need
 
-- **Soulcalibur V, World release, Xbox 360**, as a disc image (`.iso`; Redump SHA-1
-  `43dbb40b9ef4e5a651623ada40ed4eb2066017d5`). Other regions, prints or modified copies are refused, since both
-  players of a match must run the same code.
+- **Soulcalibur V, Xbox 360**, as a disc image (`.iso`; Redump SHA-1 `43dbb40b9ef4e5a651623ada40ed4eb2066017d5`).
+  Every Xbox 360 copy, from any region, is this same World disc. A modified copy is refused, since both players of a
+  match must run the same code.
 - **Title update 1**: the Xbox Live package `TU_174Q21T_0000008000000.0000000000082` (from your console).
 - **Your own DLC**, if you have it: your Xbox 360 DLC packages. Paid DLC is only ever yours: nothing here unlocks it
   for anyone else. If you bought the DLC on PS3, `tools/py/ps3dlc.py` turns your own packs and licenses into Xbox 360
@@ -30,7 +30,7 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 2. Start `SC5Launcher.exe` and open **Build game**: pick your disc image, the title update and (optionally) your DLC
    packages, then **CHECK AND BUILD**. The launcher checks each one, extracts the disc and compiles the game's code
    for your PC. That happens once and takes a few minutes.
-3. Sign in (top right) and play: **Ranked** or **Casual**, **Lobby** (best of 1, 3 or 5, King of the Hill, Online
+3. Sign in (top right) and play: **Ranked** or **Casual**, **Lobby** (1, 2 or 3 rounds to win, King of the Hill, Online
    Practice, watching), or **Single player** (the game's own modes, Training with every character, and two-player
    versus on one PC).
 
@@ -44,8 +44,9 @@ again by itself before you play.
   put back 4 frames and run again with the fight the same byte for byte, and matches at 100 and 150 ms each way in
   sync at a steady 60 frames a second, a spectator too. Sounds stay as you heard them through a rollback: none
   start twice and a wrong guess's are stopped. How it works and how it was tested: [docs/GAME.md](docs/GAME.md#rollback-battlecpp-netsynctestcpp).
-- **Every mode online**: versus (Ranked, Casual, lobbies), Online Practice (no timer, health refills), spectators,
-  King of the Hill with Respect Points, and Training offline while you wait for a match.
+- **Every mode online**: versus (Ranked and Casual, first to 3 rounds as on the console, and lobbies), Online
+  Practice (no timer, health refills), spectators, King of the Hill with Respect Points, and Training offline while
+  you wait for a match.
 - **Everything on the disc unlocked** in every mode, single player's PLAY included (the hidden characters among
   them), without touching your save. Dampierre and the DLC parts come only from your own packages; an online match
   allows Dampierre only when both players have him.
@@ -54,11 +55,19 @@ again by itself before you play.
 - **Display settings that cannot desync a match**: window mode and size, internal resolution (720p as on the console
   up to 4x), anti-aliasing, texture filtering, V-sync, brightness. Each changes only how a frame looks, never what
   the game computes, so two players may pick differently. Music, effects and voices levels apply at once.
-- **Rematches in the game**: after a match the game stays at its result screen. Casual offers REMATCH (the same
-  characters on the same stage) and CHARACTER SELECT (both pick again); a ranked set goes on by itself, its last
-  match's winner keeping their fighter while the loser picks again. The next match starts from there, without
-  closing the game. The VS screen before each fight (both fighters on their cards), the stage's fly-over and the
-  fighters' intros are skipped, as START skips them on the console.
+- **Rematches in the game**: after a match the game stays at its result screen. Casual offers REMATCH (the game's
+  own Rematch: the same characters on the same stage, straight back into the fight) and CHARACTER SELECT (both pick
+  again); a ranked set goes on by itself, its last match's winner keeping their fighter while the loser picks again.
+  The next match starts from there, without closing the game. The VS screen before each fight (both fighters on
+  their cards), the stage's fly-over and the fighters' intros are skipped, as START skips them on the console.
+- **The players pick the stage** on the game's own stage select, with their own controller: player 1 for the first
+  match, then the loser of each match, while the other game follows. Random draws the same stage in both games, and
+  no pick within a minute counts as Random. REMATCH keeps the stage.
+- **Created characters online**: a player's own created characters (made in Creation in the offline game) are on the
+  select screen online: original characters under the Creation slot, customized fighters (a regular fighter re-dressed
+  in Creation) among their fighter's costumes. The other player's game gets the character's record and checks every
+  part of it against its own game (parts, models, stickers, colours, weapon, limits) before anything loads it; one
+  with downloadable parts only plays when both players have the same ones. A ranked winner keeps theirs.
 - **The launcher**: accounts, MATCH FOUND with the opponent's connection, ranked sets with 16 Soulcalibur rank
   titles, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and F3 (picture)
   reports to the server. Players who cannot reach each other play through the server's relay.
@@ -67,8 +76,6 @@ again by itself before you play.
 
 - Few matches have been played between two PCs yet (the first ones found the throws' desync, fixed in 0.1.2); most
   tests ran on one PC with lag added, one game's memory moved to stand in for a second PC.
-- A rematch goes back through Character Select and loads the fight again (a few seconds more than the game's own
-  Rematch, which would part the two games).
 - Screens can hitch for 70-210 ms while they load. Only tested on a fast PC so far.
 - More in [docs/LAUNCHER.md](docs/LAUNCHER.md#known-limitations).
 

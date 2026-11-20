@@ -1,6 +1,6 @@
 #pragma once
 // The launcher's look: navy and black, gold and cool blue (Soulcalibur's colours, none of its art), the QSS
-// sheet, and SC5 Online's own emblem and icon (launcher/tools/make_art.py).
+// sheet, and SCV Online's own emblem and icon (launcher/tools/make_art.py).
 
 #include <QIcon>
 #include <QPalette>

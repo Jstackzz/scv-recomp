@@ -17,6 +17,9 @@ struct Plan {
   int side = 0;                // this PC's player online: 0 (player 1) or 1 (player 2)
   int slots[2] = {-1, -1};     // the launcher's picks as select screen slots; -1: that side's player picks
   int costumes[2] = {-1, -1};  // the costume to give a launcher's pick (-1: the first)
+  // a created character to pick again (its checksum, the result line's c.<checksum>): the player's own game picks it
+  // for them (slots: -1), the other game follows that pick as any of the player's and takes the record again
+  uint32_t created[2] = {0, 0};
   int wins = 2;                // rounds a player must win
   bool hand_over = false;      // a plain game: the player takes the select screen over (the autopilot stops there)
   bool two_players = false;    // VS Battle's "Player VS Player" (offline versus: the second pad picks player 2)
@@ -34,14 +37,20 @@ bool AtHoldPoint();
 void Begin(const Plan& plan);
 // back to the hold point
 void Park();
-// the next match from the result screen through Character Select (a new seed is the link's): per side the same fighter
-// again, unless `named[side]` (the plan's slot then: a fighter, or -1 for that side's player to pick again);
-// `same_stage`: the stage picked as for the last match (the game's own Rematch keeps it)
+// the next match from the result screen (a new seed is the link's): per side the same fighter again, unless
+// `named[side]` (the plan's slot then: a fighter, or -1 for that side's player to pick again); `same_stage`: the last
+// match's stage. The same two fighters on the same stage: VS Battle's own Rematch (as on the console); else through
+// Character Select and the stage select.
 void Rematch(const Plan& plan, const bool named[2], bool same_stage);
+// the VS settings go into the battle setup (versus.cpp, before player 2's game waits for player 1's there): the stage
+// select's pick has been taken
+void OnSetup();
 // still pressing buttons (menus)
 bool Busy();
 // lost: the game went somewhere the autopilot does not know (the launcher should start it again)
 bool Lost();
+// why, when the autopilot knows (a created character refused); empty otherwise
+std::string LostWhy();
 
 // The match's result, once the fight is over: the winner (1 or 2), the rounds each won, and each side's character as
 // the game's id with the costume after a dot ("21.1"). True once per match.

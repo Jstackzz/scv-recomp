@@ -27,7 +27,7 @@
 
 LoginDialog::LoginDialog(ServerClient* server, const QString& lastName, QWidget* parent)
     : QDialog(parent), server_(server) {
-    setWindowTitle(tr("SC5 Online account"));
+    setWindowTitle(tr("SCV Online account"));
     setModal(true);
     setMinimumWidth(420);
     auto* v = new QVBoxLayout(this);
@@ -305,7 +305,7 @@ UpdateDialog::UpdateDialog(const QJsonObject& release, bool required, const QStr
     : QDialog(parent) {
     const QString version = release.value(QStringLiteral("version")).toString();
     const QString page = release.value(QStringLiteral("page")).toString();
-    setWindowTitle(tr("SC5 Online %1").arg(version));
+    setWindowTitle(tr("SCV Online %1").arg(version));
     setModal(false);
     setMinimumWidth(500);
     auto* v = new QVBoxLayout(this);
@@ -318,7 +318,7 @@ UpdateDialog::UpdateDialog(const QJsonObject& release, bool required, const QStr
     auto* title = ui::label(required ? tr("UPDATE NEEDED") : tr("UPDATE AVAILABLE"), "CardTitle");
     title->setAlignment(Qt::AlignCenter);
     v->addWidget(title);
-    auto* big = ui::label(tr("SC5 Online %1").arg(version), "Big");
+    auto* big = ui::label(tr("SCV Online %1").arg(version), "Big");
     big->setAlignment(Qt::AlignCenter);
     v->addWidget(big);
     auto* info = ui::label(required ? tr("You have %1. The server needs this version to play online.")
@@ -435,9 +435,12 @@ CreateLobbyDialog::CreateLobbyDialog(const Game& game, const QString& defaultNam
     password_ = new QLineEdit;
     password_->setPlaceholderText(tr("optional"));
     password_->setMaxLength(64);
+    // the rounds a player must win, as the console's Battle Count names them (the server's `rounds` is the best of:
+    // 1, 3 or 5); 3, as on the console
     rounds_ = new QComboBox;
-    for (int r : {1, 3, 5}) rounds_->addItem(tr("Best of %1").arg(r), r);
-    rounds_->setCurrentIndex(1);
+    for (int wins : {1, 2, 3})
+        rounds_->addItem(wins == 1 ? tr("1 round to win") : tr("%1 rounds to win").arg(wins), wins * 2 - 1);
+    rounds_->setCurrentIndex(2);
     koth_ = new QCheckBox(tr("King of the Hill"));
     koth_->setChecked(kingOfTheHill && cfg::get(QStringLiteral("online/koth"), false).toBool());
     // always in the window (Online Practice aside), on with a server that has it

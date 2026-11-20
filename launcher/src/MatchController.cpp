@@ -90,7 +90,7 @@ void stopHashingGameFiles();
 MatchController::MatchController(ServerClient* server, QObject* parent)
     : QObject(parent), server_(server), udp_(new UdpRendezvous(this)) {
     // what a desync report says of the game's files (gameFiles): their contents hashed in the background meanwhile (once:
-    // later runs hash only what changed). SC5 Online's one game; MK3D Online's ids hashed whatever folder they named
+    // later runs hash only what changed). SCV Online's one game; MK3D Online's ids hashed whatever folder they named
     startHashingGameFiles(QStringLiteral("sc5"));
     connect(server_, &ServerClient::message, this, &MatchController::onServerMessage);
     connect(server_, &ServerClient::loggedIn, this, [this] {
@@ -1383,7 +1383,7 @@ QString MatchController::startLine(const QJsonObject& go) const {
 
 // The series' next match from the last one's result screen (docs/PROTOCOL.md 3.3, rematch): its id and seed, the picks
 // (the same fighters again, a ranked set's winner keeping theirs, or `-`: picked again on the select screen) and, the
-// same two fighters again, the same stage, as the game's own Rematch would
+// same two fighters again, the same stage: the game plays that as VS Battle's own Rematch
 QString MatchController::rematchLine(const QJsonObject& go) const {
     const QString p1 = str(go, "p1").isEmpty() ? QStringLiteral("-") : str(go, "p1");
     const QString p2 = str(go, "p2").isEmpty() ? QStringLiteral("-") : str(go, "p2");
@@ -1782,7 +1782,7 @@ bool MatchController::startLocalTest(const QString& gameId, const QString& mode,
     const QString match = QStringLiteral("local-") + QDateTime::currentDateTime().toString(QStringLiteral("hhmmss"));
     const auto line = [&](int side, int local, int remote) {
         return QStringLiteral("start game=%1 mode=%2 side=%3 local_port=%4 remote=127.0.0.1:%5 delay=%6 seed=%7 "
-                              "p1=%8 p2=%9 rounds=3 ranked=0 match=%10")
+                              "p1=%8 p2=%9 rounds=5 ranked=0 match=%10")
             .arg(gameId, mode).arg(side).arg(local).arg(remote).arg(cfg::inputDelay()).arg(seed).arg(p1, p2, match);
     };
     localStartA_ = line(1, portA, portB);

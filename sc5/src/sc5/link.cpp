@@ -8,7 +8,8 @@
 //            p1/p2: a roster id (data\sc5.json), the game's character id with a costume ("21.1"), or "-": that side's
 //            player picks on the game's own select screen and the other game follows (sc5/autopilot.h)
 //   park     back to the hold point (from the result: Return to Astral Home)
-//   rematch [seed=N] [match=<id>] [p1=.. p2=..]   the same fighters again (or new ones), through Character Select
+//   rematch [seed=N] [match=<id>] [p1=.. p2=..] [stage=keep]   the same fighters again (or new ones): VS Battle's own
+//            Rematch for the same two on the same stage, else through Character Select and the stage select
 //   quit     exit
 //
 // status.txt: booting, ready, starting match=<id>, in_match match=<id>, result winner=N p1_rounds=N p2_rounds=N
@@ -83,11 +84,27 @@ void WriteStatus(const std::string& line) {
   REXLOG_INFO("sc5 link: status {}", line);
 }
 
+bool g_taken_unread = false;  // cmd.txt.taken claimed and not read yet
+
 bool ClaimCommand(std::string& out) {
   const std::wstring taken = g_cmd + L".taken";
-  if (!MoveFileExW(g_cmd.c_str(), taken.c_str(), MOVEFILE_REPLACE_EXISTING)) return false;
-  FILE* f = _wfopen(taken.c_str(), L"rb");
-  if (!f) return false;
+  if (!g_taken_unread) {
+    if (!MoveFileExW(g_cmd.c_str(), taken.c_str(), MOVEFILE_REPLACE_EXISTING)) return false;
+    g_taken_unread = true;
+  }
+  // Another program (a virus scanner) can hold the file it just saw renamed for a moment: a test game once lost its
+  // quit that way. The command waits for the next try then, and no newer one is claimed over it.
+  FILE* f = nullptr;
+  for (int i = 0; i < 10 && !(f = _wfopen(taken.c_str(), L"rb")); i++) Sleep(2);
+  if (!f) {
+    static uint64_t warned = 0;
+    if (frame::Count() > warned + 300) {
+      warned = frame::Count();
+      REXLOG_WARN("sc5 link: cmd.txt.taken cannot be read yet (error {}): trying again", GetLastError());
+    }
+    return false;
+  }
+  g_taken_unread = false;
   char buf[2048];
   const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
   std::fclose(f);
@@ -118,11 +135,18 @@ std::string Key(const Command& c, const char* k, const char* def = "") {
   return it == c.keys.end() ? def : it->second;
 }
 
-// a start line's pick: "-" (that side's player picks), a roster id, or the game's character id with a costume
-bool ParsePick(const std::string& v, int& slot, int& costume) {
+// a start line's pick: "-" (that side's player picks), a roster id, the game's character id with a costume, or a created
+// character (c.<its checksum>, as a result line names it: its player's own game picks it, the other follows)
+bool ParsePick(const std::string& v, int& slot, int& costume, uint32_t& created) {
   slot = -1;
   costume = -1;
+  created = 0;
   if (v.empty() || v == "-") return true;
+  if (v.size() == 10 && v[0] == 'c' && v[1] == '.') {
+    char* end = nullptr;
+    created = uint32_t(std::strtoul(v.c_str() + 2, &end, 16));
+    return end && !*end && created;
+  }
   if (std::isdigit(uint8_t(v[0]))) {
     slot = select::SlotOfCharacter(std::atoi(v.c_str()));
     if (const size_t dot = v.find('.'); dot != std::string::npos) costume = std::atoi(v.c_str() + dot + 1);
@@ -162,7 +186,7 @@ void Start(const Command& c) {
                                    : autopilot::Mode::Versus;
   for (int s = 0; s < 2; s++) {
     const std::string v = Key(c, s ? "p2" : "p1", "-");
-    if (!ParsePick(v, plan.slots[s], plan.costumes[s])) {
+    if (!ParsePick(v, plan.slots[s], plan.costumes[s], plan.created[s])) {
       WriteStatus("error bad command: no character " + v);
       return;
     }
@@ -243,7 +267,7 @@ void StartWatch(const Command& c) {
   plan.mode = mode == "sparring" ? autopilot::Mode::Sparring : autopilot::Mode::Versus;
   for (int s = 0; s < 2; s++) {
     const std::string v = Key(c, s ? "p2" : "p1", "-");
-    if (!ParsePick(v, plan.slots[s], plan.costumes[s])) {
+    if (!ParsePick(v, plan.slots[s], plan.costumes[s], plan.created[s])) {
       WriteStatus("error bad command: no character " + v);
       return;
     }
@@ -320,7 +344,7 @@ void Rematch(const Command& c) {
   for (int s = 0; s < 2; s++) {
     auto it = c.keys.find(s ? "p2" : "p1");
     if (it == c.keys.end()) continue;
-    if (!ParsePick(it->second, plan.slots[s], plan.costumes[s])) {
+    if (!ParsePick(it->second, plan.slots[s], plan.costumes[s], plan.created[s])) {
       WriteStatus("error bad command: no character " + it->second);
       return;
     }
@@ -417,7 +441,8 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
     return;
   }
   if (autopilot::Lost()) {
-    WriteStatus("error the game went somewhere the launcher's autopilot does not know");
+    WriteStatus(autopilot::LostWhy().empty() ? "error the game went somewhere the launcher's autopilot does not know"
+                                             : "error " + autopilot::LostWhy());
     g_reported = true;
     return;
   }

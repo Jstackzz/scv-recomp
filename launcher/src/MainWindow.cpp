@@ -48,7 +48,7 @@ const QString kGame = QStringLiteral("sc5");
 
 MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
     : QMainWindow(parent), opts_(opts), server_(new ServerClient(this)), controller_(new MatchController(server_, this)) {
-    setWindowTitle(tr("SC5 Online"));
+    setWindowTitle(tr("SCV Online"));
     setWindowIcon(style::appIcon());
     setMinimumSize(1120, 720);
     resize(1320, 820);
@@ -159,8 +159,8 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
     connect(updater_, &Updater::readyToInstall, this, &MainWindow::installUpdateWhenFree);
     connect(updater_, &Updater::installed, this, [this](const QString& version, bool started) {
         if (!started)
-            QMessageBox::information(this, tr("SC5 Online %1").arg(version),
-                                     tr("SC5 Online is now %1: start it again.").arg(version));
+            QMessageBox::information(this, tr("SCV Online %1").arg(version),
+                                     tr("SCV Online is now %1: start it again.").arg(version));
         close();
     });
     auto whenFree = [this] {
@@ -314,7 +314,7 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
     if (winutil::smartAppControl() == 1) QTimer::singleShot(400, this, &MainWindow::warnSmartAppControl);
     if (!opts_.updatedFrom.isEmpty()) {
         applog::write(QStringLiteral("update: now %1, from %2").arg(QStringLiteral(SC5_LAUNCHER_VERSION), opts_.updatedFrom));
-        showNotice(tr("SC5 Online is now %1 (it was %2). The games you have played prepare their code for it next, "
+        showNotice(tr("SCV Online is now %1 (it was %2). The games you have played prepare their code for it next, "
                       "one at a time: a minute or two each.")
                        .arg(QStringLiteral(SC5_LAUNCHER_VERSION), opts_.updatedFrom),
                    false);
@@ -350,7 +350,7 @@ QWidget* MainWindow::buildHeader() {
     titles->setSpacing(0);
     auto* titleRow = new QHBoxLayout;
     titleRow->setSpacing(12);
-    auto* main = ui::label(QStringLiteral("SC5"), "TitleMain");
+    auto* main = ui::label(QStringLiteral("SCV"), "TitleMain");
     auto* sub = ui::label(QStringLiteral("ONLINE"), "TitleSub");
     ui::letterSpacing(main, 3);
     ui::letterSpacing(sub, 8);
@@ -457,7 +457,7 @@ void MainWindow::selectGame(const QString& id) {
     cfg::set(QStringLiteral("ui/game"), id);
     for (Page* p : pages_) p->setGame(id);
     const Game* g = GameData::instance().game(id);
-    setWindowTitle(g ? tr("SC5 Online - %1").arg(g->title) : tr("SC5 Online"));
+    setWindowTitle(g ? tr("SCV Online - %1").arg(g->title) : tr("SCV Online"));
 }
 
 void MainWindow::selectPage(int index) {
@@ -911,7 +911,7 @@ void MainWindow::cliLobby() {
                            {QStringLiteral("game"), gameId_},
                            {QStringLiteral("mode"), mode},
                            {QStringLiteral("password"), QString()},
-                           {QStringLiteral("rounds"), 3},
+                           {QStringLiteral("rounds"), 5},  // first to 3, as the console
                            {QStringLiteral("region"), cfg::region()},
                            {QStringLiteral("character"), opts_.character}};
         if (opts_.koth) create.insert(QStringLiteral("koth"), true);

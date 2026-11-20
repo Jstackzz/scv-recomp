@@ -7,9 +7,11 @@
 //   From there, by the main menu's cursors (ReadHome): Offline Play, A; VS Battle, A: VSStandard, its settings menu on
 //   Start Match: A. The select screen: player 1's side picks a character (A) and a costume (A), then player 2's side,
 //   both with the first pad ("Player VS CPU": the battle setup makes player 2 the second pad's, sc5/versus.cpp). Then
-//   the stage (RIGHT from Random as the seed says, A: the same on both PCs), loading, the fight.
-//   After the last round: the winner's pose, the Results screen (A: Next), then VS Battle's menu (Rematch, Character
-//   Select, Return to Astral Home). A fight's pause menu (START) leaves it for park.
+//   the stage select (online one player picks the stage on their own PC and the other game follows, OnStageOnline;
+//   offline RIGHT from Random as the seed says, A), loading, the fight.
+//   After the last round: the winner's pose, the Results screen (A: Next), then VS Battle's menu (Rematch: the same
+//   fight again, online when both players chose REMATCH; Character Select; Return to Astral Home). A fight's pause
+//   menu (START) leaves it for park.
 // The autopilot presses the first pad's buttons through input::SetOverride; while a match's frames run in sync the
 // netplay's inputs answer instead.
 //
@@ -31,11 +33,13 @@
 #include <fmt/format.h>
 #include <rex/logging.h>
 
+#include "sc5/creation.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/input.h"
 #include "sc5/net/netplay.h"
 #include "sc5/select.h"
+#include "sc5/testinput.h"
 
 namespace sc5::autopilot {
 namespace {
@@ -64,9 +68,15 @@ const char* PhaseName(Phase p) {
 }
 
 constexpr uint32_t kPlayer[2] = {0x82937070, 0x82994BA0};
-// in each player's object: the rounds that side won in the match (+0x784 holds the same; +0x728 counted one more
-// than the rounds won by the end of a 3-0 test match)
-constexpr uint32_t kRoundsWon = 0x75C;
+// In each player's object, as the match's last round leaves them once the match is over (its KO going on to neither its
+// replay nor "between rounds"): +0x75C the rounds that side won, +0x764 the drawn ones (a round that runs out of time
+// even, or a double KO); +0x760 counts the lost ones. The game gives a drawn round's point to both players and ends the
+// match once a side's points reach the rounds to win, a draw when a drawn round takes both there (its Results then say
+// Draw for both players). +0x788 counts those points too, but a KO that ends the match plays its replay first and by
+// the end only +0x75C has that round (a best of 1 won by a KO read 0 - 0 there), so the points are the won rounds and
+// the drawn ones (docs\GAME.md, "The result": KOs ending a best of 1, 3 and 5, a time-out won on health, a final drawn
+// round and a double KO checked, 2026-11-19).
+constexpr uint32_t kRoundsWon = 0x75C, kRoundsDrawn = 0x764;
 
 struct Press {
   uint16_t buttons;
@@ -82,19 +92,33 @@ int g_step_t = 0;
 input::Pad g_pad;      // what the autopilot presses on the first pad this frame
 bool g_local = false;  // the first pad is the local player's own this frame (with g_allow)
 uint16_t g_allow = 0;  // the local player's buttons let through
+bool g_still = false;  // and not their stick
 int g_picked_slot[2] = {-1, -1}, g_picked_costume[2] = {-1, -1};
+int g_picked_costumes[2] = {0, 0};  // the costume panel's entries when the side picked
+uint32_t g_picked_created[2] = {0, 0};  // the side's pick a created character: its checksum (0 not)
+bool g_created_placed[2] = {false, false};  // the other PC's created character for that side is in its slot
+PPCContext* g_ctx = nullptr;  // this frame's (OnFrame): the game's functions called from the autopilot
+uint8_t* g_base = nullptr;
+uint64_t g_created_wait[2] = {0, 0};        // the frame the side's created pick was first seen (the record's wait)
 int g_last_step[2] = {0, 0};
 int g_last_seq = -1;
 uint32_t g_last_battle = 0xFFFFFFFF;
 bool g_fought = false, g_over = false, g_over_reported = false;
 uint64_t g_over_at = 0;
 int g_won[2] = {0, 0};
-bool g_reselect = false;     // a rematch goes through Character Select (always so far: Rematch keeps state apart)
+bool g_reselect = false;     // a rematch goes through Character Select (else VS Battle's own Rematch)
 bool g_menu_pressed = false;  // the after-result presses went out (Leave, Again)
 uint32_t g_skip_logged = 0;   // the battle state whose skipping with A the log said last
 bool g_both = false;          // this frame's press goes to both pads (each player skips their own intro)
 int g_last_rights = 0;        // the last match's stage: that many to the right of Random on the stage select
-bool g_same_stage = false;    // the next stage select picks the last match's stage (a rematch, the same two fighters)
+bool g_same_stage = false;    // a rematch on the last match's stage (`stage=keep`)
+int g_stage_chooser = 0;      // online: whose player picks the coming stage (0 player 1, 1 player 2; player 1's game's)
+int g_stage_auto = -1;        // the chooser's game: the place the autopilot takes the cursor to and picks (Random drawn)
+int g_stage_last = -1;        // the stage select's cursor the last frame it was up
+uint64_t g_stage_up_at = 0;   // the frame the stage select came up (0: not yet)
+uint64_t g_stage_gone_at = 0; // the frame it went (0: up, or not yet)
+int g_stage_taken = -1;       // the place the stage select's pick took (the VS settings went into the battle setup)
+uint64_t g_stage_a_at = 0;    // the frame the chooser's own A went through on a stage (their moves wait 3 s after)
 bool g_fresh_save = true;     // the save has never seen the main menu (its first-visit window comes)
 bool g_practice_script = false;  // tests: SC5_TEST_PRACTICE_SCRIPT plays
 
@@ -207,9 +231,10 @@ std::string HomeState() {
   return out;
 }
 
-// the rounds each side won, from the players' objects
+// each side's round points in the match, from the players' objects: the rounds it won and the drawn ones
 void RoundsWon(int out[2]) {
-  for (int s = 0; s < 2; s++) out[s] = int(game::ReadU32(kPlayer[s] + kRoundsWon));
+  for (int s = 0; s < 2; s++)
+    out[s] = int(game::ReadU32(kPlayer[s] + kRoundsWon)) + int(game::ReadU32(kPlayer[s] + kRoundsDrawn));
 }
 
 // --- the select screen ---
@@ -234,7 +259,41 @@ struct Target {
   bool known = false, pick = false;
   int slot = -1, costume = 0;
   bool costume_known = false;
+  bool created = false;  // a created character from the other PC (its record in RemoteSlot(side) first)
 };
+
+std::string g_lost_why;  // why the autopilot gave up, when it knows
+
+// The other PC's created character for a side: whole, checked and in its slot (true), or still on its way (false). A
+// record the check refuses, one that is not the picked fighter's, or one that does not come in 20 s ends the match
+// here.
+bool PlaceCreated(int side, int slot) {
+  if (!g_created_wait[side]) g_created_wait[side] = Now();
+  creation::Record rec;
+  std::string why;
+  const int got = net::RemoteCreated(side, rec, why);
+  if (got == 0 && Now() <= g_created_wait[side] + 1200) return false;
+  if (got == 0) why = "it did not come in 20 s";
+  if (got > 0) why = creation::Check(rec);
+  if (got > 0 && why.empty() && creation::TypeOf(rec.data()) != select::IdOfSlot(slot))
+    why = fmt::format("its character type {} is not the picked {}", creation::TypeOf(rec.data()),
+                      select::IdOfSlot(slot));
+  // on top of the check: the game's own repair pass on a copy
+  if (got > 0 && why.empty()) why = g_ctx ? creation::GameRepairCheck(*g_ctx, g_base, rec) : "no game frame";
+  if (why.empty() && !creation::PlaceRemote(side, rec)) why = "it could not be placed";
+  // the select screen is up: the creation manager's copy of that slot too (its lists read the copies)
+  const uint32_t manager = select::Object() ? game::ReadU32(select::Object() + 1256) : 0;
+  if (why.empty() && (!g_ctx || !creation::FillEntry(*g_ctx, g_base, manager, creation::RemoteSlot(side))))
+    why = "the select screen's list of created characters is not there";
+  if (!why.empty()) {
+    g_lost_why = fmt::format("player {}'s created character from the other PC was refused: {}", side + 1, why);
+    REXLOG_ERROR("sc5 autopilot: {}", g_lost_why);
+    Enter(Phase::Lost);
+    return false;
+  }
+  g_created_placed[side] = true;
+  return true;
+}
 
 Target TargetOf(int side) {
   Target t;
@@ -249,9 +308,12 @@ Target TargetOf(int side) {
   if (p.phase < 0 || p.slot < 0) return t;
   t.known = true;
   t.slot = p.slot;
-  t.pick = p.phase >= 1;
+  // the character once the costume is known too: a created character's record must be in its slot before the screen
+  // lists the costumes (it lists them as A takes the character)
+  t.pick = p.phase >= 2;
   t.costume_known = p.phase >= 2;
   t.costume = p.costume >= 0 ? p.costume : 0;
+  t.created = p.phase >= 2 && p.costume == -2;
   return t;
 }
 
@@ -264,6 +326,15 @@ void OnSelect() {
     else if (In() > 600) Enter(Phase::Lost);
     return;
   }
+  // this PC's own tables for created characters (once): its player's characters that fail the check out, its
+  // downloadable parts' fingerprint to the other game; the creation manager's copies of the remote slots: none from an
+  // earlier match
+  const uint32_t manager = game::ReadU32(select::Object() + 1256);
+  if (g_ctx && creation::ReadKnown(*g_ctx, g_base, select::Object())) {
+    creation::DropRefused(*g_ctx, g_base, manager);
+    net::SetLocalDlc(creation::DlcFingerprint());
+  }
+  creation::SyncEntries(manager);
   const int step[2] = {select::Step(0), select::Step(1)};
   for (int s = 0; s < 2; s++) {
     // what a side picked, as it is picked (the cursor stays on it; the costume as its panel showed it)
@@ -274,7 +345,13 @@ void OnSelect() {
     }
     if (g_last_step[s] == 1 && step[s] >= 2) {
       g_picked_costume[s] = std::max(0, select::Costume(s));
-      REXLOG_INFO("sc5 autopilot: side {} costume {} at frame {}", s + 1, g_picked_costume[s] + 1, Now());
+      g_picked_costumes[s] = select::Costumes(s);
+      // a created character (the player's own, or the other PC's in its slot): which one, by its checksum
+      const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[s]), g_picked_costume[s], g_picked_costumes[s]);
+      creation::Record rec;
+      g_picked_created[s] = n >= 0 && creation::ReadRecord(uint32_t(n), rec) ? creation::ChecksumOf(rec) : 0;
+      REXLOG_INFO("sc5 autopilot: side {} costume {} at frame {}{}", s + 1, g_picked_costume[s] + 1, Now(),
+                  g_picked_created[s] ? fmt::format(" (created character {:08X})", g_picked_created[s]) : "");
     }
     g_last_step[s] = step[s];
   }
@@ -286,6 +363,16 @@ void OnSelect() {
       p.phase = step[me] >= 2 ? 2 : step[me] >= 1 ? 1 : 0;
       p.slot = step[me] >= 1 ? g_picked_slot[me] : select::CursorOf(me).Slot();
       p.costume = step[me] >= 2 ? g_picked_costume[me] : step[me] >= 1 ? select::Costume(me) : -1;
+      if (step[me] >= 2) {
+        // a created character: its record to the other game (creation.h), the pick marked (costume -2)
+        const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[me]), g_picked_costume[me],
+                                           g_picked_costumes[me]);
+        creation::Record rec;
+        if (n >= 0 && creation::ReadRecord(uint32_t(n), rec)) {
+          net::SetLocalCreated(me, rec);
+          p.costume = -2;
+        }
+      }
     }
     net::SetLocalPick(me, p, select::PickableMask());
   }
@@ -295,25 +382,53 @@ void OnSelect() {
     Enter(Phase::Stage);
     return;
   }
-  // tests: SC5_TEST_LOCAL_PICK=<slot>[.<costume>] stands in for this PC's player picking on the select screen
+  // This PC's player's pick made by the autopilot: their created character picked again (the plan's checksum: a
+  // rematch through Character Select, or the launcher's pick for a ranked winner who keeps it; the other game follows
+  // it as a pick of the player's own and takes the record again), or a test's (SC5_TEST_LOCAL_PICK=<slot>[.<costume>]
+  // stands in for the player)
   static const int test_pick = [] { const char* v = std::getenv("SC5_TEST_LOCAL_PICK"); return v ? std::atoi(v) : -1; }();
   static const int test_costume = [] {
     const char* v = std::getenv("SC5_TEST_LOCAL_PICK");
     const char* dot = v ? std::strchr(v, '.') : nullptr;
     return dot ? std::atoi(dot + 1) : 0;
   }();
-  if (LocalPicks(side) && test_pick >= 0) {
+  int auto_slot = -1, auto_costume = 0;
+  if (LocalPicks(side) && g_plan.created[side]) {
+    const int n = creation::SlotOfChecksum(g_plan.created[side]);
+    creation::Record rec;
+    if (n >= 0 && creation::ReadRecord(uint32_t(n), rec)) {
+      const int type = creation::TypeOf(rec.data());
+      auto_slot = type == creation::kOriginal ? select::kCreationSlot : select::SlotOfCharacter(type);
+      if (step[side] == 1) {
+        if (select::Costume(side) < 0 || select::Costumes(side) <= 0) return;  // the costume panel comes in
+        auto_costume = creation::CostumeOfSlot(type, uint32_t(n), select::Costumes(side));
+      }
+    }
+    if (auto_slot < 0 || auto_costume < 0) {
+      REXLOG_WARN("sc5 autopilot: side {}'s created character {:08X} is not here: the player picks", side + 1,
+                  g_plan.created[side]);
+      g_plan.created[side] = 0;
+      auto_slot = -1;
+    }
+  } else if (LocalPicks(side) && test_pick >= 0) {
+    auto_slot = test_pick;
+    auto_costume = test_costume;
+  }
+  if (auto_slot >= 0) {
     if (!g_steps.empty()) {
       RunSteps();
       return;
     }
     if (In() % 30 != 0) return;  // a player's pace
     if (step[side] == 0) {
-      const uint16_t move = Toward(select::CursorOf(side), test_pick);
-      Tap(move ? move : uint16_t(input::kA));
+      const uint16_t move = Toward(select::CursorOf(side), auto_slot);
+      if (move || creation::KnownRead() || auto_slot != select::kCreationSlot) Tap(move ? move : uint16_t(input::kA));
     } else if (step[side] == 1 && select::Costume(side) >= 0) {
       const int now = select::Costume(side);
-      Tap(now < test_costume ? input::kDpadRight : now > test_costume ? input::kDpadLeft : input::kA);
+      if (now == auto_costume && g_plan.created[side])
+        REXLOG_INFO("sc5 autopilot: side {} takes its created character {:08X} again (costume {})", side + 1,
+                    g_plan.created[side], auto_costume + 1);
+      Tap(now < auto_costume ? input::kDpadRight : now > auto_costume ? input::kDpadLeft : input::kA);
     }
     RunSteps();
     return;
@@ -325,8 +440,19 @@ void OnSelect() {
     if (step[side] == 0) {
       const int slot = select::CursorOf(side).Slot();
       const uint32_t theirs = net::RemotePickable();
-      // the paid character only when the other game has him too
-      if (select::Pickable(slot) && (slot != 21 || (theirs >> 21 & 1))) g_allow |= input::kA;
+      // the paid character only when the other game has him too; created characters once this PC's tables are read
+      if (select::Pickable(slot) && (slot != 21 || (theirs >> 21 & 1)) &&
+          (slot != select::kCreationSlot || creation::KnownRead()))
+        g_allow |= input::kA;
+    } else if (step[side] == 1) {
+      // a created character once this PC has taken out its own that fail the check, and one with downloadable
+      // parts only when the other PC has the same ones
+      const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[side]), select::Costume(side),
+                                         select::Costumes(side));
+      creation::Record rec;
+      if (n < 0 || !creation::ReadRecord(uint32_t(n), rec) ||
+          (creation::KnownRead() && (!creation::UsesDlc(rec) || net::RemoteDlc() == creation::DlcFingerprint())))
+        g_allow |= input::kA;
     } else {
       g_allow |= input::kA;
     }
@@ -340,7 +466,9 @@ void OnSelect() {
   if (step[side] == 0) {
     const uint16_t move = Toward(select::CursorOf(side), t.slot);
     if (move) Tap(move);
-    else if (t.pick && select::Pickable(t.slot)) Tap(input::kA);
+    else if (t.pick && t.created && !g_created_placed[side] && !PlaceCreated(side, t.slot)) {
+      // the record on its way (or refused: Lost)
+    } else if (t.pick && select::Pickable(t.slot)) Tap(input::kA);
     else if (t.pick && In() % 600 == 0)
       REXLOG_WARN("sc5 autopilot: side {}'s pick {} cannot be picked here", side + 1, select::NameOfSlot(t.slot));
   } else if (step[side] == 1 && t.costume_known) {
@@ -352,7 +480,16 @@ void OnSelect() {
     if (now < 0 || count <= 0) return;  // the panel comes in
     int want = t.costume % count;
     const int other = 1 - side;
-    if (g_picked_slot[other] == g_picked_slot[side] && g_picked_costume[other] == want && step[other] >= 2) {
+    if (t.created) {
+      // the other PC's created character: its slot's entry in this panel
+      want = creation::CostumeOfSlot(select::IdOfSlot(t.slot), creation::RemoteSlot(side), count);
+      if (want < 0) {
+        g_lost_why = fmt::format("player {}'s created character is not on the costume panel", side + 1);
+        REXLOG_ERROR("sc5 autopilot: {}", g_lost_why);
+        Enter(Phase::Lost);
+        return;
+      }
+    } else if (g_picked_slot[other] == g_picked_slot[side] && g_picked_costume[other] == want && step[other] >= 2) {
       want = (want + 1) % count;
     }
     stuck = now == last_seen ? stuck + 1 : 0;
@@ -370,7 +507,164 @@ void OnSelect() {
   RunSteps();
 }
 
+// The player's own controller. Tests: their script stands in for it (SC5_INPUT_P1 in player 1's game, _P2 in player
+// 2's, by frame), as the netplay takes it in a match.
+input::Pad OwnPad() {
+  input::Pad pad;
+  if (g_plan.online && g_plan.side < 2 && testinput::ScriptedPad(uint32_t(g_plan.side), pad)) return pad;
+  return input::ReadPhysical(0);
+}
+
+// --- the stage select ---
+
+// a press that moves the stage select's cursor toward a place (it wraps both ways)
+uint16_t TowardPlace(int from, int to) {
+  int d = to - from;
+  if (d > select::kStagePlaces / 2) d -= select::kStagePlaces;
+  if (d < -select::kStagePlaces / 2) d += select::kStagePlaces;
+  return d > 0 ? input::kDpadRight : d < 0 ? input::kDpadLeft : 0;
+}
+
+// Random as the match's seed draws it, the same on both PCs: one of the 27 stages (the game's own Random would draw on
+// each PC: the stage, and with it where the fighters start)
+int SeedPlace() {
+  const int64_t seed = game::FightSeed();
+  return 1 + int((seed >= 0 ? uint64_t(seed) : 0) % uint64_t(select::kStagePlaces - 1));
+}
+
+// the cursor one press at a time to a place, then (`pick`) A, again every 1.5 s should it not take; the screen takes
+// presses 5 s after it came up (a press before that was lost in one game and not the other)
+void StageGo(int cursor, int place, bool pick) {
+  if (!g_steps.empty() || Now() < g_stage_up_at + 300) return;
+  static uint64_t last_a = 0;
+  if (const uint16_t move = TowardPlace(cursor, place)) {
+    Tap(move);
+  } else if (pick && Now() >= last_a + 90) {
+    Tap(input::kA);
+    last_a = Now();
+  }
+}
+
+// The stage select online: the player whose turn it is picks the stage on their own PC with their own controller
+// (LEFT, RIGHT and A; A on Random draws from the match's seed, SeedPlace), and the other game follows: its cursor where
+// theirs is, then their stage (net::StagePick, the STAGE packets; a spectator's game from the feed). Player 1's game
+// says whose turn it is (g_stage_chooser): player 1's in a match from a start line, the last match's loser's in one
+// from the result screens through Character Select. A player who has not picked after a minute gets the seed's.
+void OnStageOnline() {
+  const int cursor = select::StageCursor();
+  if (cursor >= 0) {
+    if (!g_stage_up_at) g_stage_up_at = Now();
+    g_stage_last = cursor;
+  }
+  const net::StagePick theirs = net::RemoteStage();
+  const int chooser = g_plan.side == 0 ? g_stage_chooser : theirs.chooser;  // player 2's and a spectator's: theirs
+  net::StagePick mine;
+  mine.chooser = chooser;
+  if (g_stage_taken >= 0) {  // picked (OnSetup): the chooser's game says so until the barrier, no more presses
+    if (chooser == g_plan.side) net::SetLocalStage({chooser, 1, g_stage_taken, g_stage_taken});
+    return;
+  }
+  if (chooser < 0 || cursor < 0) {  // the screen comes in, or player 1's game has not said yet
+    net::SetLocalStage(mine);
+    return;
+  }
+  static uint64_t told = 0;
+  if (told != g_stage_up_at) {
+    told = g_stage_up_at;
+    REXLOG_INFO("sc5 autopilot: player {} picks the stage ({})", chooser + 1,
+                chooser == g_plan.side ? "this PC's player" : "the other game follows");
+  }
+  if (chooser != g_plan.side) {
+    // the other PC's player picks: their cursor, then their stage (never A on Random: each game would draw its own)
+    net::SetLocalStage(mine);
+    const auto in = [](int v, int lo) { return v >= lo && v < select::kStagePlaces; };
+    if (theirs.chooser == chooser && theirs.phase == 1 && in(theirs.stage, 1)) {
+      StageGo(cursor, theirs.stage, true);
+    } else if (theirs.chooser == chooser && theirs.phase == 0 && in(theirs.cursor, 0)) {
+      StageGo(cursor, theirs.cursor, false);
+    }
+    RunSteps();
+    return;
+  }
+  // this PC's player picks
+  mine.phase = 0;
+  mine.cursor = cursor;
+  // tests: SC5_TEST_STAGE=<place>|random stands in for that player: a press every half second toward the place, then
+  // A (on Random as the player's A there)
+  static const int test_stage = [] {
+    const char* v = std::getenv("SC5_TEST_STAGE");
+    return !v ? -1 : std::strcmp(v, "random") == 0 ? 0 : std::clamp(std::atoi(v), 0, select::kStagePlaces - 1);
+  }();
+  const input::Pad own = OwnPad();
+  if (g_stage_auto < 0) {
+    static bool a_was = false;
+    const bool a_now = (own.buttons & input::kA) != 0;
+    const bool test_random = test_stage == 0 && cursor == 0 && Now() >= g_stage_up_at + 120;
+    if (test_random || (test_stage < 0 && a_now && !a_was && cursor == 0 && Now() >= g_stage_up_at + 60)) {
+      g_stage_auto = SeedPlace();
+      REXLOG_INFO("sc5 autopilot: the player picked Random: place {} as the match's seed draws it", g_stage_auto);
+    } else if (Now() > g_stage_up_at + 3600) {
+      g_stage_auto = SeedPlace();
+      REXLOG_INFO("sc5 autopilot: no stage picked in a minute: place {} as the match's seed draws it", g_stage_auto);
+    }
+    a_was = a_now;
+  }
+  if (g_stage_auto >= 0) {  // decided: the autopilot takes the cursor there and picks it
+    mine.phase = 1;
+    mine.stage = g_stage_auto;
+    net::SetLocalStage(mine);
+    StageGo(cursor, g_stage_auto, true);
+    RunSteps();
+    return;
+  }
+  net::SetLocalStage(mine);
+  if (test_stage >= 0) {
+    if (g_steps.empty() && Now() >= g_stage_up_at + 120 && In() % 30 == 0) {
+      const uint16_t move = TowardPlace(cursor, test_stage);
+      if (move || test_stage != 0) Tap(move ? move : uint16_t(input::kA));
+    }
+    RunSteps();
+    return;
+  }
+  // The player's own controller: LEFT, RIGHT, and A on a stage (not on Random: the seed draws that). A with a move in
+  // one frame could land on Random as the cursor wraps: while A is down it goes alone. The game takes the VS settings
+  // (OnSetup: the place said is the cursor then) some 100 frames after the A it takes: moves wait 3 s after an A.
+  g_local = true;
+  static bool a_prev = false;
+  const bool a_down = (own.buttons & input::kA) != 0;
+  if (a_down && !a_prev && cursor != 0) g_stage_a_at = Now();
+  a_prev = a_down;
+  const bool hold = a_down || (g_stage_a_at && Now() < g_stage_a_at + 180);
+  g_allow = hold ? 0 : input::kDpadLeft | input::kDpadRight;
+  g_still = hold;
+  if (cursor != 0) g_allow |= input::kA;
+}
+
+}  // namespace
+
+// The stage select's pick taken (versus.cpp: the VS settings go into the battle setup). The chooser's game says which
+// at once: player 2's game waits for player 1's setup in this very call, and player 1's game, should it follow, sends
+// its setup only once it has picked the same stage.
+void OnSetup() {
+  if (!g_plan.online || g_phase != Phase::Stage || g_stage_last < 0 || g_stage_taken >= 0) return;
+  g_stage_taken = g_stage_last;
+  if (g_same_stage) return;
+  const int chooser = g_plan.side == 0 ? g_stage_chooser : net::RemoteStage().chooser;
+  if (chooser == g_plan.side) net::SetLocalStage({chooser, 1, g_stage_taken, g_stage_taken});
+  REXLOG_INFO("sc5 autopilot: the stage select took place {}", g_stage_taken);
+}
+
+namespace {
+
 void NewMatch() {
+  // the other PC's created characters come again for each match (and are checked again)
+  creation::ClearRemote();
+  g_created_placed[0] = g_created_placed[1] = false;
+  g_created_wait[0] = g_created_wait[1] = 0;
+  g_picked_costumes[0] = g_picked_costumes[1] = 0;
+  g_lost_why.clear();
+  g_stage_auto = g_stage_last = g_stage_taken = -1;
+  g_stage_up_at = g_stage_gone_at = g_stage_a_at = 0;
   g_picked_slot[0] = g_picked_slot[1] = -1;
   g_picked_costume[0] = g_picked_costume[1] = -1;
   g_last_step[0] = g_last_step[1] = 0;
@@ -389,10 +683,10 @@ bool Override(uint32_t user, input::Pad& out) {
   if (user == 1 && g_both) out.buttons = g_pad.buttons;  // skipping the way into a fight: each player's own part
   if (user != 0) return user < 2;
   if (g_local) {
-    input::Pad own = input::ReadPhysical(0);
+    input::Pad own = OwnPad();
     out.buttons = own.buttons & g_allow;
-    out.lx = own.lx;
-    out.ly = own.ly;
+    out.lx = g_still ? 0 : own.lx;
+    out.ly = g_still ? 0 : own.ly;
     return true;
   }
   out.buttons = g_pad.buttons;
@@ -434,6 +728,7 @@ void InitPlain(const Plan& plan) {
 bool Practicing() { return g_plan.mode == Mode::Practice && g_phase == Phase::Fight && g_fought; }
 
 bool AtHoldPoint() { return g_phase == Phase::Hold; }
+std::string LostWhy() { return g_phase == Phase::Lost ? g_lost_why : std::string(); }
 bool Busy() { return g_phase != Phase::Off && g_phase != Phase::Hold && g_phase != Phase::Lost; }
 bool Lost() { return g_phase == Phase::Lost; }
 int PickedSlot(int side) { return side == 0 || side == 1 ? g_picked_slot[side] : -1; }
@@ -441,6 +736,12 @@ int PickedCostume(int side) { return side == 0 || side == 1 ? g_picked_costume[s
 
 void Begin(const Plan& plan) {
   g_plan = plan;
+  // player 1 picks the first match's stage (tests: SC5_TEST_STAGE_CHOOSER=2 in player 1's game, player 2)
+  static const bool test_p2 = [] { const char* v = std::getenv("SC5_TEST_STAGE_CHOOSER"); return v && v[0] == '2'; }();
+  g_stage_chooser = test_p2 ? 1 : 0;
+  // a start line's match picks its stage: a series that ended on VS Battle's own Rematch (which never comes to the stage
+  // select, where the flag is cleared) left `stage=keep` set, and this game alone would take the last stage again
+  g_same_stage = false;
   NewMatch();
   Enter(Phase::ToVersus);
   REXLOG_INFO("sc5 autopilot: to a VS fight, {}; picks {} {}", plan.online ? fmt::format("online as player {}", plan.side + 1) : "offline",
@@ -475,23 +776,46 @@ void Park() {
 }
 
 void Rematch(const Plan& plan, const bool named[2], bool same_stage) {
-  // Always through Character Select, the same fighters picked again by the autopilot on both PCs unless the launcher
-  // names others (or `-`: that side's player picks again): the fight loads again and the games meet at its intro. (VS
-  // Battle's own Rematch keeps the fight loaded and goes straight to "between rounds", whose state counts on from the
-  // result screens, which took a different time on each PC: the two games left it on different frames.)
-  g_reselect = true;
+  // The same two fighters on the same stage (`stage=keep`: a casual rematch both players chose): VS Battle's own
+  // Rematch, as on the console: the fight stays loaded and goes from the result straight to "between rounds", and the
+  // games meet again at round 1's call (net/netplay.cpp). Else through Character Select, the same fighters picked again
+  // by the autopilot on both PCs unless the launcher names others (or `-`: that side's player picks again): the fight
+  // loads again and the games meet at its intro.
   const uint64_t over_at = g_over_at;
   const int slots[2] = {g_picked_slot[0], g_picked_slot[1]}, costumes[2] = {g_picked_costume[0], g_picked_costume[1]};
+  const uint32_t created[2] = {g_picked_created[0], g_picked_created[1]};
   Plan next = plan;
+  bool same_fighters = true;
   for (int s = 0; s < 2; s++) {
-    if (!named[s] && slots[s] >= 0) {
+    if (!named[s] && created[s]) {
+      // a created character: not by its place on the costume panel (each game lists it elsewhere) but by its
+      // checksum, picked by its player's own game and followed by the other
+      next.slots[s] = next.costumes[s] = -1;
+      next.created[s] = created[s];
+    } else if (!named[s] && slots[s] >= 0) {
       next.slots[s] = slots[s];
       next.costumes[s] = costumes[s];
+      next.created[s] = 0;
     }
+    if (named[s] && (plan.created[s] ? plan.created[s] != created[s]
+                                     : plan.slots[s] != slots[s] || created[s] ||
+                                           (plan.costumes[s] >= 0 && plan.costumes[s] != costumes[s])))
+      same_fighters = false;
+    if (next.slots[s] < 0 && !next.created[s]) same_fighters = false;  // that side's player picks again
   }
+  g_reselect = !(same_stage && same_fighters);
+  // through Character Select the last match's loser picks the stage (player 1 after a draw)
+  g_stage_chooser = g_won[1] > g_won[0] ? 0 : g_won[0] > g_won[1] ? 1 : 0;
   g_plan = next;
   g_same_stage = same_stage && g_last_rights > 0;
   NewMatch();
+  if (!g_reselect) {  // no select screen on the way: the fighters are the last match's (the result line's)
+    for (int s = 0; s < 2; s++) {
+      g_picked_slot[s] = slots[s];
+      g_picked_costume[s] = costumes[s];
+      g_picked_created[s] = created[s];
+    }
+  }
   g_over = true;  // still at the result
   g_over_reported = true;
   g_over_at = over_at;
@@ -503,17 +827,22 @@ bool MatchOver(int& winner, int& p1, int& p2, std::string& c1, std::string& c2) 
   g_over_reported = true;
   p1 = g_won[0];
   p2 = g_won[1];
-  winner = p1 > p2 ? 1 : p2 > p1 ? 2 : 0;  // 0: a draw (the last round timed out even, or both fell together)
+  winner = p1 > p2 ? 1 : p2 > p1 ? 2 : 0;  // 0: a draw (a drawn round took both to the rounds to win)
   for (int s = 0; s < 2; s++) {
+    // a fighter as the game's id and costume; a created character as c.<its checksum> (the same in both games)
     const int character = select::CharacterOfSlot(g_picked_slot[s]);
     std::string& out = s ? c2 : c1;
-    out = character >= 0 ? fmt::format("{}.{}", character, std::max(0, g_picked_costume[s])) : "-";
+    out = g_picked_created[s] ? fmt::format("c.{:08X}", g_picked_created[s])
+          : character >= 0    ? fmt::format("{}.{}", character, std::max(0, g_picked_costume[s]))
+                              : "-";
   }
   return true;
 }
 
 void OnFrame(PPCContext& ctx, uint8_t* base) {
   if (g_phase == Phase::Off) return;
+  g_ctx = &ctx;
+  g_base = base;
   const int seq = game::SequenceId();
   const uint32_t battle = game::BattleState();
   if (seq != g_last_seq) {
@@ -527,8 +856,9 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       RoundsWon(g_won);
       g_over = true;
       g_over_at = Now();
-      REXLOG_INFO("sc5 autopilot: the match is over at frame {}: {} - {} (battle state {:X})", Now(), g_won[0], g_won[1],
-                  battle);
+      REXLOG_INFO("sc5 autopilot: the match is over at frame {}: {} - {} (won {} - {}, drawn {}; battle state {:X})", Now(),
+                  g_won[0], g_won[1], game::ReadU32(kPlayer[0] + kRoundsWon), game::ReadU32(kPlayer[1] + kRoundsWon),
+                  game::ReadU32(kPlayer[0] + kRoundsDrawn), battle);
     }
     if (battle == game::kBattleFighting) g_fought = true;
     g_last_battle = battle;
@@ -536,6 +866,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   g_pad = input::Pad{};
   g_local = false;
   g_allow = 0;
+  g_still = false;
   g_both = false;
   switch (g_phase) {
     case Phase::Off:
@@ -574,6 +905,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       }
       return;
     case Phase::Hold: {
+      creation::OnHoldPoint();  // tests: SC5_TEST_CREATION_SLOT
       static bool scripted = false;
       if (!scripted) {
         scripted = true;
@@ -670,24 +1002,48 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       }
       OnSelect();
       return;
-    case Phase::Stage:
-      // The same stage on both PCs, picked alike: from Random (the cursor's first place) RIGHT as often as the match's
-      // seed says, A (Random would draw on each PC: the stage, and with it where the fighters start). Then A again
-      // until the fight loads (should the first come before the screen takes it).
+    case Phase::Stage: {
       if (battle == game::kBattleLoading || battle == game::kBattleIntro || battle == game::kBattleRoundCall ||
           battle == game::kBattleFighting) {  // (Training goes from its stage select to the round's call)
+        if (g_plan.online && g_stage_last >= 0) {
+          // the stage picked: the chooser's game says which (OnSetup said so first; a later `stage=keep` picks it again)
+          const int place = g_stage_taken >= 0 ? g_stage_taken : g_stage_last;
+          g_last_rights = place;
+          const int chooser = g_plan.side == 0 ? g_stage_chooser : net::RemoteStage().chooser;
+          if (!g_same_stage && chooser == g_plan.side) net::SetLocalStage({chooser, 1, place, place});
+          REXLOG_INFO("sc5 autopilot: the stage: place {} of the stage select", place);
+        }
+        if (g_plan.online) g_same_stage = false;
         Enter(Phase::Fight);
         return;
       }
-      // The same stage on both PCs, picked alike once the screen surely takes presses (5 s in): from Random (the
-      // cursor's first place) RIGHT as often as the match's seed says, a press every half second, then A; A again
-      // every 1.5 s should it not have taken. (Random would draw on each PC; the stage select sets more up with its
-      // choice than the stage the battle setup copies, so player 2's game taking player 1's stage there is not enough.)
+      if (g_plan.online && g_plan.mode != Mode::Practice) {
+        if (g_same_stage) {
+          // the last match's stage again (`stage=keep` through Character Select): both games take the cursor there
+          const int cursor = select::StageCursor();
+          if (cursor >= 0) {
+            if (!g_stage_up_at) g_stage_up_at = Now();
+            g_stage_last = cursor;
+            if (g_stage_taken < 0) StageGo(cursor, g_last_rights, true);
+          }
+          RunSteps();
+        } else {
+          OnStageOnline();
+        }
+        // the stage select never came (30 s), or went and no fight loaded (40 s after a pick, 20 s without one)
+        if (select::StageCursor() >= 0) g_stage_gone_at = 0;
+        else if (g_stage_up_at && !g_stage_gone_at) g_stage_gone_at = Now();
+        const uint64_t grace = g_stage_taken >= 0 ? 2400 : 1200;
+        if ((!g_stage_up_at && In() > 1800) || (g_stage_gone_at && Now() > g_stage_gone_at + grace)) Enter(Phase::Lost);
+        return;
+      }
+      // Offline (Training): once the screen surely takes presses (5 s in), from Random (the cursor's first place) RIGHT
+      // as often as the seed says (or as for the last match), a press every half second, then A; A again every 1.5 s
+      // should it not have taken. (The stage select sets more up with its choice than the stage the battle setup
+      // copies, so player 2's game taking player 1's stage there is not enough online: both pick it alike.)
       if (In() == 300) {
-        // a rematch with the same two fighters: the last match's stage, as the game's own Rematch keeps it
-        const int64_t seed = game::FightSeed();
         const bool same = g_same_stage;
-        const int rights = same ? g_last_rights : 1 + int((seed >= 0 ? uint64_t(seed) : 0) % 8);
+        const int rights = same ? g_last_rights : SeedPlace();
         g_last_rights = rights;
         g_same_stage = false;
         for (int i = 0; i < rights; i++) Push(input::kDpadRight, 6, 24);
@@ -700,6 +1056,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       (void)base;
       RunSteps();
       return;
+    }
     case Phase::Fight:
       if (g_plan.mode == Mode::Practice) {
         // tests: SC5_TEST_PRACTICE_SCRIPT=<presses> (as SC5_TEST_HOLD_SCRIPT) once practice runs

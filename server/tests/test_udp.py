@@ -63,7 +63,7 @@ async def test_rendezvous_exchanges_endpoints_and_punches(server, connect, udp_p
     assert ga["remote"] == f"127.0.0.1:{ub.port}"
     assert ga["p1"] == gb["p1"] and ga["p2"] == gb["p2"]
     assert {ga["p1"], ga["p2"]} == {"Scorpion", "SubZero"}
-    assert ga["delay"] == 2 and ga["rounds"] == 3
+    assert ga["delay"] == 2 and ga["rounds"] == 5  # matchmaking: first to 3 rounds, as the console
 
 
 async def test_punch_failure_cancels_and_is_remembered(server, connect, udp_peers):

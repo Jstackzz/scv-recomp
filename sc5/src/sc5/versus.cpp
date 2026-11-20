@@ -23,6 +23,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+#include "sc5/autopilot.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/net/netplay.h"
@@ -73,6 +74,7 @@ void SetOnline(bool on, int side, int wins) {
 REX_HOOK_RAW(sub_8243D2A0) {
   using namespace sc5::versus;
   const uint32_t rec = ctx.r4.u32;
+  sc5::autopilot::OnSetup();  // the stage select's pick taken: told before player 2's game waits below for player 1's
   if (rec)
     REXLOG_INFO("sc5 versus: VS settings at {:08X}: sides {}/{} and {}/{}, rounds to win {} and {}, round time {}, stage "
                 "{:X} (frame {})",

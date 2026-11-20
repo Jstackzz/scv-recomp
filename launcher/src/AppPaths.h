@@ -37,6 +37,10 @@ QString gameDataDir(const QString& gameId);    // <game folder>\disc (SC5_GAME_D
 QString gameUpdateDir(const QString& gameId);  // <game folder>\update (SC5_UPDATE_DIR)
 QString gameDlcDir(const QString& gameId);     // <game folder>\dlc (SC5_DLC_DIR)
 QString gameUserDir(const QString& gameId);    // <game folder>\user (SC5_USER_DIR, single player)
+// the offline game's own save in gameUserDir (<profile>\4E4D083D\00000001\SC5SaveData\savedata.bin, the newest if
+// several profiles have one), where its created characters are: an online game reads them from it (SC5_CREATION_SAVE,
+// read only); empty when there is none
+QString gameSaveFile(const QString& gameId);
 QString gameCacheDir(const QString& gameId);   // <game folder>\cache (SC5_CACHE_DIR: the shader cache, kept)
 // what compiles the game's code for this PC once the disc is extracted (BuildPage::compileGame): the game folder's
 // build-game.cmd unless set (games/<id>/build_script); its arguments games/<id>/build_args

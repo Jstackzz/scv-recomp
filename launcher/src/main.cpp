@@ -1,4 +1,4 @@
-// SC5 Online launcher: ranked/casual matchmaking, lobbies, practice, leaderboard and the
+// SCV Online launcher: ranked/casual matchmaking, lobbies, practice, leaderboard and the
 // "build the game from your own disc" flow for the native PC port of Soulcalibur V (Xbox 360).
 
 #include <algorithm>
@@ -18,12 +18,13 @@
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+    // the data folder's name (QStandardPaths), kept from before the name SCV Online
     QApplication::setApplicationName(QStringLiteral("SC5 Online"));
     QApplication::setOrganizationName(QStringLiteral("SC5"));
     QApplication::setApplicationVersion(QStringLiteral(SC5_LAUNCHER_VERSION));
 
     QCommandLineParser cli;
-    cli.setApplicationDescription(QStringLiteral("SC5 Online launcher"));
+    cli.setApplicationDescription(QStringLiteral("SCV Online launcher"));
     cli.addHelpOption();
     cli.addVersionOption();
     const QCommandLineOption configOpt(QStringLiteral("config"), QStringLiteral("Settings file to use."), QStringLiteral("ini"));
@@ -134,14 +135,14 @@ int main(int argc, char* argv[]) {
     QLockFile lock(paths::configFile() + QStringLiteral(".instance"));
     lock.setStaleLockTime(0);
     if (!lock.tryLock(cli.isSet(updatedOpt) ? 30000 : 200)) {
-        QMessageBox::information(nullptr, QStringLiteral("SC5 Online"),
-                                 QStringLiteral("SC5 Online is already running with these settings."));
+        QMessageBox::information(nullptr, QStringLiteral("SCV Online"),
+                                 QStringLiteral("SCV Online is already running with these settings."));
         return 0;
     }
 
     QString error;
     if (!GameData::instance().load(&error)) {
-        QMessageBox::critical(nullptr, QStringLiteral("SC5 Online"), error);
+        QMessageBox::critical(nullptr, QStringLiteral("SCV Online"), error);
         return 1;
     }
     if (QSslSocket::availableBackends().contains(QStringLiteral("schannel")))

@@ -1,12 +1,12 @@
-# SC5 Online protocol (v1)
+# SCV Online protocol (v1)
 
 This is the specification that `server/` (Python, asyncio) and `launcher/` (Qt 6) implement, and that the game side
 in `sc5/` (`sc5.exe`, the ReXGlue build of Soulcalibur V) implements for its half of section 3. It is versioned by
 one integer, `PROTO = 1`; any incompatible change bumps it.
 
-Sections 1 and 2 are MK3D Online's protocol (`mk3d-rollback/docs/PROTOCOL.md`), which SC5 Online's server and
-launcher are ported from, with SC5's names; a version in brackets, such as (0.1.8) or (1.0.7), is the MK3D Online
-release a feature came with: SC5 Online 0.1.0 has every one of them. Section 3, the launcher and the game, is SC5's:
+Sections 1 and 2 are MK3D Online's protocol (`mk3d-rollback/docs/PROTOCOL.md`), which SCV Online's server and
+launcher are ported from, with SCV's names; a version in brackets, such as (0.1.8) or (1.0.7), is the MK3D Online
+release a feature came with: SCV Online 0.1.0 has every one of them. Section 3, the launcher and the game, is SCV's:
 MK3D's with the `SC5_` prefix, the Xbox 360 game's folders and the display settings of its GPU emulation.
 
 Three links are involved:
@@ -131,7 +131,7 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   `--min-client`); older clients get `error{code:"client_outdated"}`, whose
   `message` ends with where to download the release: the update file's
   `page`, else the server's `--releases-page`, else nothing ("Update the
-  launcher to 0.1.1 or newer."). Both errors close the connection. SC5 Online
+  launcher to 0.1.1 or newer."). Both errors close the connection. SCV Online
   has its own server instance, version gate and update file: MK3D Online's
   server serves MK3D's launchers alone.
 - **Updates** (0.1.7). The server's update file (`--update-file`, by default
@@ -249,7 +249,7 @@ S: {"type":"queue_left","reason":"left"}
   opponent with `match_found.connection`.
 - `delay` is the player's preferred input delay in frames (0-4).
 - `death_traps` (optional, default `true`): MK3D Online's arenas' death traps, which the server still takes and
-  passes on (`match_found`, `match_go`, `spectate`, lobbies). Soulcalibur V has nothing it would turn off: SC5
+  passes on (`match_found`, `match_go`, `spectate`, lobbies). Soulcalibur V has nothing it would turn off: SCV
   launchers never send it, and the start line (3.3) has no key for it.
 - `server_rtt` (optional) is the client's last measured UDP round trip to the
   server in ms (section 2.2); the UDP hellos sent while queued update it. It
@@ -285,7 +285,7 @@ S: {"type":"queue_left","reason":"left"}
   is allowed when `|elo_a - elo_b| <= min(window_a, window_b)`, with
   `window = 100 + 50 * floor(waited / 10 s)`, capped at 1100. `strict` pins the
   window at 100 and the region to the player's own (a mode the server lists in
-  `MatchmakingConfig.any_elo_modes` has no window: MK3D's side modes; SC5 lists
+  `MatchmakingConfig.any_elo_modes` has no window: MK3D's side modes; SCV lists
   none). Among the allowed
   partners of the longest-waiting player the server takes the smallest Elo
   difference, then the lowest estimated ping (sum of both players' UDP round
@@ -389,7 +389,7 @@ S: {"type":"queue_left","reason":"left"}
    the starting one; 1.3 `ranks`), for the badges the games draw beside the
    timer (3.3 `p1_rank`). `delay` = the larger of both
    preferences, at least 1 in ranked. `seed` is
-   a fresh 32-bit value. `death_traps`: always `true` with SC5 launchers (1.7).
+   a fresh 32-bit value. `death_traps`: always `true` with SCV launchers (1.7).
    `feed`: a lobby match, whose spectators watch it from what both games write
    (1.10.1). Sides are random for queue matches; in a lobby the
    host is side 1. `remote` echoes the endpoint this side reported. A missing
@@ -508,7 +508,7 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
 - A launcher sends `series_ready` true for a ranked set by itself, for a casual
   rematch when the player chose one: with `"in_place":true` while its game
   still waits at the last match's result screen, connected to the other game
-  (SC5 0.1.2: a queue match that ended there, against a game reached straight,
+  (SCV 0.1.2: a queue match that ended there, against a game reached straight,
   not through the relay or the tunnel), else once its game is back at its hold
   point. When both are ready the server starts the next match like a lobby
   match: `match_found` with `accept_required` false, `"series"` and the same
@@ -525,7 +525,7 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
   them (1.9 `p1_char`/`p2_char`, with its costume), which `match_go` gives
   their side (`"p1":"12.1","p2":"-"`) and the autopilot picks in both games;
   `keeps` names that player (`null`: both pick, as after a win without
-  fighters both reports agreed on). Casual (SC5 0.1.2), `choice`: `rematch`
+  fighters both reports agreed on). Casual (SCV 0.1.2), `choice`: `rematch`
   from both plays the last match's fighters again (`match_go` `p1`/`p2` are the
   game's character ids from both results, on the same stage when it goes on
   from the result screens: the game's own Rematch), `select` from either sends
@@ -587,7 +587,7 @@ C: {"type":"lobby_character","character":"Ivy"}
 C: {"type":"lobby_ready","ready":true,"delay":2,"relay":false,"hide_always":false,"link":"wifi","server_rtt":31}
                                            (delay optional, 0-4; relay, link, server_rtt 0.1.8)
 C: {"type":"lobby_start"}                       (host only: at once; launchers from 0.1.11 never send it)
-C: {"type":"lobby_settings","death_traps":false}               (host only, 0.1.8; SC5 launchers never send it)
+C: {"type":"lobby_settings","death_traps":false}               (host only, 0.1.8; SCV launchers never send it)
 S: {"type":"lobby","lobby":{"id":"K7WQ2","name":"Friday sets","host":"Taki","game":"sc5",
     "mode":"versus","region":"eu","rounds":3,"locked":false,"state":"open","match":null,"starts_in":2.4,
     "death_traps":true,"max_spectators":8,"koth":false,
@@ -617,7 +617,8 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   holds the last 30 messages. Chat text: 1-200 characters, at most one
   message per 0.5 s per player (`slow_down`).
 - `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy`,
-  `no_such_lobby`, `lobby_full`, `bad_lobby_password`. `rounds` is 1, 3 or 5.
+  `no_such_lobby`, `lobby_full`, `bad_lobby_password`. `rounds` is 1, 3 or 5, the best of (the launcher names them
+  1, 2 or 3 rounds to win, 3 by default); matchmaking's matches are best of 5, first to 3 as the console's Battle Count.
 - Two players both ready start the lobby's match by themselves (0.1.11): the
   server counts down 3 s (`starts_in`, the seconds left, in every `lobby` state
   meanwhile; `null` otherwise), and anything that clears a `ready` (a player
@@ -835,9 +836,9 @@ SHA-1); from the match's start (the link's `start` line), the picks, the setup
 both games agreed on (or the lines saying it differs) and the failed check (the
 per-second stats left out; 36 lines at most); last, the game's extracted files:
 how many, how large, and a hash of their names and sizes (a modded or reduced
-copy of the disc differs there), and (SC5 0.1.2) the PC: `This PC: <processor>,
+copy of the disc differs there), and (SCV 0.1.2) the PC: `This PC: <processor>,
 <n> threads, Windows <kernel version>, game code for <x86-64-v3 or v2>` (what
-build-game.cmd compiled the game's code for there). SC5's game logs its
+build-game.cmd compiled the game's code for there). SCV's game logs its
 netplay as `sc5 net:` (the failed check: `DESYNC at frame <f>: <hash> here,
 <hash> there`), its setup as `sc5 versus:`, its picks as `autopilot: side <n>
 picked`: the report takes those, and the game's own errors and warnings but the
@@ -1090,6 +1091,7 @@ sound variables, `controls.toml`; `tools/linktest.py` runs two games, and a spec
 | `SC5_UPDATE_DIR` | `<game folder>\update`: the title update's other files (`patch.cpk`), mounted as `update:` |
 | `SC5_DLC_DIR` | `<game folder>\dlc`: the player's own downloadable content, one folder per package with its files and the package's header beside it (3.7); empty or missing: none |
 | `SC5_USER_DIR` | the saves: `<game folder>\user` for a plain game; with `SC5_NET=1` a fresh `<session>\user`, so both players' games start from the same (empty) save and nothing online changes the player's own |
+| `SC5_CREATION_SAVE` | with `SC5_NET=1`: the player's own save, `<game folder>\user\<profile>\4E4D083D\00000001\SC5SaveData\savedata.bin` (the newest of the profiles'), where Creation keeps their created characters. The game only reads it (shared, never locked or written) and brings their characters into its fresh save in memory (3.3, *Created characters*); missing: none |
 | `SC5_CACHE_DIR` | `<game folder>\cache`: the shader cache, kept between sessions (the game's default is `<SC5_USER_DIR>\cache`, which online would start empty every time) |
 | `SC5_CAPTURE_DIR` | `<session>\captures`: F3 in the game saves what it drew there (1.13.2) |
 | `SC5_DISPLAY` | `windowed`, `borderless` or `fullscreen` |
@@ -1127,7 +1129,7 @@ filtering and the four volumes at once, the window's mode and size the next time
 foreground window (a change made in the launcher never pulls the game over it or switches the display's mode behind
 it), the internal resolution, anti-aliasing and adaptive sync at its next start.
 
-What SC5's game does with them (sc5/src/sc5/display.cpp): `borderless` and `fullscreen` are both a borderless
+What SCV's game does with them (sc5/src/sc5/display.cpp): `borderless` and `fullscreen` are both a borderless
 window over the whole screen (the SDK has no exclusive mode); the internal resolution, anti-aliasing (the swap's
 FXAA), texture filtering and v-sync are the GPU plugin's own options (`resolution_scale`, `swap_post_effect`,
 `anisotropic_override`, `vsync`), given at the start as their `REX_` environment variables; brightness is a curve
@@ -1135,7 +1137,7 @@ over the game's own gamma ramp (both of the GPU's ramp forms), blacks and whites
 frames the game's audio hands the system. The music, effects and voices levels scale the volumes the game gives its
 four main sound categories in CRI (sc5/src/sc5/sound.cpp): music is BGM (and the movies, which play at the game's
 music level), effects SE and SYSTEMSE (the menus' sounds), voices VOICE (the fighters and the announcer). They
-multiply the game's own Sound options, which stay as the player set them. Not in SC5: `SC5_FRAMEDATA` (SC5's Training
+multiply the game's own Sound options, which stay as the player set them. Not in SCV: `SC5_FRAMEDATA` (SCV's Training
 has no frame data display).
 
 **`controls.toml`** (the Controls page writes it; a running game reads it again within a second of a change):
@@ -1154,7 +1156,7 @@ player2 = ""                     # player 2's controller (offline versus) by its
 ```
 
 With `SC5_NET=1` the game reports a controller on port 2 whether one is plugged in or not: the autopilot picks
-player 2 there, and online the other player's inputs play it. SC5's game (sc5/src/sc5/controls.cpp) reads the
+player 2 there, and online the other player's inputs play it. SCV's game (sc5/src/sc5/controls.cpp) reads the
 keyboard with the game's window in front, remaps every controller's buttons (paddles, `misc` and `touchpad` through
 SDL, by the controller's name), and assigns the controllers to players in place of the SDK: the named player 2
 controller as player 2, every other one in the order plugged in (player 1 first, then 3 and 4).
@@ -1184,26 +1186,28 @@ the game reads can never be lost. The launcher writes a new command only after t
 | `start game=sc5 mode=versus watch=1 feed=127.0.0.1:50210 seed=123456 p1=Siegfried p2=- rounds=3 ranked=0 match=<id>` | watch a lobby match (a spectator, 1.10.1) |
 | `start game=sc5 mode=practice side=1 p1=Siegfried p2=Mitsurugi` | start offline practice (no network keys; the local test's practice) |
 | `park` | leave the current match or practice and return to the hold point; after a result while the match's end (the winner's pose) still plays in sync, once both games have left the match together (30 s at most); the players' controllers keep working until then |
-| `rematch [seed=N] [match=<id>] [p1=.. p2=..] [stage=keep]` | play again against the same peer from the result screen, through VS Battle's Character Select (SC5's own Rematch keeps the two games' state apart): per side the same fighter again, or the one `p1`/`p2` names (a roster id or the game's id with its costume, `12.1`), or `-`: that side's player picks again on the select screen; `stage=keep`: the last match's stage (the launcher's REMATCH, as the game's own Rematch); new seed and id when given. The launcher sends it for a series' next match when both games still wait at their result screens (1.9.1, `in_place`) |
+| `rematch [seed=N] [match=<id>] [p1=.. p2=..] [stage=keep]` | play again against the same peer from the result screen: per side the same fighter again (a created character by its checksum, picked again by its player's own game), or the one `p1`/`p2` names (a roster id, the game's id with its costume, `12.1`, or a created character, `c.<checksum>`), or `-`: that side's player picks again on the select screen; `stage=keep`: the last match's stage (the launcher's REMATCH). The same two fighters on the same stage are VS Battle's own Rematch, as on the console (no loading: about 16 s from the end of the match to the fight); anything else goes through VS Battle's Character Select and the stage select, where the last match's loser picks the stage (3.3, *The stage*); new seed and id when given. The launcher sends it for a series' next match when both games still wait at their result screens (1.9.1, `in_place`) |
 | `quit` | exit the process cleanly |
 
-`start` keys: `game` (`sc5`); `mode` (`versus`, `sparring`, `practice`); `side` (local player, 1 or 2);
-`local_port` (UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: the larger of both
-players' settings, raised for the match's ping when the player lets it: the frames of the one-way trip but one, 6 at
-most; each game tells the other its delay when they meet, and both play the larger of the two); `seed` (32 bit,
-identical on both sides); `p1`/`p2` (roster ids from `launcher/data/sc5.json`, identical on both sides, or `-`: the
-player of that side picks on the game's own select screen, below; an id with a costume after a dot, `12.1`, is the
-game's own character id from a `result` line, which the autopilot picks in both games with that costume: a ranked
-set's winner keeping theirs; the game's ids are `game_id` in `launcher/data/sc5.json` and the table in docs/GAME.md;
-Devil Jin is not on SC5's select screen, a style for created characters only, so no roster id names him); `rounds`
-(best of 1, 3 or 5: the game plays first to (N+1)/2 rounds); `ranked` (0 or 1); `match` (id, echoed in status lines).
-Optional: `p1_name`, `p2_name` (account names; the game may show them over the health bars), `p1_rank`, `p2_rank`
-(each player's ranked title in lower case, dashes for spaces, `soul-warrior`, from `match_go`'s or `spectate`'s
-`p1_title` and `p2_title`; `-` none: the badges are `ranks/<rank>.png` beside the launcher in a player package),
-`stage` (the game picks the stage from the seed and ignores this key so far), `feed` (`127.0.0.1:port`, a TCP port of the launcher's: the
-game writes its spectator feed there, 3.6; a lobby match's), `watch=1` (a spectator: no `side`, `local_port` or
-`remote`; the game reads both players' feed from `feed`). Both sides get the same line except for `side`,
-`local_port`, `remote` and `feed`. (MK3D's start line had `traps`, the death traps; SC5's has none.)
+`start` keys: `game` (`sc5`); `mode` (`versus`, `sparring`, `practice`); `side` (local player, 1 or 2); `local_port`
+(UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: the larger of both players' settings,
+raised for the match's ping when the player lets it: the frames of the one-way trip but one, 6 at most; each game
+tells the other its delay when they meet, and both play the larger of the two); `seed` (32 bit, identical on both
+sides); `p1`/`p2` (roster ids from `launcher/data/sc5.json`, identical on both sides, or `-`: the player of that side
+picks on the game's own select screen, below; an id with a costume after a dot, `12.1`, is the game's own character id
+from a `result` line, which the autopilot picks in both games with that costume: a ranked set's winner keeping theirs;
+`c.<checksum>`, a created character as a `result` line names it: the player's own game picks it for them again and the
+other game follows that pick as any of the player's, the record coming again; the game's ids are `game_id` in
+`launcher/data/sc5.json` and the table in docs/GAME.md; Devil Jin is not on SCV's select screen, a style for created
+characters only, so no roster id names him); `rounds` (best of 1, 3 or 5: the game plays first to (N+1)/2 rounds);
+`ranked` (0 or 1); `match` (id, echoed in status lines). Optional: `p1_name`, `p2_name` (account names; the game may
+show them over the health bars), `p1_rank`, `p2_rank` (each player's ranked title in lower case, dashes for spaces,
+`soul-warrior`, from `match_go`'s or `spectate`'s `p1_title` and `p2_title`; `-` none: the badges are
+`ranks/<rank>.png` beside the launcher in a player package), `stage` (ignored: the players pick the stage on the
+game's stage select, below), `feed` (`127.0.0.1:port`, a TCP port of the launcher's: the game writes its spectator
+feed there, 3.6; a lobby match's), `watch=1` (a spectator: no `side`, `local_port` or `remote`; the game reads both
+players' feed from `feed`). Both sides get the same line except for `side`, `local_port`, `remote` and `feed`. (MK3D's
+start line had `traps`, the death traps; SCV's has none.)
 
 **Picks on the game's select screen** (`p1` and/or `p2` = `-`, the launcher's *Pick my character on the game's own
 select screen*, its default, sent to the server as an empty `character`). The autopilot takes both games to the
@@ -1217,6 +1221,49 @@ without changing any save, and the paid downloadable content only when both play
 the other game cannot load is refused at the select screen. Both games compare the stage and the costumes when the
 fight starts.
 
+**Created characters.** At the hold point an online game brings the player's own created characters from their offline
+save (`SC5_CREATION_SAVE`) into its fresh save in memory, slots 1 to 48 as there (49 and 50 stay free), each one whose
+form is wrong (size, version, checksum, names) left out. At the select screen it reads what its own game can load from
+the game's tables (the parts sets of each base type with the models they use, each fighter's own costumes among them,
+the weapons of each style, the stickers with their textures, the palette's size, the characters on its select screen;
+only what the game says is released on this PC: downloadable parts only with their package) and leaves out, before
+anyone can pick it, any of the player's own that would not pass the checks below. The player picks one as on the
+console: an original character on the Creation slot's costume panel, a customized fighter (a regular fighter
+re-dressed in Creation) on its fighter's, after the fighter's own costumes. The game then sends the record (13,340
+bytes: netplay packets 12 and 13, and the spectator feed's type `11`) and its PICK says so (costume `-2`). The other
+game takes exactly the record's bytes from its 12 chunks (`sc5/src/sc5/net/created_transfer.h`, anything else refuses
+it), then checks every field before anything loads it (`sc5/src/sc5/creation_check.h`): the form; the character type
+and style on this PC; the limits the game's own repair pass keeps to (attack rate, voice, the body's sizes); the
+body's rates 0-1; every parts set and every model among this PC's for it (an original character: its base type's, male
+or female; a customized fighter: base type 5, one of that fighter's own two costumes in every break level, and the
+hair any fighter may wear); a customized fighter's voice one the game knows; parts coordinates valid or not, with
+finite values (the game checks their parts and bones itself); every sticker one of this PC's, with its own texture and
+finite placement; every colour (the character's, its stickers', the weapon's, its trail's and effect's) none or on one
+of the game's palettes; the weapon's other numbers finite; the weapon one of its style's. On top of that the game's
+own repair pass (what a console runs on a save's records) runs on a copy, and a record it refuses or would change in
+any byte is refused too. Then it places the record in slot 49 (player 1's) or 50 (player 2's), and its autopilot picks
+it for that side. As on the console, the picture Creation took is not sent: the select screen draws the other player's
+card from the record itself. A record refused, one of another character than the pick, or one that does not come
+within 20 s ends the match there: `error player N's created character from the other PC was refused: <why>`. A created
+character with downloadable parts can be picked only when the other game's downloadable parts are the same as this
+one's (a fingerprint in the PICK packet); else A on it is held back, as for Dampierre. Every match sends the records
+again; the result line names a created character `c.<checksum>` (the same in both games), which a rematch and a ranked
+set's winner pick again by that checksum. Tests: `SC5_TEST_CREATION_SLOT=<slot file>[,...]` puts whole slots (29,832
+bytes) into the first slots at the hold point, `SC5_TEST_CREATION_RECORD=<record file>` places a record as the other
+PC's would be for player 2, and `SC5_TEST_CREATION_UNCHECKED=1` takes any record of the right size (for fuzzing the
+game's own handling, never in a real match; `=check` skips only the checks above, the game's repair pass still runs);
+`sc5\out\build\win-amd64-release\creation_check_test.exe sc5\tests\data` tests the check and the transfer,
+`tools\creationfuzz.py` what two games do with records garbled one area at a time (`--record patroklos`: the
+customized Patroklos, picked on his costume panel, and the fighter cases); `SC5_TEST_KNOWN_OUT=<file>` writes what the
+game read for the check, as text (`sc5\tests\data\known.txt`, the test PC's, which the test checks the game's records
+against).
+
+**The stage.** After the select screen, one player picks the stage on the game's stage select with their
+own controller (LEFT, RIGHT and A) while the other game follows: player 1 in a match from a `start` line, then the
+last match's loser in a `rematch` that goes through Character Select (player 1 after a draw). Random on it is drawn
+from the match's seed, the same in both games, and so is the stage of a player who has not picked after a minute.
+VS Battle's own Rematch, and `stage=keep`, keep the last match's stage.
+
 ### 3.4 `status.txt` (game -> launcher)
 
 The launcher polls `status.txt` every 100 ms and acts on every change of the first line.
@@ -1227,7 +1274,7 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 | `ready` | parked at the hold point, able to take `start` |
 | `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match` |
 | `in_match match=<id>` | a match (or practice: `match=practice`) is running |
-| `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a double KO, or the last round even on time; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`); the game stays on its result screen until `park`, `rematch` or `quit` |
+| `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
 | `sparring_over match=<id>` | Online Practice: the match in sync is over, a player pressed BACK (the launcher reports the outcome `sparring`) |
 | `desync frame=N match=<id>` | the two simulations diverged at frame N; the match is aborted |
 | `disconnected match=<id>` | the peer stopped answering |
@@ -1286,15 +1333,18 @@ then the type's payload, which only the games read:
 | `7` | the player's own inputs: `u32 first frame, u8 n, n x (u32 buttons | lt << 16 | rt << 24, u32 sticks lx ly rx ry)` |
 | `8` | the game's state checks: `u32 frame, u32 hash low, u32 hash high` |
 | `9` | the frame the game left the match at: `u32 frame` |
+| `10` | the stage select, by the player whose turn it is: `u8 side, i8 phase, i8 cursor, i8 stage` (the coming match's number; phase `0` the cursor as it moves, `1` the place taken, 0 Random and 1-27 the stages to its right), as it changes |
+| `11` | the player's created character for the coming match (their pick's costume `-2`): `u8 side, u8 chunk, u8 chunks, u16 len, len bytes`, each of its 12 chunks once (3.3, *Created characters*); a spectator's game checks and places it as a player's does |
 
-A spectator's game takes both picks from the feed, takes player 1's battle setup at its own (the stage, round time,
-rounds and generators, as player 2's game does over the netplay), meets both games' READY words where a player's
-game meets the other's, takes player 1's counters, battle state machine and whole fight there (player 2's game
-takes only the blocks that differ in its own; a spectator cannot ask), and plays every frame from both players'
-inputs, never predicting: a frame waits for both inputs, and the frames the players ran on neutral inputs (outside
-a round's fighting) it runs so too. A game far behind (a spectator who came in late) runs frames unseen until it is
-within half a second of the players. Its own state checks are compared with the players'. A match's feed is about
-250 KB for a one-round fight (8,300 packets; player 1's fight about 90 KB of it).
+A spectator's game takes both picks and the stage select's from the feed, takes player 1's battle setup at its own
+(the stage, round time, rounds and generators, as player 2's game does over the netplay), meets both games' READY
+words where a player's game meets the other's, takes the counters (each the larger of the two games'), player 1's
+battle state machine and whole fight there (player 2's game takes only the blocks that differ in its own; a
+spectator cannot ask), and plays every frame from both players' inputs, never predicting: a frame waits for both
+inputs, and the frames the players ran on neutral inputs (outside a round's fighting) it runs so too. A game far
+behind (a spectator who came in late) runs frames unseen until it is within half a second of the players. Its own
+state checks are compared with the players'. A match's feed is about 250 KB for a one-round fight (8,300 packets;
+player 1's fight about 90 KB of it).
 
 ### 3.7 What Build game lays out
 

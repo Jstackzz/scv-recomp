@@ -151,6 +151,11 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
         const QString netLog = gameId_.toUpper() + QStringLiteral("_NET_LOG");
         if (!env.contains(netLog))
             env.insert(netLog, QDir::toNativeSeparators(QDir(sessionDir_).filePath(QStringLiteral("net-{match}.log"))));
+        // the player's own created characters (Creation, in the offline game): the online game takes them from the
+        // offline save, which it only reads (docs/PROTOCOL.md 3.1)
+        const QString save = cfg::gameSaveFile(gameId_);
+        if (!save.isEmpty() && !env.contains(QStringLiteral("SC5_CREATION_SAVE")))
+            env.insert(QStringLiteral("SC5_CREATION_SAVE"), QDir::toNativeSeparators(save));
     }
     env.insert(QStringLiteral("SC5_GAME"), gameId_);
     env.insert(QStringLiteral("SC5_SESSION_DIR"), QDir::toNativeSeparators(sessionDir_));

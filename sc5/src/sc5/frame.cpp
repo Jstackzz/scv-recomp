@@ -289,3 +289,44 @@ void Sc5Step(PPCContext& ctx, uint8_t* base) {
   }
   __imp__sub_824943F0(ctx, base);
 }
+
+// Two blends of the post-effects run every frame as step tasks: the effects' parameters (sub_82345578 calls
+// sub_82345710 for each of two effects: the effect in r5, its start at +60, fade-in +48, hold +52, fade-out +56) and the
+// colour grading (sub_82348198 calls sub_82348280: start +56, fade-in +44, hold +48, fade-out +52). Each weighs an
+// effect by elapsed = the frame count at 0x82771B48 - its start: elapsed / fade-in while elapsed < fade-in, so with a
+// fade-in of 0 a count behind the effect's start gives -inf, and NaN goes on into the blended parameters, the colour
+// grading and the final picture's colour matrix: the scene black under the HUD until the effect is set again. On the
+// console the count never goes back; here a rollback puts it back (battle.cpp's kRaw) while the post-effects, not in the
+// snapshot, keep their starts, as did player 2's game taking player 1's counters at the battle setup (versus.cpp) and,
+// before 0.1.3, at the barrier (net/netplay.cpp, CountsUp). An effect whose start is still to come weighs nothing yet:
+// for the call its start is now and its fade-in at least 1 (0 / 1), then both as they were (neither blend writes
+// them). Drawing only: nothing in the fight reads the post-effects.
+namespace {
+template <class Blend>
+void BlendFromNow(PPCContext& ctx, uint32_t start_at, uint32_t fade_in_at, Blend blend) {
+  auto* mem = REX_KERNEL_STATE()->memory();
+  const uint32_t effect = ctx.r5.u32;
+  uint32_t* start = mem->TranslateVirtual<uint32_t*>(effect + start_at);
+  uint32_t* fade_in = mem->TranslateVirtual<uint32_t*>(effect + fade_in_at);
+  const uint32_t now = __builtin_bswap32(*mem->TranslateVirtual<const uint32_t*>(0x82771B48));
+  const uint32_t was_start = __builtin_bswap32(*start), was_fade_in = __builtin_bswap32(*fade_in);
+  const bool ahead = int32_t(now - was_start) < 0;
+  if (ahead) {
+    static int told = 0;
+    if (told++ < 20 || int32_t(was_fade_in) < 1)
+      REXLOG_INFO("sc5: frame {}: a post-effect ({:X}) starts {} frames past the count, fade-in {}: it weighs nothing yet",
+                  sc5::frame::Count(), start_at, int32_t(was_start - now), int32_t(was_fade_in));
+    *start = __builtin_bswap32(now);
+    if (int32_t(was_fade_in) < 1) *fade_in = __builtin_bswap32(1u);
+  }
+  blend();
+  if (ahead) {
+    *start = __builtin_bswap32(was_start);
+    *fade_in = __builtin_bswap32(was_fade_in);
+  }
+}
+}  // namespace
+REX_EXTERN(__imp__sub_82345710);
+REX_HOOK_RAW(sub_82345710) { BlendFromNow(ctx, 60, 48, [&] { __imp__sub_82345710(ctx, base); }); }
+REX_EXTERN(__imp__sub_82348280);
+REX_HOOK_RAW(sub_82348280) { BlendFromNow(ctx, 56, 44, [&] { __imp__sub_82348280(ctx, base); }); }

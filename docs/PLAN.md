@@ -1,4 +1,4 @@
-# SC5 Online: plan
+# SCV Online: plan
 
 Soulcalibur V running natively on Windows, built by each player from their own Xbox 360 disc, with a
 launcher that has MK3D Online's features (all but the jukebox, for now) and rollback netplay. Same shape as
@@ -51,7 +51,7 @@ game computes:
   the game does not read back.
 - Not offered: anything the game itself decides (its effect, shadow or particle counts) unless it is shown that
   the fight never reads it. MK9 found GPU answers that game logic read (occlusion queries) desynced matches;
-  SC5 gets the same fixed answers on every PC from the start.
+  SCV gets the same fixed answers on every PC from the start.
 
 ## Milestones
 

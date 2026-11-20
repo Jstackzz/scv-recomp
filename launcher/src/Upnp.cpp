@@ -209,7 +209,7 @@ void UpnpMapper::addMapping(int leaseSeconds) {
     const QString args =
         QStringLiteral("<NewRemoteHost></NewRemoteHost><NewExternalPort>%1</NewExternalPort><NewProtocol>UDP"
                        "</NewProtocol><NewInternalPort>%1</NewInternalPort><NewInternalClient>%2</NewInternalClient>"
-                       "<NewEnabled>1</NewEnabled><NewPortMappingDescription>SC5 Online</NewPortMappingDescription>"
+                       "<NewEnabled>1</NewEnabled><NewPortMappingDescription>SCV Online</NewPortMappingDescription>"
                        "<NewLeaseDuration>%3</NewLeaseDuration>")
             .arg(port)
             .arg(localIp_.toString())

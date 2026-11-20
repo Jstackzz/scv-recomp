@@ -291,6 +291,17 @@ async def test_ranked_winner_keeps_their_fighter_and_the_loser_picks_again(serve
     assert over["state"] == "over" and over["winner"] == p1 and (over["you"], over["them"]) == (3, 2)
 
 
+async def test_ranked_winner_keeps_their_created_character(server, connect, udp_peers):
+    # a created character is c.<its checksum> in the games' result lines (both games name it alike): the winner keeps
+    # it as any fighter, their own game picking it again and the other following
+    sides, gos = await first_match(server, connect, udp_peers, ["Dairou", "Darrius"], ranked=True, character="")
+    (c1, _), (c2, _) = sides[1], sides[2]
+    s1, _ = await play(c1, c2, gos[1]["match"], 1, fighters=(("c.9A142B82", "15.0"), ("c.9A142B82", "15.0")))
+    assert s1["keeps"] == gos[1]["p1_name"]
+    gos2 = await next_match(server, sides, s1["series"])
+    assert (gos2[1]["p1"], gos2[1]["p2"]) == ("c.9A142B82", "-") and (gos2[2]["p1"], gos2[2]["p2"]) == ("c.9A142B82", "-")
+
+
 async def test_a_draw_in_a_set_is_nobodys_point(server, connect, udp_peers):
     # a drawn match counts for neither player: the set's next match goes as the drawn one did (the last winner keeping
     # their fighter), and draws never end a set as matches that did not count do

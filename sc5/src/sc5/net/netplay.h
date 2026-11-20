@@ -76,6 +76,26 @@ void SetLocalPick(int side, const Pick& pick, uint32_t pickable);
 Pick RemotePick(int side);
 // the select screen slots the other game can load (0 before it said)
 uint32_t RemotePickable();
+// this game's downloadable parts for created characters, as a fingerprint (creation::DlcFingerprint), sent with the
+// picks; the other game's (0 before it said). A created character with downloadable parts is picked only when the two
+// are the same.
+void SetLocalDlc(uint32_t fingerprint);
+uint32_t RemoteDlc();
+// The stage select before the coming match: the player who picks the stage there (`chooser`, 0 or 1: player 1's
+// game decides, player 2's takes its word) and where they are with it: `phase` -1 nothing yet, 0 choosing (`cursor`:
+// the place, 0 Random, sc5/select.h), 1 picked (`stage`: the place picked, Random drawn from the match's seed)
+struct StagePick {
+  int chooser = -1, phase = -1, cursor = -1, stage = -1;
+};
+void SetLocalStage(const StagePick& s);
+StagePick RemoteStage();
+// A created character picked for the coming match (sc5/creation.h): its record, 13,340 bytes. This game's player's
+// (`side` this game's) is sent until the other game has every chunk; the other player's is taken as it comes: exactly
+// the record's bytes, from chunks 0-11 (1,200 bytes each, the last 140), the same bytes when a chunk comes again.
+// Anything else refuses it for this match. A spectator's game takes it from the feed. Empty clears.
+void SetLocalCreated(int side, const std::vector<uint8_t>& record);
+// the other player's record for `side`: 1 whole (in `out`), 0 not yet, -1 refused (`why`)
+int RemoteCreated(int side, std::vector<uint8_t>& out, std::string& why);
 struct Setup {
   uint32_t stage = 0, round_time = 0, wins = 0;
   std::vector<uint32_t> words;  // player 1's game's values of what both must have alike from the setup on (versus.cpp)

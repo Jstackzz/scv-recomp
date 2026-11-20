@@ -8,6 +8,8 @@
 #include <filesystem>
 
 #include <rex/cvar.h>
+#include <rex/ui/window.h>
+#include <rex/version.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
@@ -221,4 +223,11 @@ void Sc5App::OnPostSetup() {
       sc5::autopilot::InitPlain(plan);
     }
   }
+}
+
+// The window's title, once the window is there: the name players know, SCV Online (the app's own name, "sc5",
+// stays: its config file and user folder carry it)
+void Sc5App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+  (void)drawer;
+  if (rex::ui::Window* w = window()) w->SetTitle(std::string("SCV Online ") + REXGLUE_BUILD_TITLE);
 }

@@ -1,7 +1,7 @@
-# SC5 Online: launcher and server
+# SCV Online: launcher and server
 
 The launcher (`launcher/`, Qt 6 Widgets, C++20) and the lobby/matchmaking server (`server/`, Python asyncio, standard
-library only) of SC5 Online, Soulcalibur V (Xbox 360) on Windows. Both are ported from MK3D Online
+library only) of SCV Online, Soulcalibur V (Xbox 360) on Windows. Both are ported from MK3D Online
 (`mk3d-rollback`, 1.0.10) and keep every one of its features but the jukebox: accounts and TLS pinning, Ranked and
 Casual queues with MATCH FOUND, series and rematches, ranked sets and rank badges, lobbies with King of the Hill,
 Respect Points and spectators, single player, practice and offline versus, the leaderboard, Build game, Controls,
@@ -21,7 +21,7 @@ server/                  Python 3.11+ package, asyncio + standard library only
   tests/                 pytest suite (python -m pytest server/tests)
 launcher/                Qt 6 Widgets, C++20, CMake + Ninja + MSVC
   data/sc5.json          the game, its modes and roster (compiled into the exe)
-  data/logo, data/ranks  SC5 Online's emblem, icons and the 16 rank badges (tools/make_art.py draws them)
+  data/logo, data/ranks  SCV Online's emblem, icons and the 16 rank badges (tools/make_art.py draws them)
   data/sounds/           match-found.wav, the MATCH FOUND chime (MK3D Online's, synthesized)
   src/                   MainWindow, pages, ServerClient (TLS), UdpRendezvous, TunnelBridge, GameProcess,
                          MatchController, FeedLink (spectators), ReportSender, Controls, X360 (disc, packages, XEX),
@@ -109,8 +109,8 @@ scp -i <key> sc5-server.tar ubuntu@<address>:/tmp/
 ssh -i <key> ubuntu@<address> "mkdir -p /tmp/sc5 && tar -x -f /tmp/sc5-server.tar -C /tmp/sc5 && sudo env SC5_TCP_PORT=7797 SC5_UDP_PORT=7798 sh /tmp/sc5/server/deploy/install.sh <address> <oldest launcher>"
 ```
 
-The official SC5 server runs that way on the Oracle Cloud machine that also runs MK3D Online's (TCP 7777, UDP 7778)
-and MK9 Online's (7787, 7788): SC5's is TCP 7797 and UDP 7798. Its address and certificate fingerprint go in a
+The official SCV server runs that way on the Oracle Cloud machine that also runs MK3D Online's (TCP 7777, UDP 7778)
+and MK9 Online's (7787, 7788): SCV's is TCP 7797 and UDP 7798. Its address and certificate fingerprint go in a
 player package's `defaults.ini` beside the launcher (`[server]` `address=<host>:7797`, `fingerprint=<SHA-256>`), kept
 out of the repository because it names the machine. A release launchers should take: publish its zip, write
 `/var/lib/sc5/update.json` (version, url, sha256, size, notes, page; PROTOCOL.md 1.3), and raise `min-client` with
@@ -131,7 +131,7 @@ launcher\build.cmd
 ```
 
 builds `build\launcher\SC5Launcher.exe` and copies the Qt runtime beside it (TLS through Windows' Schannel, no
-OpenSSL). The exe carries its version and publisher (`data/version.rc.in`) and SC5 Online's icon. By hand:
+OpenSSL). The exe carries its version and publisher (`data/version.rc.in`) and SCV Online's icon. By hand:
 `cmake -S launcher -B build\launcher -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<qt>
 -DSC5_SDL3_DIR=<sdl3 sources>` in a VS developer prompt, `cmake --build build\launcher`, then `windeployqt`.
 
@@ -161,7 +161,7 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
 
 ### The pages
 
-1. **Header and sign in.** The emblem, *SC5 ONLINE*, the game (Soulcalibur V, Xbox 360, World: there is one, so no
+1. **Header and sign in.** The emblem, *SCV ONLINE*, the game (Soulcalibur V, Xbox 360, World: there is one, so no
    game selector) and the account button: create an account or sign in; "remember me" keeps a 30-day login token. A
    launcher that never signed in on this PC opens the window by itself, on *create account*, when it first connects.
 2. **Ranked / Casual** (Casual is `casual` in the protocol): the mode (Versus), the character or *Pick my character
@@ -180,12 +180,13 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    one's choice of it takes both there) and LEAVE for 60 s after every match, in the card and in the *Rematch?* window
    that comes over the game (a controller works it); a ranked set (first to 3) asks for its next match by itself, only
    the last match's loser picks again, and *Leave set* asks first when leaving would lose it. The next match starts
-   from the result screen (`MatchController::Phase::AtResult`, the game's `rematch`: back through Character Select,
-   no new punch, no restart); a series over, a relayed match or an older opponent's launcher park the game as before.
+   from the result screen (`MatchController::Phase::AtResult`, the game's `rematch`: both REMATCH is the game's own
+   Rematch, anything else goes back through Character Select; no new punch, no restart); a series over, a relayed match or an older opponent's launcher park the game as before.
    *Your record* shows the wins and losses (and in Ranked the Elo, the rank's badge, the next rank and the whole
    ladder in its tooltip).
-3. **Lobby**: create (name, mode, password, best of 1/3/5, *King of the Hill*), join from the list or by its
-   5-letter code, pick a character (or *Pick in the game*), chat, *Ready*: both players ready start the match after
+3. **Lobby**: create (name, mode, password, 1, 2 or 3 rounds to win, 3 as on the console, *King of the Hill*),
+   join from the list or by its 5-letter code, pick a character (or *Pick in the game*), chat, *Ready*: both players
+   ready start the match after
    the server's 3-2-1 countdown. *Watch* makes you a spectator: each lobby match plays in your game from both
    players' feeds (`FeedLink`, PROTOCOL.md 1.10.1 and 3.6). **King of the Hill**: the winner stays on, the next in
    line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
@@ -205,7 +206,7 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    title update of title `4E4D083D` whose `default.xexp` (SHA-1 `47a09662...`) patches 0.0.0.2 into 0.0.1.2, a DLC
    package must be downloadable content (`00000002`) of the same title (the packages `tools/py/ps3dlc.py` makes from a
    player's PS3 DLC are taken the same way, GAME.md); anything else is named and refused (another
-   game, region, print, update or a modified copy), since both players of a match must run the same code. It checks
+   game or update, or a modified copy; every region's disc is this World one), since both players of a match must run the same code. It checks
    the free space, extracts the disc into `disc\` on a worker thread with a progress bar (the dashboard update,
    `$SystemUpdate`, left out; a file already there with the right size kept, so a stopped extraction goes on),
    puts `default.xexp` beside `default.xex`, `patch.cpk` into `update\` and each DLC package into `dlc\`. An empty
@@ -330,9 +331,12 @@ files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them
   laid-out package; `tools\package.ps1`), not in a source build, where `sc5\build.cmd` does. Before the first build
   a package says `sc5.exe` is missing, as if an antivirus had taken it.
 - Dampierre (downloadable) is picked in the game only, by players who both have him.
-- A series' next match goes from the result screen back through Character Select and loads the fight again (the
-  game's own Rematch, which keeps the fight loaded, parts two games: GAME.md); a relayed or tunnelled match's next
-  one is still a `park` and a new `start`.
+- A relayed or tunnelled match's next match is still a `park` and a new `start`, not a rematch from the result
+  screen.
+- Created characters, original ones and customized fighters, come from the offline save, read only
+  (`SC5_CREATION_SAVE`, docs/PROTOCOL.md 3.3). One that the other PC's check would refuse is left out of the online
+  select screen (a customized fighter is played in one of its fighter's own two costumes), and the main menu's
+  Characters Created count stays 0 online.
 - Results are self-reported: agreement counts, disagreement voids the match, a single report counts for nothing.
 - One server process with in-memory queues and lobbies; a restart drops searches and matches in progress.
 - The launcher is Windows only and not code-signed.

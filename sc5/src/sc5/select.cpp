@@ -50,6 +50,8 @@ constexpr Slot kSlotNames[kSlots] = {
 };
 
 std::atomic<uint32_t> g_obj{0}, g_vtable{0};
+std::atomic<uint32_t> g_stage_obj{0};
+std::atomic<uint64_t> g_stage_frame{0};  // the last frame its update ran
 std::atomic<uint64_t> g_since{0};
 std::atomic<int> g_costume[2] = {-1, -1}, g_costumes[2] = {0, 0};
 
@@ -98,6 +100,10 @@ int Costume(int side) { return side == 0 || side == 1 ? g_costume[side].load() :
 int Costumes(int side) { return side == 0 || side == 1 ? g_costumes[side].load() : 0; }
 
 bool Pickable(int slot) {
+  if (slot == kCreationSlot) {  // Creation: its list of original characters (the screen refuses an empty one)
+    const uint32_t obj = Object();
+    return obj && Rd(obj + 1600 + 4 * uint32_t(slot)) == 0;
+  }
   if (slot < 0 || slot >= kSlots || !kSlotNames[slot].roster) return false;
   const uint32_t obj = Object();
   return obj && Rd(obj + 1600 + 4 * uint32_t(slot)) == 0;
@@ -111,6 +117,8 @@ uint32_t PickableMask() {
 }
 
 int SlotOfRosterId(const std::string& id) {
+  // tests (tools\linktest.py --p1 creation): the Creation slot, the first of its list unless a costume says otherwise
+  if (_stricmp(id.c_str(), "creation") == 0) return kCreationSlot;
   for (int s = 0; s < kSlots; s++)
     if (kSlotNames[s].roster && _stricmp(kSlotNames[s].roster, id.c_str()) == 0) return s;
   return -1;
@@ -121,6 +129,8 @@ int CharacterOfSlot(int slot) {
   return int(Rd(kSlotTable + kSlotSize * uint32_t(slot)));
 }
 
+int IdOfSlot(int slot) { return slot >= 0 && slot < kSlots ? int(Rd(kSlotTable + kSlotSize * uint32_t(slot))) : -1; }
+
 int SlotOfCharacter(int character) {
   for (int s = 0; s < kSlots; s++)
     if (kSlotNames[s].roster && CharacterOfSlot(s) == character) return s;
@@ -128,6 +138,18 @@ int SlotOfCharacter(int character) {
 }
 
 const char* NameOfSlot(int slot) { return slot >= 0 && slot < kSlots ? kSlotNames[slot].name : "?"; }
+
+uint32_t StageObject() {
+  const uint32_t obj = g_stage_obj.load(std::memory_order_relaxed);
+  return obj && frame::Count() <= g_stage_frame.load(std::memory_order_relaxed) + 2 ? obj : 0;
+}
+
+int StageCursor() {
+  const uint32_t obj = StageObject();
+  if (!obj) return -1;
+  const uint32_t v = Rd(obj + 200);
+  return v < uint32_t(kStagePlaces) ? int(v) : -1;
+}
 
 }  // namespace sc5::select
 
@@ -146,6 +168,14 @@ REX_EXTERN(__imp__sub_82301500);
 REX_HOOK_RAW(sub_82301500) {
   sc5::select::SetUp(ctx.r3.u32, "a");
   __imp__sub_82301500(ctx, base);
+}
+
+// the stage select's update, every frame it is up (r3 its object)
+REX_EXTERN(__imp__sub_8234C028);
+REX_HOOK_RAW(sub_8234C028) {
+  sc5::select::g_stage_obj = ctx.r3.u32;
+  sc5::select::g_stage_frame = sc5::frame::Count();
+  __imp__sub_8234C028(ctx, base);
 }
 
 // the costume panel's label: (side, n, count), n from 1; (side, 0, 0) clears it

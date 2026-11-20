@@ -4,7 +4,8 @@ session folder (cmd.txt, status.txt, game.log, an empty save), both boot to thei
 line both games write, with the time.
 
     python -I tools/linktest.py [--name linktest] [--mode versus|sparring] [--p1 Siegfried] [--p2 Mitsurugi]
-                                [--rounds 1] [--lag 0] [--pick1 SLOT[.COSTUME]] [--pick2 ...] [--rematch] [--again]
+                                [--rounds 1] [--lag 0] [--pick1 SLOT[.COSTUME]] [--pick2 ...] [--rematch] [--rematches N]
+                                [--rematch-args "stage=keep"] [--again]
                                 [--park-after S] [--back-at FRAME] [--watch] [--dlc2 DIR] [--env NAME=VALUE]
                                 [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
                                 [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
@@ -131,6 +132,10 @@ def main():
     ap.add_argument("--pick1", default="")
     ap.add_argument("--pick2", default="")
     ap.add_argument("--rematch", action="store_true")
+    ap.add_argument("--rematches", type=int, default=0, help="this many rematches in a row (--rematch: one)")
+    ap.add_argument("--rematch-stagger", type=float, default=0, help="seconds between game 1's rematch line and game 2's (two players choosing at different times)")
+    ap.add_argument("--rematch-args", default="", help="more keys for the rematch line (stage=keep: as the launcher's casual rematch, the game's own Rematch); "
+                         "several, one per rematch in turn, split by |")
     ap.add_argument("--again", action="store_true", help="a second match after the park")
     ap.add_argument("--park-after", type=float, default=0, help="park this many seconds into the match")
     ap.add_argument("--back-at", type=int, default=0, help="player 1 presses BACK at this fight frame")
@@ -202,7 +207,8 @@ def main():
 
     last = [""] * count
     stage = "boot"
-    rematched = False
+    rematched = 0
+    rematches = max(a.rematches, 1 if a.rematch else 0)
     again_done = False
     in_match_at = 0
     match = f"local-{int(t0)}"
@@ -239,11 +245,16 @@ def main():
                     print(f"{time.time() - t0:7.1f}s park sent in the match", flush=True)
                     stage = "park"
             elif stage == "match" and all(x.startswith(DONE) for x in st):
-                if a.rematch and not rematched and all(x.startswith("result") for x in st[:2]):
-                    rematched = True
-                    for s in sessions[:2]:
-                        write_atomic(os.path.join(s, "cmd.txt"), f"rematch seed=777 match={match}-2")
-                    print(f"{time.time() - t0:7.1f}s rematch sent", flush=True)
+                if rematched < rematches and all(x.startswith("result") for x in st[:2]):
+                    rematched += 1
+                    extras = a.rematch_args.split("|")
+                    extra = extras[(rematched - 1) % len(extras)].strip()
+                    for k, s in enumerate(sessions[:2]):
+                        if k and a.rematch_stagger:
+                            time.sleep(a.rematch_stagger)
+                        write_atomic(os.path.join(s, "cmd.txt"),
+                                     f"rematch seed={776 + rematched} match={match}-{rematched + 1} {extra}".strip())
+                    print(f"{time.time() - t0:7.1f}s rematch {rematched} sent", flush=True)
                     time.sleep(1)
                     continue
                 for s in sessions:

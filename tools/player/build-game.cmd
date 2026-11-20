@@ -83,7 +83,7 @@ echo The game is built from the updated executable: put the update in place firs
 exit /b 1
 
 :missing
-echo Part of SC5 Online is missing from this folder (host\sc5.exe, sdk\bin\rexglue.exe, or clang, lld-link or ninja
+echo Part of SCV Online is missing from this folder (host\sc5.exe, sdk\bin\rexglue.exe, or clang, lld-link or ninja
 echo in ..\..\toolchain\bin): an antivirus may have taken it. Allow it there, or unpack the release again.
 exit /b 1
 

@@ -45,6 +45,8 @@ set(SC5_SOURCES
     src/sc5/sound.cpp
     src/sc5/dlc.cpp
     src/sc5/select.cpp
+    src/sc5/creation.cpp
+    src/sc5/creation_check.cpp
     src/sc5/versus.cpp
     src/sc5/autopilot.cpp
     src/sc5/link.cpp
@@ -90,3 +92,9 @@ else()
     rexglue_setup_target(sc5 GPU_PLUGINS xenos)
 endif()
 target_compile_definitions(sc5 PRIVATE SC5_VERSION="${SC5_VERSION}")
+
+# The check of created characters from another PC, tested alone with the game's own records and broken ones:
+# out\build\win-amd64-release\creation_check_test.exe tests\data (exit code 0: every test passed)
+add_executable(creation_check_test tests/creation_check_test.cpp src/sc5/creation_check.cpp)
+target_include_directories(creation_check_test PRIVATE src)
+target_compile_definitions(creation_check_test PRIVATE _CRT_SECURE_NO_WARNINGS)
