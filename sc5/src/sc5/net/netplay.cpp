@@ -1676,6 +1676,9 @@ void StopRolling() {
   // the round's end with both players' health (a ring out: neither at 0)
   if (g_round_trail.size() < 600)
     g_round_trail += fmt::format(" -{}(health {:.0f}/{:.0f})", g_frame, FighterHealth(0), FighterHealth(1));
+  if (g_status == Status::InSync)
+    REXLOG_INFO("sc5 net: the round's fighting over at frame {}: health {:.1f} / {:.1f}{}", g_frame, FighterHealth(0),
+                FighterHealth(1), FighterHealth(0) > 0 && FighterHealth(1) > 0 ? " (nobody at 0: a ring out or the time)" : "");
   REXLOG_INFO("sc5 net: lockstep from frame {} of match {} ({} rollbacks so far, {} frames run again, the longest {} "
               "frames, {:.1f} ms; {} frames held back)",
               g_frame, g_match, g_stats.rollbacks, g_stats.rerun, g_stats.max_rollback, g_stats.longest_rollback_ms,
