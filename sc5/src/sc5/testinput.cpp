@@ -14,6 +14,7 @@
 
 #include "sc5/frame.h"
 #include "sc5/game.h"
+#include "sc5/select.h"
 
 namespace sc5::testinput {
 namespace {
@@ -27,6 +28,7 @@ struct Step {
 
 std::array<std::vector<Step>, 4> g_script;
 std::array<std::vector<Step>, 4> g_fight_script;  // SC5_FIGHT_INPUT_Pn: by fight frame (game::FightFrame)
+std::array<std::vector<Step>, 4> g_select_script;  // SC5_SELECT_INPUT_Pn: by the select screen's frames (select::Age)
 std::array<bool, 4> g_scripted{};
 int g_pads = 0;
 bool g_no_physical = false;
@@ -128,15 +130,19 @@ Pad ScriptAt(const std::vector<Step>& script, uint32_t user, uint64_t now) {
   return pad;
 }
 
+// a scripted user's pad now: its fight script in a fight, its select script at a select screen, else its menu script
+Pad Scripted(uint32_t user) {
+  const int64_t fight = game::FightFrame();
+  if (fight >= 0 && !g_fight_script[user].empty()) return ScriptAt(g_fight_script[user], user, uint64_t(fight));
+  if (!g_select_script[user].empty() && select::Object())
+    return ScriptAt(g_select_script[user], user, select::Age());
+  return ScriptAt(g_script[user], user, frame::Count());
+}
+
 bool Source(uint32_t user, Pad& out) {
   if (user >= 4) return false;
   if (g_scripted[user]) {
-    const int64_t fight = game::FightFrame();
-    if (fight >= 0 && !g_fight_script[user].empty()) {
-      out = ScriptAt(g_fight_script[user], user, uint64_t(fight));
-    } else {
-      out = ScriptAt(g_script[user], user, frame::Count());
-    }
+    out = Scripted(user);
     return true;
   }
   if (int(user) < g_pads) {
@@ -155,12 +161,13 @@ bool Source(uint32_t user, Pad& out) {
 
 void Init() {
   for (int u = 0; u < 4; u++) {
-    for (int fight = 0; fight < 2; fight++) {
+    for (int fight = 0; fight < 3; fight++) {
       char name[24];
-      std::snprintf(name, sizeof name, fight ? "SC5_FIGHT_INPUT_P%d" : "SC5_INPUT_P%d", u + 1);
+      std::snprintf(name, sizeof name, fight == 2 ? "SC5_SELECT_INPUT_P%d" : fight ? "SC5_FIGHT_INPUT_P%d" : "SC5_INPUT_P%d",
+                    u + 1);
       const char* text = std::getenv(name);
       if (!text || !*text) continue;
-      auto& script = fight ? g_fight_script[u] : g_script[u];
+      auto& script = fight == 2 ? g_select_script[u] : fight ? g_fight_script[u] : g_script[u];
       if (!ParseScript(text, script)) {
         REXLOG_ERROR("sc5: {} could not be read: {}", name, text);
         script.clear();
@@ -168,7 +175,8 @@ void Init() {
       }
       g_scripted[u] = true;
       g_active = true;
-      REXLOG_INFO("sc5: user {} plays a script of {} steps{}", u, script.size(), fight ? " in fights" : "");
+      REXLOG_INFO("sc5: user {} plays a script of {} steps{}", u, script.size(),
+                  fight == 2 ? " at select screens" : fight ? " in fights" : "");
     }
   }
   if (const char* p = std::getenv("SC5_PADS"); p && *p) {
@@ -186,9 +194,7 @@ bool Active() { return g_active; }
 
 bool ScriptedPad(uint32_t user, Pad& out) {
   if (user >= 4 || !g_scripted[user]) return false;
-  const int64_t fight = game::FightFrame();
-  out = fight >= 0 && !g_fight_script[user].empty() ? ScriptAt(g_fight_script[user], user, uint64_t(fight))
-                                                     : ScriptAt(g_script[user], user, frame::Count());
+  out = Scripted(user);
   out.connected = true;
   return true;
 }
