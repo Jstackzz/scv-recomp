@@ -364,6 +364,11 @@ files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them
 - Dampierre (downloadable) is picked in the game only, by players who both have him.
 - A relayed or tunnelled match's next match is still a `park` and a new `start`, not a rematch from the result
   screen.
+- A spectator's view ends (the watching game says `disconnected` some 20 s later and parks) when the players' games
+  went out of step and played the round again (docs\GAME.md, "The round again"): the spectators' feed ends there.
+- A KO that only a wrong guess had and a rollback took back leaves its call on the screen ("PERFECT", "K.O.") over the
+  round that goes on, until the round's real end; the round markers are right (docs\GAME.md, "The HUD's round
+  markers").
 - Created characters, original ones and customized fighters, come from the offline save, read only
   (`SC5_CREATION_SAVE`, docs/PROTOCOL.md 3.3). One that the other PC's check would refuse is left out of the online
   select screen (a customized fighter is played in one of its fighter's own two costumes), and the main menu's

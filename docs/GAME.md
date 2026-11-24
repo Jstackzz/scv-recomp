@@ -701,7 +701,11 @@ the next match (CHOICE).
     frame's number (netplay.cpp `SeedFrame`: a frame's first run, each rerun, a spectator's). What a frame draws then
     depends on nothing an earlier frame drew, in either game: a system of that kind nobody has met yet can no longer
     part two games for the rest of a match (within a frame the fight's draws must still not come after such a
-    system's). `SC5_NET_NO_FRAME_SEED` (tests) seeds as before, where the battle's state changes only.
+    system's). `SC5_NET_NO_FRAME_SEED` (tests) seeds as before, where the battle's state changes only. The seeding
+    leaves its mark in what the check hashes, so a spectator's game checks a frame before it seeds it, as the
+    players' games keep a frame before they seed it (seeding first, it was apart at its first check, frame 120; with
+    the order right, 341 checks alike to the same result as the players', linktest.py `--watch`). These seedings are
+    not logged (60 lines a second otherwise).
   With both, stage 21's match: every one of 148 checks alike and all 6,688 frames' draws alike in the two games.
   `SC5_NET_CHECK_RESTORE=1` (tests) saves the battle again right after a rollback put a frame back and logs every
   word of the fight the game's restore left otherwise (none on stage 21: the game's restore sets that timer up anew,
