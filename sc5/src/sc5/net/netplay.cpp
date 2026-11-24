@@ -1333,6 +1333,24 @@ std::string PlaceName(uint32_t a) {
   return fmt::format("{:08X}", a);
 }
 
+// a detail line of many parts: as many lines as it takes, none over 190 characters (the launcher's report cuts a line
+// at 200)
+void LogDetailParts(const std::string& head, const std::string& parts) {
+  std::string line = head;
+  size_t at = 0;
+  while (at < parts.size()) {
+    size_t end = parts.find(' ', at + 1);
+    if (end == std::string::npos) end = parts.size();
+    if (line.size() + (end - at) > 170 && line.size() > head.size()) {
+      REXLOG_INFO("sc5 desync: {}", line);
+      line = head + " (more)";
+    }
+    line.append(parts, at, end - at);
+    at = end;
+  }
+  REXLOG_INFO("sc5 desync: {}", line);
+}
+
 // the check frame's snapshot kept (Keep): the newest few
 void KeepEvidence(uint32_t f, uint32_t stream) {
   const auto* blocks = battle::Blocks(stream);
@@ -1445,7 +1463,7 @@ void BeginDetail(uint32_t f) {
               g_match, f, g_frame, game::BattleStateName(game::BattleState()), Get32(kFighters[0] + kFighterRoundsWon),
               Get32(kFighters[1] + kFighterRoundsWon), FighterHealth(0), FighterHealth(1), Delay(), g_stats.rollbacks,
               g_stats.max_rollback);
-  REXLOG_INFO("sc5 desync: rounds fought (+ from, - to, match frames):{}", g_round_trail.empty() ? " none" : g_round_trail);
+  LogDetailParts("rounds fought (+ from, - to, match frames):", g_round_trail.empty() ? " none" : g_round_trail);
   auto it = g_evidence.find(f);
   if (it == g_evidence.end()) {
     REXLOG_INFO("sc5 desync: frame {}'s snapshot is no longer kept: nothing to compare", f);
@@ -1480,10 +1498,10 @@ void CompareDetail() {
       runs.emplace_back(p.source, p.len);
   }
   std::string where;
-  for (size_t i = 0; i < runs.size() && i < 12; i++) where += fmt::format(" {} ({} bytes)", PlaceName(runs[i].first), runs[i].second);
-  REXLOG_INFO("sc5 desync: frame {}: {} of {} pages differ:{}{}", d.frame, d.differing.size(), d.pages.size(),
-              where.empty() ? " none (the hashes differ in what a page's hash does not tell)" : where,
-              runs.size() > 12 ? fmt::format(" and {} more places", runs.size() - 12) : "");
+  for (size_t i = 0; i < runs.size() && i < 24; i++) where += fmt::format(" {}({})", PlaceName(runs[i].first), runs[i].second);
+  if (runs.size() > 24) where += fmt::format(" and-{}-more-places", runs.size() - 24);
+  LogDetailParts(fmt::format("frame {}: {} of {} pages differ, at (bytes):", d.frame, d.differing.size(), d.pages.size()),
+                 where.empty() ? " nowhere (the hashes differ in what a page's hash does not tell)" : where);
   if (d.differing.empty()) d.done = true;
 }
 
@@ -1733,7 +1751,7 @@ void StopRolling() {
   g_rolling = false;
   // the round's end with both players' health (a ring out: neither at 0)
   if (g_round_trail.size() < 600)
-    g_round_trail += fmt::format(" -{}(health {:.0f}/{:.0f})", g_frame, FighterHealth(0), FighterHealth(1));
+    g_round_trail += fmt::format(" -{}(health:{:.0f}/{:.0f})", g_frame, FighterHealth(0), FighterHealth(1));
   if (g_status == Status::InSync)
     REXLOG_INFO("sc5 net: the round's fighting over at frame {}: health {:.1f} / {:.1f}{}", g_frame, FighterHealth(0),
                 FighterHealth(1), FighterHealth(0) > 0 && FighterHealth(1) > 0 ? " (nobody at 0: a ring out or the time)" : "");
