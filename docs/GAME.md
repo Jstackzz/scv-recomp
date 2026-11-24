@@ -727,6 +727,10 @@ the next match (CHOICE).
     and 2 in the other from frame 355 to the match's end, and 2 in both in the next run of the same match. Nothing
     reads it in the second after but the snapshot's own save and restore (`SC5_DBG_WATCH_READS`). Left out.
   - **A round's call not alike** (stage 22, round 3): below, "The check at a round's call".
+  With all of it, the same match on the 27 places as two players' games run it (`HUNT_PLAY=1`: a failed check plays
+  the round again or makes a round's call alike): every match to the same result in both games; 25 with every check
+  alike and nothing to do, 2 with one round's call made alike (stage 23 at frame 1,068, stage 22 at 5,512); no round
+  played again.
 - **The check at a round's call** (netplay.cpp `CallCheck`, `CallSync`; 0.1.4). Outside a round's fighting the two
   games run on neutral inputs and compare nothing, and the game itself is not the same there on two PCs: after a KO
   a fighter's script waits on its voice (CRI's playback status, the audio's own time: sound.cpp), so the winner's line
