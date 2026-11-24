@@ -84,8 +84,8 @@ std::string Check(const Record& r);
 std::string GameRepairCheck(PPCContext& ctx, uint8_t* base, const Record& r);
 // a player's record from the other PC (checked) into their side's slot (RemoteSlot); false when it does not pass
 bool PlaceRemote(int side, const Record& r);
-// both remote slots empty again (a new match)
-void ClearRemote();
+// both remote slots empty again (a new match), or one side's (its player took the pick back)
+void ClearRemote(int only = -1);
 
 // The creation manager (the select screen's [object + 1256]; vtable 0x820BF BDC) keeps its own copy of each slot, 50
 // entries of 13,544 bytes from +4: the record, then what it works out from it (a count of break-level parts at +13476

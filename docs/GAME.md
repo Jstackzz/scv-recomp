@@ -1025,9 +1025,25 @@ Devil Jin is not on it (in SCV a style for created characters only), though data
 **Picks.** A side the start line names (a roster id, or `<character id>.<costume>` from a result line) the autopilot
 picks on both PCs: the cursor one press toward the slot at a time, A, the costume panel to the costume (in a mirror
 match the second side cannot have the first side's: after three presses that change nothing it takes what the panel
-shows), A. A side named `-` its player picks on their own PC with their own controller (only moves and A get
-through; A only on a slot both games can load, so Dampierre only when both players have his package) while the
-other game follows: their cursor as it moves, then their character and costume (PICK packets, repeated).
+shows), A. A side named `-` its player picks on their own PC with their own controller (only moves, A and on the
+costume panel B get through; A only on a slot both games can load, so Dampierre only when both players have his
+package) while the other game follows: their cursor as it moves, then their character and costume (PICK packets,
+repeated). B on the costume panel takes the player back to the characters, as on the console: the other game follows
+only a whole pick, so it sees the cursor again and nothing else. Before, B was held back there too (0.1.3's report: "can't
+press back anymore" on the created characters' panel), and a player whose panel held back A on every costume (each of
+their created characters wearing downloadable parts the other PC lacks, say) could neither pick nor leave.
+**Taking a pick back** (TakeBack). The select screen takes player 1's whole pick, then player 2's, in both games, and
+the game's own B goes back one step at a time (from player 2's characters to player 1's costume panel, from a costume
+panel to the characters; on player 1's characters it would leave the screen, so the autopilot never presses it there).
+Player 2's last A ends the screen, so only player 1 has a whole pick to take back, while player 2 still picks: their B
+makes their game ask (PICK phase 3, the request's number in the costume) and wait; the other game, unless its player
+has finished, holds them back, presses B until player 1's side is at its characters, forgets the created character's
+record (net::ForgetRemoteCreated, the slot cleared) and answers with a PICK for player 1's side, phase 3, the same
+number; player 1's game then presses B to the characters too and the player picks again. Player 2 finishing first is
+the no. A spectator takes a whole pick back once the player's game shows phase 0 or 1 for it. Only when both sides
+are their players' (`-`): a side the launcher names is picked at once. Two games (2026-11-24, `SC5_SELECT_INPUT_P1/_P2`, the pad path):
+player 1 picked a created character, took it back (player 1's game: side 1 3 -> 1 -> 0; the other's: side 1 3 -> 1 ->
+0, the record forgotten), picked Alpha Patroklos instead, player 2 picked, and the match ran in sync to the result.
 `SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests. A side named `c.<checksum>` (a ranked
 winner's created character, or a lobby's rematch that starts again) its own PC's autopilot picks: the fighter, then,
 once the costume panel is there, its created costume. The A that picked the fighter is held to its end while the panel

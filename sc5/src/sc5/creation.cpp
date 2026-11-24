@@ -698,8 +698,9 @@ bool PlaceRemote(int side, const Record& r) {
   return true;
 }
 
-void ClearRemote() {
+void ClearRemote(int only) {
   for (int side = 0; side < 2; side++) {
+    if (only >= 0 && side != only) continue;
     const uint32_t s = Slot(RemoteSlot(side));
     if (!s) return;
     uint8_t* slot = Host(s);

@@ -18,8 +18,9 @@
 // The picks: a side the launcher named (a roster id or a game's character id with a costume) is picked by the
 // autopilot on both PCs: its cursor steered to the slot one press at a time, A, the costume panel turned to the
 // costume, A. A side named "-" online is picked by its player on their own PC with their own controller (the first
-// pad: B, BACK, START and the rest held back, A only on a slot both games can load), and the other game follows it:
-// the cursor where theirs is, then their character and costume (sc5/net/netplay.h, PICK).
+// pad: BACK, START and the rest held back, A only on a slot both games can load, B only on the costume panel, back to
+// the characters), and the other game follows it: the cursor where theirs is, then their character and costume
+// (sc5/net/netplay.h, PICK).
 
 #include "sc5/autopilot.h"
 
@@ -285,6 +286,15 @@ struct Target {
 
 std::string g_lost_why;  // why the autopilot gave up, when it knows
 
+// Taking a whole pick back (TakeBack): this game's player's requests so far (the PICK's costume while one is out,
+// 1-100), one asked and waiting for the other game's word, the other game's yes come (B here until the player is back
+// at the characters); the other player's request this game undid (its number; 0 none) for each side; this player's B
+// the frame before (held at first: no press)
+int g_takeback_gen = 0;
+bool g_takeback_asked = false, g_takeback_undo = false;
+int g_undone_gen[2] = {0, 0};
+bool g_own_b_was = true;
+
 // The other PC's created character for a side: whole, checked and in its slot (true), or still on its way (false). A
 // record the check refuses, one that is not the picked fighter's, or one that does not come in 20 s ends the match
 // here.
@@ -326,7 +336,7 @@ Target TargetOf(int side) {
   }
   if (!g_plan.online) return t;
   const net::Pick p = net::RemotePick(side);
-  if (p.phase < 0 || p.slot < 0) return t;
+  if (p.phase < 0 || p.phase > 2 || p.slot < 0) return t;  // 3: being taken back (TakeBack)
   t.known = true;
   t.slot = p.slot;
   // the character once the costume is known too: a created character's record must be in its slot before the screen
@@ -339,6 +349,104 @@ Target TargetOf(int side) {
 }
 
 bool LocalPicks(int side) { return g_plan.online && g_plan.slots[side] < 0 && side == g_plan.side; }
+
+input::Pad OwnPad();
+
+// One B at a time on the select screen while `side` is past choosing its character (the game's B goes back a step:
+// the costume panel to the characters, and from the next side's choice to the side before), never on a side's
+// characters, where it would leave the screen: true while it goes on
+bool BackTo(int side, const int step[2]) {
+  if (step[side] == 0) return false;
+  if (g_steps.empty()) Push(input::kB, 4, 40);
+  RunSteps();
+  return true;
+}
+
+// Taking a whole pick back, as on the console. Online the select screen takes player 1's pick, then player 2's, the
+// same in both games, so once player 1 has their character and costume and player 2 still picks, player 1's B on
+// their own controller asks for it back. Their game says so (PICK phase 3 with the request's number) and waits: the
+// other game, while its own player has not finished, holds that player back, takes player 1's pick back on its screen
+// (B), forgets their created character's record, and says yes (a PICK for player 1's side, phase 3 with the same
+// number); player 1's game then takes it back too (B) and the player picks again, which both games follow as any pick.
+// Player 2 finishing first is the other game's no: player 1's game forgets the request and the match goes on. A
+// spectator takes a pick back once the player's game shows it taken back (phase 0 or 1 after a whole pick). Player 2's
+// own pick ends the select screen (the stage select follows), so theirs is taken back on its costume panel only.
+bool TakeBack(const int step[2]) {
+  if (!g_plan.online) return false;
+  if (g_plan.side > 1) {  // a spectator: each side its player's game shows taken back
+    for (int s = 0; s < 2; s++) {
+      const net::Pick p = net::RemotePick(s);
+      if (p.phase < 0 || p.phase > 1 || step[s] < 2) continue;
+      if (g_created_placed[s] || g_created_wait[s]) {
+        g_created_placed[s] = false;
+        g_created_wait[s] = 0;
+        net::ForgetRemoteCreated(s);
+        creation::ClearRemote(s);
+      }
+      if (BackTo(s, step)) return true;
+    }
+    return false;
+  }
+  const int me = g_plan.side, other = 1 - me;
+  const bool b_now = (OwnPad().buttons & input::kB) != 0, b_pressed = b_now && !g_own_b_was;
+  g_own_b_was = b_now;
+  if (!LocalPicks(me) || g_plan.slots[other] >= 0) return false;  // both players pick on the select screen
+  // this PC's player: their whole pick while the other player still picks
+  if (!g_takeback_asked && !g_takeback_undo && b_pressed && step[me] >= 2 && step[other] < 2 &&
+      net::RemotePick(other).phase < 2) {
+    g_takeback_asked = true;
+    g_takeback_gen = g_takeback_gen % 100 + 1;
+    REXLOG_INFO("sc5 autopilot: player {} takes their pick back ({} costume {}): asking the other game ({})", me + 1,
+                select::NameOfSlot(g_picked_slot[me]), g_picked_costume[me] + 1, g_takeback_gen);
+  }
+  if (g_takeback_asked) {
+    const net::Pick yes = net::RemotePick(me);  // the other game's word on this player's side
+    if (yes.phase == 3 && yes.costume == g_takeback_gen) {
+      g_takeback_asked = false;
+      g_takeback_undo = true;
+      net::SetLocalCreated(me, {});
+      REXLOG_INFO("sc5 autopilot: the other game took player {}'s pick back: here too", me + 1);
+    } else if (net::RemotePick(other).phase >= 2 || step[other] >= 2) {
+      g_takeback_asked = false;
+      REXLOG_INFO("sc5 autopilot: player {} finished first: player {}'s pick stays", other + 1, me + 1);
+      return false;
+    } else {
+      RunSteps();
+      return true;  // the other game's word first (the other side not followed meanwhile)
+    }
+  }
+  if (g_takeback_undo) {
+    if (BackTo(me, step)) return true;
+    g_takeback_undo = false;
+    REXLOG_INFO("sc5 autopilot: player {}'s pick taken back at frame {}: they pick again", me + 1, Now());
+    return false;
+  }
+  // the other player's request: taken back here while this game's player has not finished, then the yes said for as
+  // long as they ask
+  const net::Pick theirs = net::RemotePick(other);
+  if (theirs.phase == 3 && theirs.costume > 0) {
+    if (theirs.costume == g_undone_gen[other]) {
+      net::SetLocalPick(other, {3, theirs.slot, theirs.costume}, select::PickableMask());
+      RunSteps();
+      return true;  // their own game takes it back meanwhile
+    }
+    if (step[me] >= 2) return false;  // finished first: no
+    if (BackTo(other, step)) return true;  // B here (this game's player held back meanwhile)
+    g_undone_gen[other] = theirs.costume;
+    g_created_placed[other] = false;
+    g_created_wait[other] = 0;
+    net::ForgetRemoteCreated(other);
+    creation::ClearRemote(other);
+    REXLOG_INFO("sc5 autopilot: player {}'s pick taken back here at frame {} ({}): saying yes", other + 1, Now(),
+                theirs.costume);
+    return true;
+  }
+  if (g_undone_gen[other]) {
+    net::SetLocalPick(other, net::Pick{}, select::PickableMask());  // the yes no more
+    g_undone_gen[other] = 0;
+  }
+  return false;
+}
 
 void OnSelect() {
   if (!select::Object()) {
@@ -358,6 +466,8 @@ void OnSelect() {
   creation::SyncEntries(manager);
   const int step[2] = {select::Step(0), select::Step(1)};
   for (int s = 0; s < 2; s++) {
+    if (step[s] != g_last_step[s])
+      REXLOG_INFO("sc5 autopilot: side {} step {} -> {} at frame {}", s + 1, g_last_step[s], step[s], Now());
     // what a side picked, as it is picked (the cursor stays on it; the costume as its panel showed it)
     if (g_last_step[s] == 0 && step[s] >= 1) {
       g_picked_slot[s] = select::CursorOf(s).Slot();
@@ -389,15 +499,17 @@ void OnSelect() {
         const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[me]), g_picked_costume[me],
                                            g_picked_costumes[me]);
         creation::Record rec;
-        if (n >= 0 && creation::ReadRecord(uint32_t(n), rec)) {
+        if (n >= 0 && creation::ReadRecord(uint32_t(n), rec) && !g_takeback_undo) {
           net::SetLocalCreated(me, rec);
           p.costume = -2;
         }
       }
+      if (g_takeback_asked || g_takeback_undo) p = {3, g_picked_slot[me], g_takeback_gen};  // taking it back
     }
     net::SetLocalPick(me, p, select::PickableMask());
   }
   if (select::Age() < 80) return;  // the screen comes in
+  if (TakeBack(step)) return;
   const int side = step[0] < 2 ? 0 : step[1] < 2 ? 1 : -1;
   if (side < 0) {
     Enter(Phase::Stage);
@@ -480,6 +592,10 @@ void OnSelect() {
       if (n < 0 || !creation::ReadRecord(uint32_t(n), rec) ||
           (creation::KnownRead() && (!creation::UsesDlc(rec) || net::RemoteDlc() == creation::DlcFingerprint())))
         g_allow |= input::kA;
+      // B back to the characters, as on the console: the other game follows only a whole pick (a character and its
+      // costume), so it sees the cursor again and nothing else. Without it a player on a costume A is held back on
+      // (a created character with downloadable parts the other PC lacks, say) could neither pick nor leave.
+      g_allow |= input::kB;
     } else {
       g_allow |= input::kA;
     }
@@ -762,6 +878,9 @@ void NewMatch() {
   g_created_placed[0] = g_created_placed[1] = false;
   g_created_wait[0] = g_created_wait[1] = 0;
   g_picked_costumes[0] = g_picked_costumes[1] = 0;
+  g_takeback_asked = g_takeback_undo = false;
+  g_undone_gen[0] = g_undone_gen[1] = 0;
+  g_own_b_was = true;
   g_lost_why.clear();
   g_stage_auto = g_stage_last = g_stage_taken = -1;
   g_stage_up_at = g_stage_gone_at = g_stage_a_at = 0;

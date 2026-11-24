@@ -2382,6 +2382,16 @@ int RemoteCreated(int side, std::vector<uint8_t>& out, std::string& why) {
   return 1;
 }
 
+void ForgetRemoteCreated(int side) {
+  if (side < 0 || side > 1) return;
+  if (g_cfg.watch) {  // a spectator: the feed's
+    auto it = g_watched.find(uint16_t(g_match + 1));
+    if (it != g_watched.end()) it->second.created[side] = Incoming{};
+    return;
+  }
+  g_incoming[side] = Incoming{};
+}
+
 StagePick RemoteStage() {
   if (g_cfg.watch) {  // a spectator: the chooser's, from the feed
     auto it = g_watched.find(uint16_t(g_match + 1));

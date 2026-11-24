@@ -69,7 +69,9 @@ void EndMatch();
 // its own player's PC, followed on the other's) and the battle's settings (player 1's game's, which player 2's
 // takes: the stage as player 1's game drew it, the round time, the rounds to win). For the coming match; main thread.
 struct Pick {
-  int phase = -1;  // -1 nothing yet; 0 choosing (slot: where the cursor is); 1 the character picked; 2 its costume too
+  // -1 nothing yet; 0 choosing (slot: where the cursor is); 1 the character picked; 2 its costume too; 3 the whole pick
+  // being taken back (costume: the request's number), and from the other game for that side, its yes (autopilot.cpp)
+  int phase = -1;
   int slot = -1, costume = -1;
 };
 void SetLocalPick(int side, const Pick& pick, uint32_t pickable);
@@ -116,6 +118,9 @@ int64_t RemoteRematchAt();
 void SetLocalCreated(int side, const std::vector<uint8_t>& record);
 // the other player's record for `side`: 1 whole (in `out`), 0 not yet, -1 refused (`why`)
 int RemoteCreated(int side, std::vector<uint8_t>& out, std::string& why);
+// that record forgotten, as if none had come: the other player took their pick back (sc5/autopilot.cpp), and another
+// record, or the same again, may come for the match
+void ForgetRemoteCreated(int side);
 struct Setup {
   uint32_t stage = 0, round_time = 0, wins = 0;
   std::vector<uint32_t> words;  // player 1's game's values of what both must have alike from the setup on (versus.cpp)

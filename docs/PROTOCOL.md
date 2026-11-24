@@ -1245,8 +1245,10 @@ loser chooses the next one there, below). Both sides get the same line except fo
 **Picks on the game's select screen** (`p1` and/or `p2` = `-`, the launcher's *Pick my character on the game's own
 select screen*, its default, sent to the server as an empty `character`). The autopilot takes both games to the
 select screen. There the player of a `-` side steers their own cursor with their own controller (port 0 and the
-keyboard, routed to port 2 when they are P2; B and BACK are held back, as they would leave the select screen and
-the match); the game passes their pick (the character and whatever else both games must have alike: the costume,
+keyboard, routed to port 2 when they are P2; BACK is held back, and B but on the costume panel, as they would leave
+the select screen and the match; B on the costume panel goes back to the characters, as on the console, and player
+1's B after their whole pick, while player 2 still picks, takes it back in both games: the other game agrees over the
+netplay unless player 2 finished first); the game passes their pick (the character and whatever else both games must have alike: the costume,
 the stage the player chose) to the other game over its netplay, and the other game's autopilot makes that pick for
 that side, its cursor going the same way. A side with a roster id is picked by the autopilot on both PCs, so the two
 ways mix. Nobody's time runs out at the select screen online. Every character and stage is open in an online match
