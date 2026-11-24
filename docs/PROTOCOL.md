@@ -939,6 +939,14 @@ summary line, so a night's desyncs read at a glance from the journal:
 DESYNC_PAIR 7658cd7bfcd7 Taki at frame 41730, Kilik at frame 41730; stage 17; Siegfried vs Mitsurugi (launchers 0.1.4 and 0.1.4)
 ```
 
+From SCV 0.1.4 a failed check does not end the match when the two games can play
+the round again from its start (GAME.md, "The round again"): the game's status
+then says `in_match match=<id> again=<times> again_frame=<the failed check>`
+(3.4), and for each time the launcher sends the same report with `"again":
+true` and that frame, while the match goes on. The server's lines say so
+(`... at frame 930, the round played again: 40 lines`, and the pair's `; the
+round was played again and the match went on`); `again` must be a boolean.
+
 with each report's frame (`(the frames differ)` when they do), the stage as the
 game logs it (its `sc5 versus:` line) and the two fighters (the picks, else the
 start line's `p1`/`p2`), each pair of them followed by `(they differ)` when the
@@ -1403,11 +1411,11 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 | `booting` | process started, loading |
 | `ready` | parked at the hold point, able to take `start` |
 | `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match`; `held_out=N` after it (and after `in_match`'s) when N of the player's own created characters cannot be picked in this online game (3.3, *Created characters*; the game's log says which and why) |
-| `in_match match=<id>` | a match (or practice: `match=practice`) is running |
+| `in_match match=<id>` | a match (or practice: `match=practice`) is running; `again=N again_frame=F` after it once the two games went out of step and played the round again N times this match (SCV 0.1.4; the check of frame F failed last): the launcher sends a `desync_report` with `again` for each (1.13.1) |
 | `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
 | `sparring_over match=<id>` | Online Practice: the match in sync is over, a player pressed BACK (the launcher reports the outcome `sparring`) |
 | `chose choice=rematch match=<id>` | after a `result` with `choose=1` (3.3, *The loser's choice*): the match's loser chose the next match on the result screen, `rematch` or `select` (Character Select); both games say it, and wait at their result screens for `rematch` or `park` |
-| `desync frame=N match=<id>` | the two simulations diverged at frame N; the match is aborted |
+| `desync frame=N match=<id>` | the two simulations diverged at frame N and the match is aborted: from SCV 0.1.4 only when the round could not be played again (`in_match ... again=`, above: three times a match at most, not in Online Practice) |
 | `disconnected match=<id>` | the peer stopped answering |
 | `error <text>` | something failed (`error no connection`, `error bad command`); free text to the end of the line |
 

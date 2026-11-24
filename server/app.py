@@ -2802,7 +2802,7 @@ class Server:
         s.desync_reports += 1
         if s.desync_reports > DESYNC_REPORTS_PER_SESSION:
             return
-        # again: the two games played the round again from its start and the match went on (SCV 0.1.5)
+        # again: the two games played the round again from its start and the match went on (SCV 0.1.4)
         log.info("DESYNC_REPORT %s %s (launcher %s) match %s at frame %d%s: %d lines", s.name, game,
                  s.client_version or "?", match or "?", frame, ", the round played again" if again else "", len(lines))
         for line in lines:

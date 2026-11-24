@@ -167,7 +167,7 @@ async def test_both_players_reports_of_a_match_make_one_pair_line(server, connec
 
 
 async def test_a_round_played_again_is_reported_and_the_pair_says_so(server, connect, caplog):
-    """Two games that went out of step and played the round again (SCV 0.1.5): each launcher's report has `again`,
+    """Two games that went out of step and played the round again (SCV 0.1.4): each launcher's report has `again`,
     the server's lines say the match went on, and a second one in the same match pairs again."""
     a, b = await connect("Taki"), await connect("Kilik")
     with caplog.at_level("INFO", logger="sc5.server"):

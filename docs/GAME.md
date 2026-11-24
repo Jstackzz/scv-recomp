@@ -490,7 +490,8 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
 
 Adapted from MK9 Online's netplay (mk9/net/netplay.cpp), with the battle snapshots of battle.cpp in place of MK9's
 copy-on-write memory. Packets (UDP, "SC5N"): HELLO, READY (seed, words, delay), INPUT (ack, now, seen, 24 frames of
-inputs), CHECK (a frame's hash), BYE, and since 0.1.4 RSKIP (a KO's replay cut short, below). Tests set it from the
+inputs), CHECK (a frame's hash), BYE, and since 0.1.4 RSKIP (a KO's replay cut short, below), DSUMS and DBYTES (what a
+failed check says, below) and AGAIN (the round again after one, below). Tests set it from the
 environment (`SC5_NET_BIND`, `SC5_NET_PEER`, `SC5_NET_SIDE`, `SC5_NET_DELAY`, `SC5_NET_LOCKSTEP`, `SC5_NET_LOG`, a
 simulated network `SC5_NET_LAG` / `_JITTER` /
 `_LOSS`); the launcher's matches from its start line (below, "The launcher's game"). Before the barrier the games
@@ -660,6 +661,72 @@ the next match (CHOICE).
   1, each side, and the two together; Mitsurugi against a standing Hilde, one and three rounds, none and 40 ms each
   way): 13 matches in step to the same result, where on the build of 2026-11-17 4 matches of 16 with settings apart had
   parted at frame 1350.
+- **Every stage** (2026-11-24, after a first to 30 between two players on 2026-11-20 in which 11 matches parted in
+  the middle of a round, the players said at ring outs and broken walls, on stages 2A, 2B, 12, 20, 1A, 16, 22, 19 and
+  14). The sweeps before had mashed on whatever stage the seed drew, and a stage has effects of its own. A match on
+  each stage place with player 1 pushing player 2 out of the ring (`tools/stagehunt.sh`, `HUNT_SCRIPT=ringout`:
+  tools/py/ringout.py; 60 ms each way, 25 ms of jitter, 3% loss, game 2's heap 2 MB higher) parted on 9 of the 13
+  places tried: stages 21 and 22 within ten seconds (frames 480 and 570), 19, 24, 16, 13, 27, 11 and 18 later. Each
+  time the first words apart were a player's +0x5DAE0 and +0x5DAF0, a timer of the fighter that takes a Park-Miller
+  number when a move's script says (sub_821DF318, sub_821DE088, sub_821DF1C8), and then the fight itself (stage 22:
+  player 1's health 160 against 68 at frame 5640). `SC5_DBG_DRAWS=<file>` (rng.cpp) writes every Park-Miller number
+  the fight draws, by match frame, as the frame's last run drew it, with who drew; `tools/py/drawscmp.py` puts two
+  games' files side by side: on stage 21, at frame 475 the caller at 0x82373C50 drew 6 numbers in one game and 9 in
+  the other, and the fighter's draw of frame 476 came out apart. That caller is sub_82373AF8, an emitter of effects
+  that the stage's update fires (sub_82211950, sub_82374F70): its particles live in heap objects, which a rollback
+  does not put back, so the game that went back drew another number of times. Two changes (battle.cpp,
+  net/netplay.cpp):
+  - **The effects' emitters and the stage's particles draw from the visual states** (sc5/rng.h), as the wind and the
+    first emitter found did: every function of the emitters' module that draws itself (15 from sub_823738C8 to
+    sub_82379B20) and the particles' update (sub_824ADBD8, 60 to 70 draws a frame on the stage with water).
+  - **The fight's random numbers are seeded at the top of every run of every frame** from the match's seed and the
+    frame's number (netplay.cpp `SeedFrame`: a frame's first run, each rerun, a spectator's). What a frame draws then
+    depends on nothing an earlier frame drew, in either game: a system of that kind nobody has met yet can no longer
+    part two games for the rest of a match (within a frame the fight's draws must still not come after such a
+    system's). `SC5_NET_NO_FRAME_SEED` (tests) seeds as before, where the battle's state changes only.
+  With both, stage 21's match: every one of 148 checks alike and all 6,688 frames' draws alike in the two games;
+  then every stage place (`tools/stagesweep.sh`, the results in its commit). `SC5_NET_CHECK_RESTORE=1` (tests)
+  saves the battle again right after a rollback put a frame back and logs every word of the fight the game's restore
+  left otherwise (none on stage 21: the game's restore sets that timer up anew, sub_82148C48, and the raw memory put
+  back after it has the kept value).
+- **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
+  that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
+  is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that
+  frame's snapshot as the check hashes it (DSUMS; the layout by the blocks' sizes and static addresses), then their
+  bytes of the first 16 pages that differ (DBYTES), and each game's log names up to 48 words with both values (lines
+  with `sc5 desync:`, which the launcher's report carries whole, PROTOCOL.md 1.13.1): the match frame, the battle's
+  state, the rounds won, both players' health, the rounds fought so far with each one's end and health (a ring out:
+  neither at 0), which places differ, then `P1+0x2268C: 43393333 here, 43383333 there (as floats 185.2 and 184.2)`.
+  It takes about a tenth of a second, a second and a half at most. `SC5_TEST_DESYNC_AT=<match frame>[:<side>]`
+  (tests) takes a point of player 1's health in one game at that frame: a desync made to order.
+- **The round again** (netplay.cpp `RoundAgain`; 0.1.4). A failed check no longer ends the match. The battle is kept
+  as each round's fighting begins (`KeepRoundStart`: a snapshot of the round's first fought frame). Once the two
+  games have said what differs, both stop (AGAIN packets name the round by its first frame and the frame number each
+  would go on from), each puts its own snapshot of the round's start back with the game's own restore (as a rollback
+  does, only further: from the middle of the round, or from the KO it just went to, the state machine back at
+  "fighting"), the two make the fight's blocks alike as at the barrier (SUMS, FIX, FIXOK: player 2's game takes
+  player 1's bytes of every block that differs, at a moment with no throw or projectile under way), the random
+  numbers are seeded again, and the frames go on from the larger of the two games' next free numbers, so nothing
+  sent for the frames left behind is mistaken for the new ones. The players see the round start again with full
+  health and its time back, and for five seconds a notice in large type (result_overlay.cpp: "OUT OF SYNC / THIS
+  ROUND STARTS AGAIN"); about 150 ms on one PC. Three times a match at most; after that, in Online Practice, or when
+  it cannot be done (the other game does not come along in 6 s, the two are in different rounds, the game refuses
+  the snapshot) the match ends as a desync as before. A game whose own check did not come to be compared (a lost
+  CHECK) goes along when the other asks, from its wait for inputs too. The game's status says it (`in_match
+  match=<id> again=<times> again_frame=<the failed check>`) and the launcher sends the game's log of it to the
+  server as a desync's. The spectators' feed ends at the first round played again (their games cannot follow it
+  yet). Tests, two games with 40 ms each way: a desync made at frame 900 of round 1 (the check of 930 failed, the
+  round began again at 1,025 with 240 health each, the match went on to the same result in both games with every
+  later check alike); one 30 frames before a ring out, the games already at the KO when they went back (KO to
+  fighting, the round fought again to the same ring out, the match to 3-0 in both); and through two launchers and a
+  local server (tools\online-e2e.ps1 with a real game: both launchers' reports paired by the server, the match played
+  on to its result). `SC5_NET_NO_ROUND_AGAIN` (tests): a failed check ends the match.
+- **A match after a park** (0.1.4): the barrier's block sync (MeetSync) is kept by the match's number, and a start
+  after a park counts from 1 again: the last session's "FIX built, FIXOK came, applied" of its match 1 let both games
+  through the new barrier at once with nothing made alike, and the match parted at its first check (frame 120: 7 of
+  7 matches started after a desync on 2026-11-20, each time until both players closed their games). `Open` now
+  starts it empty. linktest.py `--park-after 25 --again`: frame 120 apart before, 4 blocks (1,816 bytes) taken and
+  the match in step to its result after.
 - **Rollback over a throw** (battle.cpp `Restore`): the game's own restore makes a throw's heap object again and
   sets its owner's +0x5BE90 to it; the raw copy of the players' objects put back after it held the address from when
   the frame was kept, freed since, and a call through it crashed the game (Aeon Calcos's back throw: "invalid call ...

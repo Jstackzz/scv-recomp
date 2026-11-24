@@ -47,6 +47,10 @@ again by itself before you play.
   put back 4 frames and run again with the fight the same byte for byte, and matches at 100 and 150 ms each way in
   sync at a steady 60 frames a second, a spectator too. Sounds stay as you heard them through a rollback: none
   start twice and a wrong guess's are stopped. How it works and how it was tested: [docs/GAME.md](docs/GAME.md#rollback-battlecpp-netsynctestcpp).
+- **A match that goes out of step is not lost**: the two games check each other every half second. If a check ever
+  fails, both go back to the start of the round being fought, make it the same again, and you fight that round again
+  (the screen says OUT OF SYNC, THIS ROUND STARTS AGAIN); the match and its score go on. Each game's log then names
+  exactly what differed, and the launcher sends it to the server, so the cause can be found and fixed.
 - **Every mode online**: versus (Ranked and Casual, first to 3 rounds as on the console, and lobbies), Online
   Practice (no timer, health refills), spectators, King of the Hill with Respect Points, and Training offline while
   you wait for a match.
@@ -86,8 +90,10 @@ again by itself before you play.
 
 ## Not done yet
 
-- Few matches have been played between two PCs yet (the first ones found the throws' desync, fixed in 0.1.2); most
-  tests ran on one PC with lag added, one game's memory moved to stand in for a second PC.
+- Few matches have been played between two PCs yet (the first ones found the throws' desync, fixed in 0.1.2; a first
+  to 30 on 0.1.3 found the stages' effects and the match after a park, fixed in 0.1.4); most tests ran on one PC with
+  lag added, one game's memory moved to stand in for a second PC.
+- A spectator's view of a match ends when its players' games play a round again after going out of step.
 - Screens can hitch for 70-210 ms while they load. Only tested on a fast PC so far.
 - More in [docs/LAUNCHER.md](docs/LAUNCHER.md#known-limitations).
 
