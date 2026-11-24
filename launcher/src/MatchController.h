@@ -157,6 +157,10 @@ private:
     // (AtResult) for the series' next match; any other parks (finishMatch)
     void afterResult(const QJsonObject& result);
     QString rematchLine(const QJsonObject& go) const;  // the next match from the result screen (in place)
+    bool straightRoute() const;  // the last punch went straight between the two games
+    bool resultChoice() const;   // the lobby's match ends with its loser's choice on the result screen (choose=1)
+    void readyInPlace(QString choice);  // the game said what the loser chose: ready for the next match there
+    static constexpr int kChoiceMs = 60000;    // how long the loser has to choose (the game's own limit)
     void sendSeriesReady();
     void releaseUdp();
     void sendKeepaliveHello();
@@ -220,6 +224,8 @@ private:
     QString nextChoice_ = QStringLiteral("rematch");
     QString lastVia_;         // how the last punch reached the other game: lan, public (straight), relay, tunnel
     bool inPlace_ = false;    // the match found starts from the last one's result screen (no punch: rematchLine)
+    bool lobbyChoice_ = false;  // AtResult: a lobby match's games wait for its loser's choice (status `chose`)
+    QString pendingChoice_;     // the game's `chose` (rematch, select), taken once at the result screen
     QTimer atResultTimer_;    // AtResult: no series to wait for after all (a match that started none): parked then
     QElapsedTimer searchClock_;
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)

@@ -933,6 +933,8 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         go_ = {};
         resultSent_ = false;
         leaveQuit_ = false;
+        lobbyChoice_ = false;
+        pendingChoice_.clear();
         if (inPlace_) {
             setPhase(Phase::Starting, tr("Next match against %1, from the result screen...").arg(opponentName()));
             emit matchFound(msg);
@@ -1032,7 +1034,9 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         if (match != str(found_, "match")) return;
         go_ = msg;
         if (inPlace_) {
-            // from the result screen the game still waits at: its way back to Character Select, the picks, the fight
+            // from the result screen the game still waits at: its way back to Character Select, the picks, the fight.
+            // A lobby's: what its game writes for spectators from now on is the new match's
+            if (feed_) feed_->setProperty("match", match);
             if (game_ && game_->isRunning()) game_->command(rematchLine(go_));
             setPhase(Phase::Starting, tr("Starting the next match against %1 from the result screen...").arg(opponentName()));
             emit matchStarted(msg);
@@ -1168,11 +1172,13 @@ void MatchController::openFeed(const QJsonObject& go) {
         delete feed;
         return;
     }
-    const QString match = str(go, "match");
-    connect(feed, &FeedLink::outgoing, this, [this, match](const QByteArray& packets) {
+    // the match its packets go to the server for (a lobby's next match from the result screens: that one's from its
+    // match_go on)
+    feed->setProperty("match", str(go, "match"));
+    connect(feed, &FeedLink::outgoing, this, [this, feed](const QByteArray& packets) {
         if (server_->isLoggedIn())
             server_->send({{QStringLiteral("type"), QStringLiteral("feed")},
-                           {QStringLiteral("match"), match},
+                           {QStringLiteral("match"), feed->property("match").toString()},
                            {QStringLiteral("data"), QString::fromLatin1(packets.toBase64())}});
     });
     feed_ = feed;
@@ -1377,6 +1383,7 @@ QString MatchController::startLine(const QJsonObject& go) const {
         QStringLiteral("p2_rank=") + rankToken(str(go, "p2_title")),
     };
     QString line = tokens.join(QLatin1Char(' '));
+    if (resultChoice()) line += QStringLiteral(" choose=1");  // the loser chooses the next match on the result screen
     if (feed_) line += QStringLiteral(" feed=") + feed_->endpoint();
     return line;
 }
@@ -1393,6 +1400,7 @@ QString MatchController::rematchLine(const QJsonObject& go) const {
                        .arg(p1, p2);
     if (!go.value(QStringLiteral("ranked")).toBool() && p1 != QLatin1String("-") && p2 != QLatin1String("-"))
         line += QStringLiteral(" stage=keep");
+    if (resultChoice()) line += QStringLiteral(" choose=1");
     return line;
 }
 
@@ -1454,6 +1462,11 @@ void MatchController::onGameStatus(const QString& line) {
         if (keys.contains(QStringLiteral("p1_char")) && keys.contains(QStringLiteral("p2_char")))
             resultFighters_ = {keys.value(QStringLiteral("p1_char")), keys.value(QStringLiteral("p2_char"))};
         reportResult(result);
+    } else if (st == QLatin1String("chose") && forThisMatch && !go_.isEmpty()) {
+        // (before the server's match_result put this launcher at the result screen too: taken then, afterResult)
+        const QString choice = keys.value(QStringLiteral("choice"));
+        if (choice == QLatin1String("rematch") || choice == QLatin1String("select")) pendingChoice_ = choice;
+        if (phase_ == Phase::AtResult) readyInPlace(pendingChoice_);
     } else if (st == QLatin1String("sparring_over") && inOnline && forThisMatch) {
         // Online Practice: a player went back to the select screen (BACK); the lobby's next match brings both there
         reportResult({{QStringLiteral("outcome"), QStringLiteral("sparring")}});
@@ -1569,19 +1582,57 @@ void MatchController::reportResult(QJsonObject fields) {
 
 void MatchController::afterResult(const QJsonObject& result) {
     const QString status = str(result, "status");
-    const bool straight = lastVia_ == QLatin1String("lan") || lastVia_ == QLatin1String("public");
-    if ((status == QLatin1String("agreed") || status == QLatin1String("draw")) && str(found_, "lobby").isEmpty() &&
-        straight && !tunnel_ && game_ && game_->isRunning() && !game_->isReady() && watch_.isEmpty()) {
+    // a versus lobby's match its games played straight: they stay at their result screens, where the match's loser
+    // chooses REMATCH or CHARACTER SELECT on the game's own menu with their own controller (the start line's
+    // choose=1) and both games say what they chose (status `chose`): both launchers ready in place with it
+    const bool choice = !str(found_, "lobby").isEmpty() && resultChoice();
+    if ((status == QLatin1String("agreed") || status == QLatin1String("draw")) &&
+        (str(found_, "lobby").isEmpty() || choice) && straightRoute() && game_ && game_->isRunning() &&
+        !game_->isReady() && watch_.isEmpty()) {
         parkTimer_.stop();
         startTimeout_.stop();
         pendingStart_.clear();
         finishText_.clear();
         inPlace_ = false;
-        atResultTimer_.start(8000);  // the series' "between" comes right after the result
-        setPhase(Phase::AtResult, tr("Match over: your game waits at its result screen"));
+        lobbyChoice_ = choice;
+        // the series' "between" comes right after the result; the loser has a minute to choose, then the game parks
+        atResultTimer_.start(choice ? kChoiceMs + 15000 : 8000);
+        setPhase(Phase::AtResult, choice ? tr("Match over: the loser chooses REMATCH or CHARACTER SELECT in the game")
+                                         : tr("Match over: your game waits at its result screen"));
+        if (choice && !pendingChoice_.isEmpty()) readyInPlace(pendingChoice_);
         return;
     }
     finishMatch();
+}
+
+// the route the last punch found went straight between the two games (no relay, no tunnel through the server)
+bool MatchController::straightRoute() const {
+    return (lastVia_ == QLatin1String("lan") || lastVia_ == QLatin1String("public")) && !tunnel_;
+}
+
+// the lobby's match ends at the result screens with its loser's choice of the next one (match_found's result_choice:
+// a versus lobby, not King of the Hill), its games reached straight
+bool MatchController::resultChoice() const {
+    return found_.value(QStringLiteral("result_choice")).toBool() && straightRoute();
+}
+
+// the game says what the match's loser chose on its result screen (`chose choice=rematch|select`): this launcher
+// readies for the lobby's next match from there, as the other's does with the same choice
+void MatchController::readyInPlace(QString choice) {  // by value: it is often pendingChoice_, cleared below
+    if (phase_ != Phase::AtResult || !lobbyChoice_ || choice.isEmpty() || !server_->isLoggedIn()) return;
+    pendingChoice_.clear();
+    lobbyChoice_ = false;
+    atResultTimer_.start(30000);  // the next match comes at once once both are ready
+    QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
+                      {QStringLiteral("delay"), cfg::inputDelay()}, {QStringLiteral("relay"), cfg::hideIp()},
+                      {QStringLiteral("hide_always"), cfg::hideIpAlways()},
+                      {QStringLiteral("link"), server_->linkType()}, {QStringLiteral("in_place"), true},
+                      {QStringLiteral("choice"), choice}};
+    if (serverRttMs() >= 0) ready.insert(QStringLiteral("server_rtt"), serverRttMs());
+    server_->send(ready);
+    setPhase(Phase::AtResult, choice == QLatin1String("select")
+                                  ? tr("Character Select chosen: the next match starts from the result screen")
+                                  : tr("Rematch chosen: the next match starts from the result screen"));
 }
 
 void MatchController::finishMatch() {
@@ -1589,6 +1640,8 @@ void MatchController::finishMatch() {
     startTimeout_.stop();
     atResultTimer_.stop();
     inPlace_ = false;
+    lobbyChoice_ = false;
+    pendingChoice_.clear();
     go_ = {};
     found_ = {};
     pendingStart_.clear();
@@ -1861,6 +1914,10 @@ void MatchController::maybeCloseIdleGame() {
         thawGame();  // a frozen game would not see its quit
         game_->quit();
         return;  // its exit moves the match on (onGameExited), then idle: nothing left to close
+    }
+    if (phase_ == Phase::AtResult && lobbyChoice_) {  // left while the loser's choice was awaited: the game parks first
+        finishMatch();
+        return;
     }
     if (phase_ != Phase::Idle || !series_.isEmpty() || !watchQueue_.isEmpty()) return;
     closeWhenIdle_ = false;

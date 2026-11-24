@@ -94,6 +94,39 @@ using namespace controls;
 constexpr Control kOrder[] = {Up, Down, Left, Right, X, Y, B, A, RB, RT, LB, LT, Start, Back, LS, RS};
 static_assert(std::size(kOrder) == Count);
 
+// IN A FIGHT's rows, two to a row: the four face buttons and the left stick's click, the bumpers and triggers and the
+// right stick's
+constexpr Control kFightOrder[] = {X, RB, Y, RT, B, LB, A, LT, LS, RS};
+// every combination of the game's four, the single buttons first
+constexpr int kCombos[] = {0,
+                           kGameA,
+                           kGameB,
+                           kGameK,
+                           kGameG,
+                           kGameA | kGameB,
+                           kGameA | kGameK,
+                           kGameA | kGameG,
+                           kGameB | kGameK,
+                           kGameB | kGameG,
+                           kGameK | kGameG,
+                           kGameA | kGameB | kGameK,
+                           kGameA | kGameB | kGameG,
+                           kGameA | kGameK | kGameG,
+                           kGameB | kGameK | kGameG,
+                           kGameA | kGameB | kGameK | kGameG};
+
+QString comboLabel(int mask, int byDefault) {
+    QString text;
+    switch (mask) {
+    case kGameA: text = QStringLiteral("A (horizontal attack)"); break;
+    case kGameB: text = QStringLiteral("B (vertical attack)"); break;
+    case kGameK: text = QStringLiteral("K (kick)"); break;
+    case kGameG: text = QStringLiteral("G (guard)"); break;
+    default: text = comboText(mask); break;
+    }
+    return mask == byDefault ? QStringLiteral("%1 (default)").arg(text) : text;
+}
+
 }  // namespace
 
 ControlsPage::ControlsPage(QWidget* parent) : Page(parent) {
@@ -113,6 +146,50 @@ ControlsPage::ControlsPage(QWidget* parent) : Page(parent) {
         tr("Controls"), tr("For the game on this PC: they only change what your own keys and buttons press, so "
                            "they work the same in online matches. A game that is running picks up a change within a "
                            "second.")));
+
+    // in a fight: what each button presses of the game's own four, any of them together
+    auto* fightBox = new QGroupBox(tr("IN A FIGHT"));
+    auto* fv = new QVBoxLayout(fightBox);
+    auto* fightNote = ui::label(tr("What each button presses in a fight, in every mode, online and offline: A "
+                                   "horizontal attack, B vertical attack, K kick, G guard, or several of them at once "
+                                   "from one button (A+G throws, A+B+K is a Critical Edge's buttons). Your opponent's "
+                                   "game sees your presses as you set them here. A button at its default keeps, "
+                                   "offline, what the game's own Control Settings give it."),
+                                "Muted");
+    fightNote->setWordWrap(true);
+    fv->addWidget(fightNote);
+    auto* fightGrid = new QGridLayout;
+    fightGrid->setHorizontalSpacing(10);
+    fightGrid->setVerticalSpacing(4);
+    for (int i = 0; i < int(std::size(kFightOrder)); ++i) {
+        const int c = kFightOrder[i];
+        const int row = i / 2, col = (i % 2) * 3;
+        auto* box = new QComboBox;
+        box->setMinimumWidth(200);
+        for (int mask : kCombos) box->addItem(comboLabel(mask, fightDefault(c)), mask);
+        box->setToolTip(tr("What %1 presses in a fight").arg(controlLabel(c)));
+        connect(box, &QComboBox::currentIndexChanged, this, [this, c, box] {
+            const int mask = box->currentData().toInt();
+            map_.fight[c] = mask == fightDefault(c) ? -1 : mask;
+            store();
+            relabel();
+            showMap();
+            say(tr("In a fight %1 presses %2.").arg(controlLabel(c), comboText(mask)));
+        });
+        fightBoxes_[c] = box;
+        fightGrid->addWidget(ui::label(controlLabel(c)), row, col);
+        fightGrid->addWidget(box, row, col + 1);
+    }
+    fightGrid->setColumnMinimumWidth(2, 24);
+    fightGrid->setColumnStretch(5, 1);
+    fv->addLayout(fightGrid);
+    auto* resetFight = new QPushButton(tr("Default fight buttons"));
+    auto* fightButtonsRow = new QHBoxLayout;
+    fightButtonsRow->addWidget(resetFight);
+    fightButtonsRow->addStretch();
+    fv->addLayout(fightButtonsRow);
+    root->addWidget(fightBox);
+
     auto* columns = new QHBoxLayout;
     columns->setSpacing(16);
     root->addLayout(columns);
@@ -198,10 +275,8 @@ ControlsPage::ControlsPage(QWidget* parent) : Page(parent) {
     pv->addStretch();
     columns->addWidget(padBox, 1);
 
-    auto* game = ui::label(tr("What a button does is the game's default layout, as on the Xbox 360: X horizontal "
-                              "attack, Y vertical attack, B kick, A guard; the bumpers and triggers press the button "
-                              "combinations the game's own button settings give them. Online matches may play with the "
-                              "default layout, so change what your keys and buttons press here instead."), "Muted");
+    auto* game = ui::label(tr("Your keys and your controller's buttons press the Xbox 360 controller's buttons named "
+                              "above; IN A FIGHT says what those do in a fight."), "Muted");
     game->setWordWrap(true);
     root->addWidget(game);
     status_ = ui::label(QString(), "Muted");
@@ -228,6 +303,13 @@ ControlsPage::ControlsPage(QWidget* parent) : Page(parent) {
         store();
         showMap();
         say(tr("The controller has its default buttons again."));
+    });
+    connect(resetFight, &QPushButton::clicked, this, [this] {
+        map_.fight.fill(-1);
+        store();
+        relabel();
+        showMap();
+        say(tr("Every button presses its default in a fight again."));
     });
 
     map_ = load();
@@ -256,6 +338,7 @@ void ControlsPage::relabel() {
 void ControlsPage::showEvent(QShowEvent* event) {
     Page::showEvent(event);
     map_ = controls::load();  // someone may have edited the file
+    relabel();
     showMap();
     say(tr("Kept in %1").arg(QDir::toNativeSeparators(controls::file())));
 }
@@ -279,6 +362,11 @@ void ControlsPage::showMap() {
     for (int i = 0; i < pressBoxes_.size(); ++i) {
         const QSignalBlocker block(pressBoxes_[i]);
         pressBoxes_[i]->setCurrentIndex(qMax(0, pressBoxes_[i]->findData(map_.presses.value(i, -1))));
+    }
+    for (int c = 0; c < Count; ++c) {
+        if (!fightBoxes_[c]) continue;
+        const QSignalBlocker block(fightBoxes_[c]);
+        fightBoxes_[c]->setCurrentIndex(qMax(0, fightBoxes_[c]->findData(map_.fightOf(c))));
     }
     unpressed_->setText(unpressed.isEmpty() ? QString()
                                             : tr("No button of the controller presses %1.").arg(unpressed.join(QStringLiteral(", "))));

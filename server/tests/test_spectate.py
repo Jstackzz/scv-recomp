@@ -79,11 +79,18 @@ async def test_spectator_gets_the_match_and_both_feeds(server, connect, udp_peer
     assert exc.value.code == "bad_request"
     watcher.send({"type": "feed", "match": go["match"], "data": b64(own_inputs(0, 9, 1))})  # not a player: dropped
 
+    # the stage select (10), a created character's record (11) and a skip (12: the way into the fight, a KO's replay)
+    # pass on as the rest (0.1.3's server refused 10 and 11, and the spectators never got the stage picked)
+    more = (packet(10, 0, b"\0\x01\x05\x05") + packet(11, 0, b"\0\0\x0c" + struct.pack("<H", 2) + b"ab") +
+            packet(12, 0, b"\0") + packet(12, 0, b"\x01" + struct.pack("<I", 300)))
+    host.send({"type": "feed", "match": go["match"], "data": b64(more)})
+    assert base64.b64decode((await watcher.expect("spectate_feed"))["data"]) == more
+
     # a spectator who comes in now gets the match and everything so far
     late = await connect("Kitana")
     await late.request({"type": "lobby_join", "lobby": code, "spectate": True})
     assert (await late.expect("spectate"))["match"] == go["match"]
-    assert base64.b64decode((await late.expect("spectate_feed"))["data"]) == p1 + p2
+    assert base64.b64decode((await late.expect("spectate_feed"))["data"]) == p1 + p2 + more
 
     # the result ends it for the spectators too
     for conn in (host, guest):

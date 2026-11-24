@@ -11,6 +11,10 @@
   third launcher, C, that watches the lobby as a spectator (its game plays each match from the players' feeds).
   -Mode sparring with -Queue lobby: Online Practice.
 
+  -Exe runs a real sc5.exe instead of the stand-in, with -Game naming the game folder whose disc, update and dlc it
+  plays: they are linked into the run's own game folder (junctions, removed each on its own before anything deletes
+  it), and the games' shader cache and saves stay in the run's folder.
+
   The launchers run on Qt's offscreen platform (no window on the screen) and the stand-in games have none, unless
   -Visible. Everything the run started is closed at its end; its folder (build\online-e2e) stays for a look and is
   replaced by the next run.
@@ -26,6 +30,7 @@ param(
     [string]$Queue = 'casual',   # casual, ranked or lobby
     [string]$Mode = 'versus',    # versus, sparring (Online Practice: -Queue lobby)
     [string]$Exe = '',           # the game: default launcher\tools\fake_game.py (the stand-in)
+    [string]$Game = '',          # with a real -Exe: the game folder whose disc, update and dlc it plays (linked, not copied)
     [string]$Launcher = '',      # default: build\launcher\SC5Launcher.exe
     [string]$CharA = 'Siegfried',
     [string]$CharB = 'Mitsurugi',
@@ -48,8 +53,24 @@ if (-not $Launcher) { $Launcher = Join-Path $root 'build\launcher\SC5Launcher.ex
 if (-not (Test-Path $Launcher)) { throw "no launcher at ${Launcher}: build it first (launcher\build.cmd)" }
 if ($PickInGame) { $CharA = '-'; $CharB = '-' }
 $work = Join-Path $root ($(if ($Port -eq 8777) { 'build\online-e2e' } else { "build\online-e2e-$Port" }))
-if (Test-Path $work) { Remove-Item -Recurse -Force $work }
-New-Item -ItemType Directory -Force -Path "$work\a", "$work\b", "$work\c", "$work\server", "$work\snaps" | Out-Null
+# A real game's files are linked into the run's game folder (junctions): each link goes on its own first, as a folder
+# delete could go through it into the real files
+function Remove-GameLinks {
+    foreach ($l in 'disc', 'update', 'dlc') {
+        $p = Join-Path $work "game\$l"
+        if (Test-Path $p) { cmd /c rmdir "$p" | Out-Null }
+    }
+}
+if (Test-Path $work) {
+    Remove-GameLinks
+    Remove-Item -Recurse -Force $work
+}
+New-Item -ItemType Directory -Force -Path "$work\a", "$work\b", "$work\c", "$work\server", "$work\snaps", "$work\game" | Out-Null
+if ($Game) {
+    foreach ($l in 'disc', 'update', 'dlc') {
+        if (Test-Path (Join-Path $Game $l)) { cmd /c mklink /J "$work\game\$l" (Join-Path $Game $l) | Out-Null }
+    }
+}
 $py = (Get-Command python).Source
 # a throwaway certificate: the launchers pin its fingerprint
 & $py -m server.makecert --out-dir "$work\server" | Out-Null
@@ -213,6 +234,7 @@ Start-Sleep -Seconds 3
 foreach ($id in @($ls | ForEach-Object { $_.Id }) + $games) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
 if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
 Start-Sleep -Seconds 1
+Remove-GameLinks  # the run's folder stays for a look, without links into the real game's files
 "--- database"
 & $py -I -c @"
 import sqlite3, sys

@@ -11,9 +11,11 @@
 //   rematch [seed=N] [match=<id>] [p1=.. p2=..] [stage=keep]   the same fighters again (or new ones): VS Battle's own
 //            Rematch for the same two on the same stage, else through Character Select and the stage select
 //   quit     exit
+//   choose=1 (start, rematch): the match's loser chooses the next one on the result screen (a lobby's match)
 //
 // status.txt: booting, ready, starting match=<id>, in_match match=<id>, result winner=N p1_rounds=N p2_rounds=N
-// p1_char=C.c p2_char=C.c match=<id>, desync frame=N match=<id>, disconnected match=<id>, error <text>.
+// p1_char=C.c p2_char=C.c match=<id>, chose choice=rematch|select match=<id> (choose=1: the loser's choice on the
+// result screen), desync frame=N match=<id>, disconnected match=<id>, error <text>.
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -194,6 +196,7 @@ void Start(const Command& c) {
   const int rounds = std::atoi(Key(c, "rounds", "3").c_str());
   plan.wins = std::max(1, (rounds + 1) / 2);
   plan.side = Key(c, "side", "1") == "2" ? 1 : 0;
+  plan.choose = Key(c, "choose") == "1" && plan.mode == autopilot::Mode::Versus;
   g_mode = mode;
   if (plan.mode == autopilot::Mode::Practice) {
     // offline practice from the hold point: Training, the start line's fighters (the player's and the dummy)
@@ -351,6 +354,7 @@ void Rematch(const Command& c) {
     named[s] = true;
   }
   const bool same_stage = Key(c, "stage") == "keep";
+  if (c.keys.count("choose")) plan.choose = Key(c, "choose") == "1" && plan.mode == autopilot::Mode::Versus;
   g_plan = plan;
   g_reported = false;
   autopilot::Rematch(plan, named, same_stage);
@@ -381,6 +385,12 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   }
   if (g_start_waits && autopilot::AtHoldPoint()) Start(g_waiting_start);
   if (g_error_shown) return;  // an error line stands until the next command
+  // the match's loser chose the next match on the result screen (choose=1): said once the result was
+  if (g_in_match && g_reported && g_plan.choose) {
+    std::string choice;
+    if (autopilot::ResultChosen(choice)) WriteStatus("chose choice=" + choice + " match=" + g_match);
+    return;
+  }
   if (!g_in_match) {
     if (autopilot::Lost()) WriteStatus("error the game went somewhere the launcher's autopilot does not know");
     else WriteStatus(autopilot::AtHoldPoint() ? "ready" : "booting");

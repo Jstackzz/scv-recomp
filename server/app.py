@@ -55,7 +55,9 @@ REPORTS_DIR_MAX_BYTES = 4 << 30  # every report kept: past this, new ones are tu
 REPORT_ID = re.compile(r"[0-9a-f]{16}")
 REPORT_FILE = re.compile(r"[A-Za-z0-9_-]{1,40}\.(jpg|png|txt|log)")
 FEED_MAGIC = b"SC5R"  # the feed packets' header (docs/PROTOCOL.md 1.10.1), as the game writes it
-FEED_TYPES = (5, 6, 7, 8, 9)  # the spectator feed's packet types: the game's netplay (sc5/)
+# the spectator feed's packet types: the game's netplay (sc5/, docs/PROTOCOL.md 3.6): 5 pick, 6 meeting, 7 inputs,
+# 8 checks, 9 end, 10 the stage select, 11 a created character, 12 a skip (the way into the fight, a KO's replay)
+FEED_TYPES = (5, 6, 7, 8, 9, 10, 11, 12)
 # a match without a result: the games parted (desync), lost each other (disconnected), the game failed (error), or
 # the reporting player's game closed while the match ran (left: they ended it)
 RESULT_OUTCOMES = ("desync", "disconnected", "error", "left", "sparring")  # sparring: an Online Practice match ended
@@ -335,6 +337,10 @@ class LobbyMember:
     relay_always: bool = False  # even when the relay's ping is high (with their ready)
     link: str = ""  # their PC's connection ("ethernet", "wifi", "other"; "" unknown), with their join or ready
     server_rtt: int | None = None  # their round trip to this server, ms, with their join or ready
+    # ready with their game still at the last match's result screen, where its loser chose the next match there
+    # ("rematch": the same fighters on the same stage; "select": both pick again): the next one starts from there
+    in_place: bool = False
+    choice: str = ""
 
 
 @dataclass(eq=False)
@@ -389,6 +395,19 @@ class Lobby:
     rating: Rating | None = None  # the last match's, while its spectators rate its winner
     ready_by: float | None = None  # with someone in line: the two players ready by then, or go to the back of it
     ready_pair: frozenset[int] | None = None  # the two players ready_by was set for (accounts)
+    # The last match, while its two games may still wait at its result screens, connected straight to each other (a
+    # versus lobby, not King of the Hill: its loser chooses the next match there, docs/PROTOCOL.md 1.10): the players'
+    # accounts by side, the fighters both games saw, the route each game had (its ping report) and the ping
+    last_sides: tuple[int, int] | None = None
+    last_picks: tuple[str, str] | None = None
+    last_pings: dict[int, dict[str, Any]] = field(default_factory=dict)
+    last_rtt: int = 0
+
+    @property
+    def result_choice(self) -> bool:
+        """The loser of a match chooses the next one on the game's own result screen: versus lobbies but King of the
+        Hill (its winner stays on and the line moves)."""
+        return not self.koth and self.mode in P.SELECT_SCREEN_MODES and self.mode not in P.LOBBY_ONLY_MODES
 
     @property
     def state(self) -> str:
@@ -1846,17 +1865,27 @@ class Server:
         if m.lobby is not None:
             # King of the Hill: the winner stays on, the loser goes to the back of the line; one whose game closed
             # during it (or who vanished) lost it, and nobody rates a match won that way. A draw: the same two again
+            lobby = m.lobby
             if status == "agreed":
                 w, lose = (p1, p2) if winner == 1 else (p2, p1)
                 self._lobby_match_over(m.lobby, m, w, lose, rate=True)
             elif fault is not None:
                 self._lobby_match_over(m.lobby, m, m.other(fault), fault)
             else:
-                lobby = m.lobby
                 says_draw = status == "draw" and lobby.koth and lobby.match is m and lobby.id in self.lobbies
                 self._lobby_match_over(lobby, m)
                 if says_draw:
                     self._lobby_note(lobby, f"A draw: {p1.name} and {p2.name} play again.")
+            # the two games stay at their result screens, where the loser chooses the next match (a versus lobby's
+            # match that went straight between them): what the next one needs to start from there
+            direct = (status in ("agreed", "draw") and m.relay is None and not any(p.tunnel for p in m.players)
+                      and all(p.ping is not None and p.ping.get("ok") for p in m.players))
+            if lobby.result_choice and direct:
+                lobby.last_sides = (p1.account_id, p2.account_id)
+                same = r1.get("fighters") == r2.get("fighters")
+                lobby.last_picks = r1.get("fighters") if same else None
+                lobby.last_pings = {p.account_id: dict(p.ping) for p in m.players if p.ping is not None}
+                lobby.last_rtt = m.rtt_ms
         elif m.from_queue or m.series is not None:
             fighters = None
             if status in ("agreed", "draw") and r1.get("fighters") == r2.get("fighters"):
@@ -2225,10 +2254,14 @@ class Server:
         if lobby.match is not m:
             return
         lobby.match = None
+        lobby.last_sides = lobby.last_picks = None  # a match that ended at its result screens sets them again after
+        lobby.last_pings = {}
         # Online Practice goes on: back to the select screen, the next match counts down by itself (a player who wants
         # out un-readies or leaves)
         keep = lobby.mode in P.LOBBY_ONLY_MODES
         for member in lobby.members:
+            member.in_place = False
+            member.choice = ""
             if not keep or member.spectator:
                 member.ready = False
         if lobby.id not in self.lobbies:
@@ -2795,8 +2828,31 @@ class Server:
         member.delay = P.get_int(msg, "delay", lo=0, hi=P.DELAY_MAX, default=member.delay)
         member.relay = P.get_bool(msg, "relay", default=False)
         member.relay_always = member.relay and P.get_bool(msg, "hide_always", default=False)
+        # ready from the last match's result screen, where its loser chose the next match (both launchers say so)
+        choice = msg.get("choice", "rematch")
+        if choice not in ("rematch", "select"):
+            raise P.ProtocolError("bad_request", "choice must be rematch or select.")
+        member.in_place = member.ready and P.get_bool(msg, "in_place", default=False)
+        member.choice = choice if member.in_place else ""
         self._member_connection(member, msg)
+        players = lobby.players()
+        if len(players) == 2 and all(mem.ready and mem.in_place for mem in players) and self._in_place_ok(lobby):
+            self._start_lobby_match(lobby, None, reply_to=(s, msg))  # at once: the loser chose it in the game
+            return
         self._broadcast_lobby(lobby, reply_to=(s, msg))
+
+    def _in_place_ok(self, lobby: Lobby) -> bool:
+        """The lobby's next match can start where its two games wait, at the last match's result screens: the last
+        match went straight between the same two players, on the same sides as the next one gets."""
+        if lobby.match is not None or lobby.last_sides is None or not lobby.result_choice:
+            return False
+        ordered = self._lobby_order(lobby)
+        return (len(ordered) == 2 and tuple(mem.session.account_id for mem in ordered) == lobby.last_sides
+                and all(a in lobby.last_pings for a in lobby.last_sides))
+
+    def _lobby_order(self, lobby: Lobby) -> list[LobbyMember]:
+        """The lobby's two players by side: King of the Hill's king is player 1; else a host who plays."""
+        return sorted(lobby.players(), key=lambda mem: (mem is not lobby.king, mem.session is not lobby.host))
 
     def on_lobby_role(self, s: Session, msg: dict[str, Any]) -> None:
         """Play or watch: a spectator takes a free place to play, a player steps aside to watch (not while their
@@ -2909,10 +2965,18 @@ class Server:
             self._close_rating(lobby)
         lobby.ready_by = lobby.ready_pair = None
         # King of the Hill: the king is player 1; else a host who plays
-        ordered = sorted(lobby.players(), key=lambda mem: (mem is not lobby.king, mem.session is not lobby.host))
+        ordered = self._lobby_order(lobby)
+        # From the last match's result screens, where both games still wait connected to each other (both launchers
+        # ready there, the loser's choice made in the game): no UDP hello, no punch, the last match's route. "rematch":
+        # the fighters both games saw (the game's own Rematch, the same stage), "select": both pick again.
+        in_place = all(mem.in_place for mem in ordered) and self._in_place_ok(lobby)
+        picks = [mem.character for mem in ordered]
+        if in_place:
+            select = any(mem.choice == "select" for mem in ordered) or lobby.last_picks is None
+            picks = ["", ""] if select else list(lobby.last_picks or ("", ""))
         players = [
             MatchPlayer(side=i + 1, account_id=mem.session.account_id or 0, name=mem.session.name or "?",
-                        session=mem.session, character=mem.character, delay=mem.delay, max_ping=0,
+                        session=mem.session, character=picks[i], delay=mem.delay, max_ping=0,
                         region=lobby.region, elo=None, accepted=True, relay=mem.relay,
                         relay_always=mem.relay_always)
             for i, mem in enumerate(ordered)
@@ -2928,9 +2992,15 @@ class Server:
                 "type": "match_found", "match": m.id, "game": m.game, "mode": m.mode, "ranked": False,
                 "side": p.side, "accept_timeout": 0, "accept_required": False, "lobby": lobby.id,
                 "death_traps": m.death_traps, "opponent": self._opponent(m, m.other(p)),
+                "result_choice": lobby.result_choice, "in_place": in_place,
             })
-        log.info("lobby %s: match %s started %s", lobby.id, m.id, f"by {by}" if by else "(both ready)")
+        log.info("lobby %s: match %s started %s%s", lobby.id, m.id, f"by {by}" if by else "(both ready)",
+                 f", at the result screens ({ordered[0].choice or 'rematch'})" if in_place else "")
         self._broadcast_lobby(lobby, reply_to=reply_to)
+        if in_place:
+            for mp in players:
+                mp.ping = dict(lobby.last_pings[mp.account_id])
+            self._go(m, lobby.last_rtt, now)
 
     # --- leaderboard ------------------------------------------------------------------------------
 

@@ -21,7 +21,7 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
-    QString name(int control) const { return controls::controlText(control, gameId_); }
+    QString name(int control) const { return controls::controlText(control, gameId_, map_.fight[size_t(control)]); }
     void relabel();
     void pickKey(int control, int slot);
     void showMap();  // the widgets from map_
@@ -33,6 +33,7 @@ private:
     std::array<QLabel*, controls::Count> names_{};  // the keyboard's rows: what each button does
     std::array<std::array<QPushButton*, controls::kKeysPerButton>, controls::Count> keyButtons_{};
     QList<QComboBox*> pressBoxes_;
+    std::array<QComboBox*, controls::Count> fightBoxes_{};  // in a fight: the game's buttons each button presses
     QLabel* unpressed_ = nullptr;
     QLabel* status_ = nullptr;
 };

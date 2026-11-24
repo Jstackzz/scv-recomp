@@ -9,13 +9,18 @@ line both games write, with the time.
                                 [--park-after S] [--back-at FRAME] [--watch] [--dlc2 DIR] [--env NAME=VALUE]
                                 [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
                                 [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
-                                [--env1 NAME=VALUE] [--env2 NAME=VALUE]
+                                [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select]
 
 --fight1/--fight2: other fight scripts (tools/py/netlog2script.py makes them from a match's net log, so a desync between
 two PCs plays again here; tools/py/mash.py makes varied ones); --heap-shift2 moves game 2's heap, as a second PC's lies
 elsewhere; --exe a copy of the game, so a build can go on meanwhile; --args1/--args2 each game's own command line and
 --env1/--env2 its own variables (two PCs' display settings side by side: --env2 SC5_RENDER_SCALE=2, as the launcher
 passes them, docs/PROTOCOL.md 3.1); --port-base and --runs let two tests run at once (tools/heapsweep.sh).
+
+--choose: a lobby's matches (choose=1): after each result the match's loser chooses the next one on the game's result
+screen (SC5_TEST_RESULT_CHOICE stands in for them, one choice per result in turn), both games say it (`chose`), and the
+next match goes on from there as the launchers would start it (rematch: the result line's fighters and stage=keep;
+select: both pick again, --pick1/--pick2 then pick for the players).
 
 --p1/--p2 "-": that side picks on the game's own select screen; --pick1/--pick2 then stand in for each PC's player
 there (SC5_TEST_LOCAL_PICK). The fight's inputs are tools/synctest.sh's scripted ones (player 1's in game 1, player
@@ -156,6 +161,7 @@ def main():
     ap.add_argument("--args1", default="", help="game 1's extra command line (graphics settings, say)")
     ap.add_argument("--args2", default="", help="game 2's extra command line")
     ap.add_argument("--runs", default="", help="where the session folders and logs go (default build/runs)")
+    ap.add_argument("--choose", default="", help="the loser's choices on the result screens in turn: rematch,select")
     a = ap.parse_args()
 
     relay = FeedRelay() if a.watch else None
@@ -172,7 +178,10 @@ def main():
         # the shader cache: a copy of the test saves' (an empty one makes the first fights stutter)
         cache = os.path.join(ROOT, "game", "user", "cache")
         if os.path.isdir(cache):
-            shutil.copytree(cache, os.path.join(s, "cache"))
+            try:
+                shutil.copytree(cache, os.path.join(s, "cache"))
+            except shutil.Error as e:  # another game holds some of it open: the rest is enough
+                print(f"game {i}: the shader cache copied but {len(e.args[0])} files in use", flush=True)
         env = dict(os.environ)
         env.update({
             "SC5_NET": "1", "SC5_GAME": "sc5", "SC5_SESSION_DIR": s, "SC5_INSTANCE": str(i),
@@ -193,6 +202,8 @@ def main():
             env[k] = v.replace("{i}", str(i))
         if a.lag and i <= 2:
             env["SC5_NET_LAG"] = str(a.lag)
+        if a.choose and i <= 2:
+            env["SC5_TEST_RESULT_CHOICE"] = a.choose
         if i == 2 and a.heap_shift2:
             env["SC5_TEST_HEAP_SHIFT"] = str(a.heap_shift2)
         pick = a.pick1 if i == 1 else a.pick2 if i == 2 else ""
@@ -206,9 +217,14 @@ def main():
         time.sleep(2)
 
     last = [""] * count
+    last_result = ""
     stage = "boot"
     rematched = 0
     rematches = max(a.rematches, 1 if a.rematch else 0)
+    choices = [c for c in a.choose.split(",") if c]
+    if choices:
+        rematches = len(choices)
+    choose = " choose=1" if choices else ""
     again_done = False
     in_match_at = 0
     match = f"local-{int(t0)}"
@@ -219,6 +235,8 @@ def main():
                 if st[i] != last[i]:
                     print(f"{time.time() - t0:7.1f}s game {i + 1}: {st[i]}", flush=True)
                     last[i] = st[i]
+                    if i == 0 and st[i].startswith("result"):
+                        last_result = st[i]
             if stage != "quit" and any(p.poll() is not None for p in games):
                 print("a game exited", [p.poll() for p in games])
                 break
@@ -226,7 +244,7 @@ def main():
                 for i in (0, 1):
                     line = (f"start game=sc5 mode={a.mode} side={i + 1} local_port={a.port_base + i} "
                             f"remote=127.0.0.1:{a.port_base + 1 - i} delay={a.delay} seed={a.seed} p1={a.p1} p2={a.p2} "
-                            f"rounds={a.rounds} ranked=0 match={match}")
+                            f"rounds={a.rounds} ranked=0 match={match}{choose}")
                     if relay:
                         line += f" feed=127.0.0.1:{relay.players}"
                     write_atomic(os.path.join(sessions[i], "cmd.txt"), line)
@@ -243,6 +261,31 @@ def main():
                     for s in sessions:
                         write_atomic(os.path.join(s, "cmd.txt"), "park")
                     print(f"{time.time() - t0:7.1f}s park sent in the match", flush=True)
+                    stage = "park"
+            elif stage == "match" and choices and all(x.startswith(DONE + ("chose",)) for x in st):
+                # the loser's choice on the result screens: both games say it, then the launchers' next match
+                if rematched < rematches and all(x.startswith("chose") for x in st[:2]):
+                    said = {x.split()[1] for x in st[:2]}
+                    if len(said) != 1:
+                        print(f"the games chose apart: {st[:2]}", flush=True)
+                        break
+                    rematched += 1
+                    what = said.pop().partition("=")[2]
+                    fighters = dict(kv.split("=", 1) for kv in last_result.split()[1:] if "=" in kv)
+                    picks = (f"p1={fighters.get('p1_char', '-')} p2={fighters.get('p2_char', '-')} stage=keep"
+                             if what == "rematch" else "p1=- p2=-")
+                    for k, s in enumerate(sessions[:2]):
+                        if k and a.rematch_stagger:
+                            time.sleep(a.rematch_stagger)
+                        write_atomic(os.path.join(s, "cmd.txt"),
+                                     f"rematch seed={776 + rematched} match={match}-{rematched + 1} {picks} choose=1")
+                    print(f"{time.time() - t0:7.1f}s {what} chosen: rematch {rematched} sent ({picks})", flush=True)
+                    time.sleep(1)
+                    continue
+                if rematched >= rematches and all(x.startswith(("result", "chose")) for x in st[:2]):
+                    for s in sessions:
+                        write_atomic(os.path.join(s, "cmd.txt"), "park")
+                    print(f"{time.time() - t0:7.1f}s park sent", flush=True)
                     stage = "park"
             elif stage == "match" and all(x.startswith(DONE) for x in st):
                 if rematched < rematches and all(x.startswith("result") for x in st[:2]):

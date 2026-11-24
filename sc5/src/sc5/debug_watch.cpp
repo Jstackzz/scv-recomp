@@ -23,6 +23,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+#include "sc5/creation.h"
 #include "sc5/frame.h"
 #include "sc5/gameimage.h"
 #include "sc5/net/netplay.h"
@@ -362,6 +363,31 @@ void Dumps() {
     if (sc5::frame::Count() == a) WideBefore(0);
     if (sc5::frame::Count() == b) WideAfter(int64_t(b));
   }
+  // SC5_DBG_SLOTDUMP=<frame>:<slot>,...: a creation slot of the save image (its header, record and picture; slots from
+  // 0) written into SC5_TEST_DUMP_DIR as slot<slot>_<frame>.bin at the end of those frames (absolute)
+  static const std::vector<std::pair<uint64_t, uint32_t>> slots = [] {
+    std::vector<std::pair<uint64_t, uint32_t>> out;
+    if (const char* v = std::getenv("SC5_DBG_SLOTDUMP"))
+      for (const char* p = v; *p;) {
+        const uint64_t f = std::strtoull(p, const_cast<char**>(&p), 10);
+        uint32_t n = 0;
+        if (*p == ':') n = uint32_t(std::strtoul(p + 1, const_cast<char**>(&p), 10));
+        out.emplace_back(f, n);
+        while (*p == ',') p++;
+      }
+    return out;
+  }();
+  for (auto [f, n] : slots) {
+    const char* dir = std::getenv("SC5_TEST_DUMP_DIR");
+    const uint32_t slot = sc5::creation::Slot(n);
+    if (sc5::frame::Count() != f || !dir || !slot) continue;
+    const std::string path = fmt::format("{}/slot{}_{}.bin", dir, n, f);
+    if (FILE* fp = std::fopen(path.c_str(), "wb")) {
+      std::fwrite(REX_KERNEL_STATE()->memory()->TranslateVirtual<const uint8_t*>(slot), 1, sc5::creation::kSlotSize, fp);
+      std::fclose(fp);
+      REXLOG_INFO("sc5 dbg: creation slot {} written to {}", n, path);
+    }
+  }
   if (items.empty()) return;
   const uint64_t now = sc5::frame::Count();
   const char* dir = std::getenv("SC5_TEST_DUMP_DIR");
@@ -497,4 +523,47 @@ REX_HOOK_RAW(sub_82385F48) {
     (c.r3.u32 ? yes : no)++;
   }
   REXLOG_INFO("sc5 dbg dlc: {} granted, {} not", yes, no);
+}
+
+// SC5_DBG_PICLOAD=1: every picture file the game loads (a created character's card, docs\GAME.md "The VS screen's
+// card"; sub_8218B1C0: r3 its object, r4 its size, r5 the file, r7 an id), where it is (a creation slot's +offset), and
+// how its upload ends (sub_8218B298: the object's state, 2 done, 3 failed)
+namespace {
+bool PicDebug() {
+  static const bool on = [] { const char* v = std::getenv("SC5_DBG_PICLOAD"); return v && v[0] == '1'; }();
+  return on;
+}
+std::map<uint32_t, uint32_t> g_pic_state;
+}  // namespace
+
+REX_EXTERN(__imp__sub_8218B1C0);
+REX_HOOK_RAW(sub_8218B1C0) {
+  if (!PicDebug()) {
+    __imp__sub_8218B1C0(ctx, base);
+    return;
+  }
+  const uint32_t obj = ctx.r3.u32, size = ctx.r4.u32, file = ctx.r5.u32, id = ctx.r7.u32, lr = uint32_t(ctx.lr);
+  const uint32_t w0 = file ? Rd(file) : 0, w1 = file ? Rd(file + 4) : 0, w2 = file ? Rd(file + 8) : 0;
+  const uint32_t first = sc5::creation::Slot(0);
+  __imp__sub_8218B1C0(ctx, base);
+  const bool in = first && file >= first && file < first + 50 * sc5::creation::kSlotSize;
+  REXLOG_INFO("sc5 dbg pic: load obj {:08X} file {:08X} (slot {} +{}) size {} id {:08X} from {:08X}: {} head {:08X} "
+              "{:08X} {:08X} state {} kind {}",
+              obj, file, in ? int((file - first) / sc5::creation::kSlotSize) + 1 : 0,
+              in ? int((file - first) % sc5::creation::kSlotSize) : -1, size, id, lr, ctx.r3.u32, w0, w1, w2, Rd(obj),
+              Rd(obj + 8));
+  g_pic_state[obj] = Rd(obj);
+}
+
+REX_EXTERN(__imp__sub_8218B298);
+REX_HOOK_RAW(sub_8218B298) {
+  const uint32_t obj = ctx.r3.u32;
+  __imp__sub_8218B298(ctx, base);
+  if (!PicDebug()) return;
+  const uint32_t state = Rd(obj);
+  const auto it = g_pic_state.find(obj);
+  if (it == g_pic_state.end() || it->second != state) {
+    REXLOG_INFO("sc5 dbg pic: upload obj {:08X}: state {} kind {} -> {}", obj, state, Rd(obj + 8), ctx.r3.u32);
+    g_pic_state[obj] = state;
+  }
 }

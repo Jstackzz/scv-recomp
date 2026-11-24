@@ -89,6 +89,26 @@ struct StagePick {
 };
 void SetLocalStage(const StagePick& s);
 StagePick RemoteStage();
+// The result screen's menu after a match whose loser chooses the next one (a lobby's: the start line's choose=1,
+// sc5/autopilot.h): the chooser (0 or 1: the match's loser, player 1 after a draw), `phase` -1 nothing yet, 0 choosing
+// (`cursor`: 0 Rematch, 1 Character Select), 1 chosen. The chooser's game says it; the other's follows. Main thread.
+struct ResultChoice {
+  int chooser = -1, phase = -1, cursor = -1;
+};
+void SetLocalChoice(const ResultChoice& c);
+ResultChoice RemoteChoice();
+// The way into the coming fight (the VS screen while it loads, the stage's fly-over, the fighters' intros) plays unless
+// a player skips it with START on their own controller: this game's player did (sent to the other game and the
+// spectators), and whether either player did (a spectator's game: from the feed). Main thread.
+void SetLocalSkip();
+bool SkipWanted();
+// The next match from the result screen (the launcher's rematch, both games): how many frames after the match's end
+// this game had it, and the other game's (-1 not yet). Both take the result screen's menu from the same frame counted
+// from the match's end, past both, so that whatever went on on the result screen went on for as long in both (the
+// rematch parted at its first check, a player's animation one frame on in one game, when the two pressed a frame
+// apart as the command came). Main thread.
+void SetRematchAt(uint32_t frames);
+int64_t RemoteRematchAt();
 // A created character picked for the coming match (sc5/creation.h): its record, 13,340 bytes. This game's player's
 // (`side` this game's) is sent until the other game has every chunk; the other player's is taken as it comes: exactly
 // the record's bytes, from chunks 0-11 (1,200 bytes each, the last 140), the same bytes when a chunk comes again.

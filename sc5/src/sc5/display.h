@@ -6,8 +6,9 @@
 //
 // What applies at once: v-sync, texture filtering, brightness (a curve over the game's own gamma ramp), the master
 // volume (the frames the game's audio hands the system, scaled), the music, effects and voices levels (the game's
-// sound categories, sound.h). The window's mode and size: the next time the game's window is in front. The internal
-// resolution, anti-aliasing and adaptive sync: at the next start. SC5 has no frame data display (logged once).
+// sound categories, sound.h), the frame meter in practice (SC5_FRAMEDATA, framemeter.h). The window's mode and size:
+// the next time the game's window is in front. The internal resolution, anti-aliasing and adaptive sync: at the next
+// start.
 #include <cstdint>
 #include <functional>
 

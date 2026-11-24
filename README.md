@@ -61,8 +61,12 @@ again by itself before you play.
 - **Rematches in the game**: after a match the game stays at its result screen. Casual offers REMATCH (the game's
   own Rematch: the same characters on the same stage, straight back into the fight) and CHARACTER SELECT (both pick
   again); a ranked set goes on by itself, its last match's winner keeping their fighter while the loser picks again.
-  The next match starts from there, without closing the game. The VS screen before each fight (both fighters on
-  their cards), the stage's fly-over and the fighters' intros are skipped, as START skips them on the console.
+  The next match starts from there, without closing the game. In a lobby the last match's loser chooses REMATCH or
+  CHARACTER SELECT themselves, with their own controller, on the game's result screen (player 1 after a draw), and
+  the other game follows.
+- **The way into a fight and the KO replays play**, as on the console: the VS screen (both fighters on their cards),
+  the stage's fly-over, the fighters' intros and the replay of a KO. Either player skips them with START (a replay
+  with A too), and both games and the spectators skip them together.
 - **The players pick the stage** on the game's own stage select, with their own controller: player 1 for the first
   match, then the loser of each match, while the other game follows. Random draws the same stage in both games, and
   no pick within a minute counts as Random. REMATCH keeps the stage.
@@ -71,7 +75,11 @@ again by itself before you play.
   in Creation) among their fighter's costumes. The other player's game gets the character's record and checks every
   part of it against its own game (parts, models, stickers, colours, weapon, limits) before anything loads it; one
   with downloadable parts only plays when both players have the same ones, and then fights wearing them. A ranked
-  winner keeps theirs.
+  winner keeps theirs. The picture taken in Creation stays on its own PC: on the other, the VS screen shows SCV
+  Online's own card for that character.
+- **Your own button settings everywhere**: the launcher's Controls page sets what each button presses in a fight, any
+  combination of A, B, K and G on any button (the game's own settings offer 13 of the 16 and nothing on the stick
+  clicks), in every mode. Online the other player's game sees your presses as you set them, whatever theirs are.
 - **The launcher**: accounts, MATCH FOUND with the opponent's connection, ranked sets with 16 Soulcalibur rank
   titles, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and F3 (picture)
   reports to the server. Players who cannot reach each other play through the server's relay.

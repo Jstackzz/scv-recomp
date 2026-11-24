@@ -21,5 +21,6 @@ class Sc5App : public rex::ReXApp {
   void OnConfigurePaths(rex::PathConfig& paths) override;
   void OnPreSetup(rex::RuntimeConfig& config) override;
   void OnPostSetup() override;
+  void OnConfigureFonts(ImFontAtlas* atlas) override;
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override;
 };

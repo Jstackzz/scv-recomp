@@ -67,11 +67,13 @@ main menu (`ready`) in 41 s.
 | `link.cpp` | the launcher's side of docs\PROTOCOL.md 3: cmd.txt, status.txt (below, "The launcher's game") |
 | `autopilot.cpp` | the menus from boot to the hold point, to a VS fight with the match's picks or to Training, and back; the plain games' way to their select screen |
 | `sparring.cpp` | Online Practice: the round's clock held, health back up, at the top of every frame in sync (below) |
-| `controls.cpp` | the launcher's `controls.toml`: the keyboard as player 1, every controller's buttons, player 2's controller |
+| `controls.cpp` | the launcher's `controls.toml`: the keyboard as player 1, every controller's buttons, player 2's controller, the buttons in a fight (`[fight]`, below "Controls in a fight") |
 | `display.cpp` | the launcher's display and sound settings at the start and from `SC5_DISPLAY_FILE` as it changes |
+| `framemeter.cpp` | frame data in practice: a frame meter as Street Fighter 6's over Training and Online Practice (below) |
+| `result_overlay.cpp` | the panel over a lobby match's result screen where its loser chooses the next match (below, "The loser's choice") |
 | `rerun_profile.cpp` | tests (`SC5_TEST_RERUN_PROFILE`): the game's tasks timed one by one in frames run again (below, "Netplay") |
 | `select.cpp` | the character select screen: cursors, picks, the 32 slots and their characters |
-| `creation.cpp` | created characters online: the player's own brought into the online game's save, this PC's tables read, the other PC's record checked and placed (below, "Created characters online") |
+| `creation.cpp` | created characters online: the player's own brought into the online game's save, this PC's tables read, the other PC's record checked and placed with SCV Online's own VS card (below, "Created characters online") |
 | `creation_check.cpp` | the check of a created character from another PC, field by field (plain C++; `sc5\tests\creation_check_test.cpp`) |
 | `versus.cpp` | a VS fight's setup online: rounds to win, player 1's settings and random numbers, player 2 on the second pad |
 | `net/synctest.cpp` | the rollback check on one PC (`SC5_SYNCTEST`, below) |
@@ -488,11 +490,13 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
 
 Adapted from MK9 Online's netplay (mk9/net/netplay.cpp), with the battle snapshots of battle.cpp in place of MK9's
 copy-on-write memory. Packets (UDP, "SC5N"): HELLO, READY (seed, words, delay), INPUT (ack, now, seen, 24 frames of
-inputs), CHECK (a frame's hash), BYE. Tests set it from the environment (`SC5_NET_BIND`, `SC5_NET_PEER`,
-`SC5_NET_SIDE`, `SC5_NET_DELAY`, `SC5_NET_LOCKSTEP`, `SC5_NET_LOG`, a simulated network `SC5_NET_LAG` / `_JITTER` /
+inputs), CHECK (a frame's hash), BYE, and since 0.1.4 RSKIP (a KO's replay cut short, below). Tests set it from the
+environment (`SC5_NET_BIND`, `SC5_NET_PEER`, `SC5_NET_SIDE`, `SC5_NET_DELAY`, `SC5_NET_LOCKSTEP`, `SC5_NET_LOG`, a
+simulated network `SC5_NET_LAG` / `_JITTER` /
 `_LOSS`); the launcher's matches from its start line (below, "The launcher's game"). Before the barrier the games
-also pass each other the select screen's picks (PICK), the stage select's (STAGE) and player 1's battle settings
-(SETUP).
+also pass each other the select screen's picks (PICK), the stage select's (STAGE), player 1's battle settings
+(SETUP), a player's skip of the way into the fight (SKIP) and, on a lobby match's result screen, its loser's choice of
+the next match (CHOICE).
 
 - **The barrier** is the first frame of round 1's call (the fight loaded and its intro played: the intro goes as the
   characters' voice lines play, and from the second match on it ran on different frames on two PCs). The games meet
@@ -541,7 +545,17 @@ also pass each other the select screen's picks (PICK), the stage select's (STAGE
   its result screen (the barrier agrees the state machine's counts and makes the fight's blocks alike); about 16 s
   from the end of a match to the next fight, half the way through Character Select. Ezio against Viola with 40 ms
   each way, best of 3, 2026-11-19: rematches with both lines at once, with one 8 s after the other and with one 20 s
-  after the other, every match in step (the same rounds on the same frames, no check apart). Any other
+  after the other, every match in step (the same rounds on the same frames, no check apart). **The menu on the same
+  frame** (0.1.4, netplay GOAT packets, autopilot.cpp's Again): what the result screen shows goes on frame by frame
+  (the winner's pose, the loser's), and the game's own Rematch starts the next round from it: two games that took the
+  result screen's menu a frame apart, counted from the match's end, parted at the rematch's first check (Siegfried
+  against Mitsurugi, the scripted fight, 40 ms each way: one game's snapshot had a block of player 2's object at
+  +0x1C360 that the other's had not; 2 of 3 such rematches parted, 2026-11-20). Until 0.1.3 the menu was taken 12 s
+  after the match's end, or as the launcher's `rematch` came when that was later, which two PCs get a few frames apart
+  (a casual rematch chosen in the launcher's window after 12 s). Now each game tells the other how many frames after
+  the match's end it had the `rematch`, and both take the menu at the larger of the two plus 2 s (12 s at least),
+  counted from the match's end: rematches in step with the lines 0.4 s apart (Next at 1,115 frames in both games, the
+  commands at 971 and 995). Any other
   rematch goes through Character Select, loads, and meets at the intro: per side the same fighter, the one the
   launcher names, or `-` for that side's player to pick again; then the stage select (below, "The stage"). The
   launcher sends it for a queue series' next match while both games wait at their result screens (the netplay keeps
@@ -552,15 +566,35 @@ also pass each other the select screen's picks (PICK), the stage select's (STAGE
   (lockstep there made the intro wait at almost every frame with a round trip over the delay). START and BACK never
   leave a PC (no pausing a match).
 - **A KO's replay is not fought** (netplay.cpp `RoundFought`, battle::InKoReplay: the replay's manager in its state
-  2, though the state machine says "fighting"), and nobody can cut it short online. Fought, with rollbacks in it,
-  the two games' replays came apart (2026-11-18): a player's press ends a replay early (its manager also waits on
-  camera slot 0's blend weight), and where the frame that ended it ran again after a rollback, the cameras came out
-  of it otherwise than from its first run (part of what they take in is worked out in the drawing, which a frame run
-  again leaves out: with `SC5_REPLAY_DRAW=1` they came out alike). The next round's cameras stood apart, and the round
-  went its own way after a crossing over (Cervantes against Yoshimitsu with 40 ms each way, from frame 5790); and in
-  a replay each player's +0xC4 (the side of the screen, sub_8216C378: player 1 while the camera with the greatest
-  weight is in its modes 1 and 3) differed in its one check (Aeon Calcos against Siegfried, frame 2730). At the
-  replay's end the game puts the present back.
+  2, though the state machine says "fighting"). Fought, with rollbacks in it, the two games' replays came apart
+  (2026-11-18): a player's press ends a replay early (its manager also waits on camera slot 0's blend weight), and
+  where the frame that ended it ran again after a rollback, the cameras came out of it otherwise than from its first
+  run (part of what they take in is worked out in the drawing, which a frame run again leaves out: with
+  `SC5_REPLAY_DRAW=1` they came out alike). The next round's cameras stood apart, and the round went its own way after
+  a crossing over (Cervantes against Yoshimitsu with 40 ms each way, from frame 5790); and in a replay each player's
+  +0xC4 (the side of the screen, sub_8216C378: player 1 while the camera with the greatest weight is in its modes 1
+  and 3) differed in its one check (Aeon Calcos against Siegfried, frame 2730). At the replay's end the game puts the
+  present back.
+- **A player cuts a KO's replay short** (netplay.cpp `ReplaySkipAsk`, RSKIP packets): the replay's manager
+  (sub_8211A8A8) ends a replay when its player's pad has START or A newly pressed (the pad manager's +4: 0x8000, or
+  0x80000000 that A sets). Online the replay runs on neutral inputs, never fought nor rolled back, so the press must
+  come on one frame in both games: a player's own START or A while a replay plays asks the other game for a frame 30
+  ahead (RSKIP, asked); the other game agrees while that frame is still to come there and nothing earlier was agreed
+  (a lower frame asked by both at once wins), and refuses otherwise; the asking game waits at that frame for the answer
+  should it not have come. At the top of the agreed frame both games press A on both pads for 4 frames if the replay
+  is still going (it starts and ends on the same frame in both), and the replay ends there in both. The players' games
+  write the agreed frame into the spectator feed (type 12), and a spectator's game presses there too. Tests:
+  `SC5_TEST_SKIP_REPLAY=<n>` asks n frames into each replay. 2026-11-23, two games 40 ms apart, game 2's heap 2 MB
+  higher, both players mashing: game 2 cut both KO replays short 15 frames in (match frames 1717 and 3387 agreed),
+  both games pressed there and went between rounds on the same frame, every one of 86 check frames alike; in a
+  heapsweep pair the mashing players' own A presses cut the replays short too.
+- **The way into a fight plays** (autopilot.cpp): the VS screen while the fight loads, the stage's fly-over and the
+  fighters' intros, as on the console, unless a player presses START on their own controller (the autopilot reads it:
+  the game never sees a player's pad before the match runs in sync). That game sends SKIP for the coming match and
+  the spectators' feed says so (type 12); both games then skip as the console takes START (the VS screen once the
+  fight has loaded), and a spectator's game follows the feed. The two games need not skip on the same frame: they meet
+  at round 1's call whatever time their way there took, and the barrier makes what the intro left alike. Tests:
+  `SC5_TEST_SKIP_INTRO=1`, this game's player skips at once.
 - **The fight's random numbers seeded again** (netplay.cpp `ReseedAtStateChange`) wherever the battle's state changes
   outside a round's fighting (the KO, the KO's replay and its end, between rounds, the round's call, the round's first
   frame fought), at the frame's top, from the match's seed and the frame, as the barrier seeds them (sub_824A35A8); a
@@ -632,8 +666,10 @@ also pass each other the select screen's picks (PICK), the stage select's (STAGE
   0x00000032"). Where the game's restore set that word, its value stays.
 - **The way into a fight** (autopilot.cpp): the VS screen (both fighters on their cards while the fight loads) takes
   START as on the console once the fight has loaded (A, B, X, Y do nothing there), and so do the stage's fly-over and
-  the fighters' intros: the autopilot presses it on both pads every third of a second while they are up (the VS screen
-  359 frames to 101, the intros 484 to about 40: from the start line to `in_match` 31-38 s before, 31 s now). In the
+  the fighters' intros. Until 0.1.3 the autopilot skipped them always; now they play unless a player skips them
+  (below, "The way into a fight plays"), and then the autopilot presses START on both pads every third of a second
+  while they are up (the VS screen 359 frames to 101, the intros 484 to about 40: from the start line to `in_match`
+  31-38 s played, 31 s skipped). In the
   one launcher test with the intros skipped (2026-11-17), the two games took a KO's replay differently (one went to a
   3-frame replay, the other straight between rounds) and the rematch after it parted: not the skip, nor the display
   settings as such (render scale 2 there), but the KO replay's frame counter, which rollback did not put back (above,
@@ -716,8 +752,9 @@ also pass each other the select screen's picks (PICK), the stage select's (STAGE
 docs\PROTOCOL.md 3.3, *Created characters*, has what the players see; this is what the game does.
 
 **The save.** `savedata.bin` (0x22C200 bytes, plain) keeps 50 creation slots from 0x516C, 29,832 bytes apart: a
-132-byte header, the record (TK_CreationCharacterDNA_st, 13,340 bytes, its schema sub_822256B0) at +132, the picture
-Creation takes (16,360 bytes) at +13,472. A created character's header ends with +112 a number, +116 1 (a customized
+132-byte header, the record (TK_CreationCharacterDNA_st, 13,340 bytes, its schema sub_822256B0) at +132, what Shoot
+Picture was set to (104 bytes) at +13,472 and the picture it took at +13,576 (below, "The VS screen's card"). A
+created character's header ends with +112 a number, +116 1 (a customized
 fighter) or +120 1 (an original character), +124 and +128 0x01000000 (the screens test +128). In memory the save
 object ([0x8273EF10]) keeps the image from +0x48 and the release table right after it (+0x22C248, "Unlocks"). Creation
 and the select screen read the slots there as they go.
@@ -818,6 +855,88 @@ created pick of that fighter would be taken for a standard costume, its record n
 games showing different costumes). The manager is filled from the save again for the next match, the cleared header
 notwithstanding, so SyncEntries empties those entries again each frame of the select screen, before any pick.
 
+**The VS screen's card.** The VS screen (from its own copy of the picture, 0x82909C60 for player 2's, loaded by
+sub_8218CE00) and Creation's list (sub_822F67F0) draw a created character's card from the picture in its slot: a file at
++13,576 whose 16 bytes give its kind (byte 0), a byte the kind uses, then big-endian its size, width and height (+2,
++4, +6) and a checksum of its data (+8, sub_8218A070, checked only when byte 0 has 0x80 set), its data from +16.
+sub_8218B1C0 loads it when the size is not 0 and sub_8218B298 uploads it, by its kind (byte 0 without 0x80): 0 a
+compressed file (`PTC+MSHM`, sub_8218B3E0; Creation's are this with 0x80, 172x256 in 16 KB at most), 1 a GPU texture
+header and its data (sub_8218B648), 2 the game's own DCT codec and 3 the same LZX-compressed (+12 its size), into a
+texture of the form byte 1 names (sub_8218B860: 0 L8, 1 1:5:5:5, 2 5:6:5, 3 A8R8G8B8; only the forms sub_8218A238
+lists make one, so 1 and 2 never load). The codec (sub_824FFA68): a 10-byte little-endian header (width, row pitch in
+bytes, height, flags: bits 3-4 the channels less one, 0x20 each channel coded on its own, else 0x04 a 1-bit first
+channel, 0x8000 the last two at half size, and a colour transform after unless 0x40), then per channel (sub_824FF048) a
+64-bit little-endian mask of the coefficients present in the codec's order (the table at 0x82702660: k -> row * 8 +
+column), a byte added after the inverse DCT, 64 quantization multipliers, then each present coefficient's value for
+every 8x8 block in turn (signed bytes, `0x80 n` repeating the last value n times); the inverse DCT is MPEG's reference
+integer one (sub_82503F28). The other PC's picture is not sent (PROTOCOL.md 3.3), so until 0.1.4 that player's card
+was black (seen by the owner, 2026-11-20). Slots 49 and 50 now get a picture of SCV Online's own (creation.cpp, Card,
+made once at the hold point): kind 2 into an A8R8G8B8 texture, 128x192 (rows of 32 texels), four channels each coded
+on its own (alpha no coefficients and 255 added), navy and gold with a figure and a question mark drawn at 172x256 and
+averaged 16 points a texel, through the standard DCT with JPEG's luminance quantization (14,503 bytes of the 16,256);
+the VS screen stretches it over the card as it does Creation's (seen 2026-11-23: the card in the other PC's game, the
+player's own picture in theirs). `SC5_DBG_PICLOAD=1` logs each picture loaded, where from, and how its upload ended;
+`SC5_DBG_SLOTDUMP=<frame>:<slot>,...` writes those slots (0-based) at those frames to `SC5_TEST_DUMP_DIR` (how
+Creation's own picture was found: shot and saved by a scripted Creation session).
+
+## Frame data in practice (framemeter.cpp)
+
+Over Training and Online Practice, a frame meter as Street Fighter 6's (the launcher's *Frame data in practice*,
+`SC5_FRAMEDATA`, docs\PROTOCOL.md 3.1; F7 in the game hides or shows it). Per player a row of one-frame cells: startup
+green, impact (the frames the attack can hit) red, recovery blue, hit or guard stun yellow, busy without an attack (a
+step, a jump, a throw holding the other player, getting up) gray, free to act dark; each run's length at its last
+cell. Above player 1's row and below player 2's, a line about the player's last move: *Startup 13F / Impact 3F /
+Recovery 25F / Total 40F / Advantage +2F*. At the top, a panel with each player's last hit (its damage, and its part of
+the attack's own damage: 120% is a counter hit), the combo's damage and hits, and the last attack's level (High, Mid,
+Low, Special Low, Throw). A meter starts when either player leaves "free to act" and runs until both have been free for
+20 frames; past 64 frames it wraps, a white line after the newest frame. Startup is SCV's impact frame (i13: the frame
+the attack first can hit, the move's first frame being 1); advantage, once both are free again after a hit or a
+guard, how many frames sooner the player could act than the other. The offline input delay (2 frames, above) comes
+before a move starts and is not counted, as in published frame data.
+
+It only reads guest memory, from a hook after the game's step (sub_82493230, every run of a frame), and calls no game
+code but the step it wraps: it cannot change what the game computes, and two players may show it or not. Per fighter
+object (0x82937070, 0x82994BA0):
+
+| field | what |
+|---|---|
+| +0x177A u16 | 1 nothing of its own (standing, walking, holding guard), 2 its own action (attack, throw, step, jump), 3 reacting to a hit (stunned, thrown, in the air, down), 6 guard stun |
+| +0x0578 u32 | 1 while it may act (attack, guard, move), 0 while an action or a reaction holds it (the fighter's task, sub_82123140, keeps it from the busy byte +0x14C0) |
+| +0x228BC u32 | its attack's record (heap), +0x14DB set while the attack runs; sub_82370CD0 compares the move's frame (a float at `[+0x228C4] + 8`) with the record's impact window (+0x36 first, +0x38 last, from 0) and keeps the phase at +0x177C u16: 1 startup, 2 impact, 3 recovery (with no record it leaves it: a throw that caught keeps 2) |
+| record +0x33 u8 | 0x80 a throw; without 0x02 high (it passes over a crouching fighter); 0x08 standing guard blocks it, 0x10 crouching guard (seen: high 0x49, mid 0x4B and 0x6F, low 0x37, special low 0x1B, throw 0x81; "Special Mid", 0x08 and 0x10 with 0x40, is a guess) |
+| record +0x3A s16 | its damage before scaling |
+| +0x2268C f32 | health (a hit's damage is what it loses in a frame; Training's and Online Practice's refills raise it) |
+| 0x829361B4 u32 | the fight's frame count: one a frame while the fight runs, standing still while the game is paused, set back by a rollback |
+
+A fighter's cell: stun from the frame a hit or a guard lands (+0x177A 3 or more); in its own attack (2, a record)
+startup, impact, or recovery until +0x0578 says it may act; else gray while it may not act, dark while it may.
+
+**How they were found**: Training, Mitsurugi against Siegfried, the presses scripted; both fighters' objects written
+every frame and compared around each press (+0x177C went 1 for 12 frames, 2 for 3, 3 for 36 on Mitsurugi's A); the
+code that writes the phase led to the attack record; the record's fields by comparing 14 moves' records with their
+published damage and levels; guard stun with Training's dummy on the second controller (2P Settings, 2P "Controller",
+START on that pad, guard held); the pause by the counters that stand still in Training's menu.
+
+**Checked** against 8wayrun's SCV tables (2018): Mitsurugi's impact frames A 13, 6A 15, 3A 15, 2A 13, 1A 34, 4A 19,
+B 15, 3B 18, 1B 14, K 13, 6K 15, 3K 15, 2K 17, 1K 15 and their damage 12, 18, 22, 12, 38, 28, 16, 32, 21, 14, 23, 18,
+20, 16, all as published; advantage on hit A +2, B +2, K +2, 2A +8 and on guard A -8, B -8, K -8, 2A -6, as published
+(a hit on the second impact frame, from a little farther, gives one frame more, as on the console). Siegfried's K i13
+and A i18 in Online Practice. Online Practice, two games, 60 ms each way (2-frame rollbacks, 2026-11-23): every frame
+run again went back to an earlier fight frame, and the final readings of 401 traced frames and all 6 exchanges logged
+were the same in both games (22 and 24 rollbacks) and the same as at 40 ms. (A rollback of every frame in Training is
+no check: Training's own state is not in the battle's snapshot, and the fight's count came back as 2 every fifth frame.)
+
+**The overlay**: an ImGui dialog on the SDK's drawer (Sc5App::OnCreateDialogs), drawn on the UI thread from what the
+game thread hands over each frame; Segoe UI Bold at 64 px (Sc5App::OnConfigureFonts; Arial Bold else: the runtime's own
+font is 10 px); text 1/20 of the window's height (54 px at 1080 lines), 64 cells across 86% of its width, white with a
+black outline over a dark panel; hidden while the fight stands still (Training's menus and help windows). In Training
+the meter ends at 80% of the height (above its input history) and the panel is below Training's own displays; in Online
+Practice at 86% and under the timer. F7 was the runtime's own key for its achievements overlay (SCV has none): that
+bind goes, and F7 shows or hides the meter, with a notice for 2.5 s; the launcher keeps F6-F12 out of its key map.
+Each exchange is logged once (`sc5 framemeter: fight frames 263-304: P1 startup 13 impact 3 recovery 25 total 40
+advantage +2, damage 12 (100%) combo 12 (1 hit), High | P2 ...`); `SC5_FRAMEMETER_TRACE=1` (or `<from>:<to>`, fight
+frames) logs every reading, a frame run again's marked `(again)`.
+
 ## Sound levels (sound.cpp)
 
 The game's sound is CRI AtomEx with one configuration (the ACF, registered from memory; `SC5_DBG_SOUND=1` logs its
@@ -854,7 +973,8 @@ settings menu (Start Match, Player "Player VS CPU", Battle Count 3, Round Time 6
 Match; the select screen; the stage select; loading; the fight. After the last round the winner's pose, the Results
 screen (A: Next), then a menu: Rematch ("fight again with the same character and settings": no loading, no intro;
 online when both players chose REMATCH, above, "The round's call"),
-Character Select, Return to Astral Home (it asks again, Yes / No, the cursor on No). START in a fight pauses it: Return
+Character Select, Return to Astral Home (it asks again, Yes / No, the cursor on No). A lobby's match (`choose=1`) has
+its loser choose the next one on the Results screen (below, "The loser's choice"). START in a fight pauses it: Return
 to Game, Move List, Options, Character Select, Return to Astral Home (the same question). `park` leaves a fight through
 that menu, the result through the result's, the select screens with B.
 
@@ -882,7 +1002,11 @@ match the second side cannot have the first side's: after three presses that cha
 shows), A. A side named `-` its player picks on their own PC with their own controller (only moves and A get
 through; A only on a slot both games can load, so Dampierre only when both players have his package) while the
 other game follows: their cursor as it moves, then their character and costume (PICK packets, repeated).
-`SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests.
+`SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests. A side named `c.<checksum>` (a ranked
+winner's created character, or a lobby's rematch that starts again) its own PC's autopilot picks: the fighter, then,
+once the costume panel is there, its created costume. The A that picked the fighter is held to its end while the panel
+comes in: cut off there (until 0.1.4) its last frames came as a new A on the panel, which took the first costume, so
+the player got the fighter's standard costume instead.
 
 **The stage** must be the stage select's own choice in both games: with Random each game draws its own (seeding all
 four generators in the frame of the press did not make the draws alike), and player 2's game taking player 1's stage
@@ -902,6 +1026,21 @@ Character Select with `stage=keep` takes both cursors to the last match's place.
 select came up (a press before it takes them was lost in one game and not the other). Offline (Training) the
 autopilot goes RIGHT 1 + seed % 27 times from Random, A. `SC5_TEST_STAGE=<place>|random` stands in for the chooser
 in tests (a press every half second).
+
+**The loser's choice** (autopilot.cpp `OnResultChoice`, result_overlay.cpp; 0.1.4). After a lobby's match
+(`choose=1`) both games stay at their result screens. Once the Results screen is up (12 s after the match's end), the
+match's loser (player 1 after a draw: both games know the rounds) chooses REMATCH or CHARACTER SELECT with their own
+controller: UP and DOWN (the stick too) move the choice, A takes it, on a panel the game draws over the Results
+screen with the SDK's ImGui drawer, large and high-contrast (the frame meter's bold font, its lines a 22nd of the
+window's height), which both players see with the loser's cursor on it.
+The other game follows the cursor and the choice (CHOICE packets for the coming match, repeated). Both games write
+`chose` and wait for the launcher's `rematch`, which takes them through the game's own menu as before: Next, the menu
+150 frames later, DOWN for Character Select, A. The game's menu itself is not opened for the choice: with it open for
+as long as the choice took, which the two games count a frame or two apart, a player's animation went on in one game
+and not the other, and the rematch parted at its first check (2026-11-20: one game's snapshot had a block of player
+2's object, +0x1C360, the other's had not; the same two games with the menu pressed on the same frames stayed in
+step, as 0.1.3's rematches did). No choice in a minute: the launcher parks the game (Return to Astral Home).
+`SC5_TEST_RESULT_CHOICE=rematch|select,...` stands in for the loser, one choice per match.
 
 **The battle setup** (versus.cpp, sub_8243D2A0 copying the VS settings record into the battle setup; the record:
 per side 88 bytes: +0 1 a player / 2 the CPU, +4 the input, +8 the rounds to win (Battle Count), +12 and +16 health
@@ -945,7 +1084,8 @@ first ("Training", then the control pages), which A closes. START opens Training
 Switch Mode/State, System Settings, Reset Position, 2P Settings, Instant Replay, Display Settings, Cancel Changes,
 Options, Switch Ring (greyed), Character Select, Return to Astral Home; the menu wraps, so UP from the top is the last
 item, which asks again (Yes / No, on No). Display Settings: Life Bar, Mode/State, Advice Window, Damage, Display
-Attack Properties, 2P Status, Display Control Help, Command Input History: no frame data. `start mode=practice`
+Attack Properties, 2P Status, Display Control Help, Command Input History: no frame data (framemeter.cpp adds it:
+above, "Frame data in practice"). `start mode=practice`
 (the start line's p1 and p2: the player's fighter and the dummy) goes there and hands the controllers to the player
 once the fight is up (`in_match match=practice`); `park` closes any help window (A), then START, UP, A, UP, A; the
 player leaving for the main menu in the game is the hold point again (`ready`).
@@ -981,6 +1121,28 @@ the players', its 221 checks agreed with theirs, the same result line, also with
 
 **The match's stats**: `stats-<match>.json` in the session folder every 10 s and at the match's end (docs\PROTOCOL.md
 3.4), from net::MatchStatsJson.
+
+**Controls in a fight** (controls.cpp, 0.1.4). The battle's input task (sub_8213DEC0) turns each player's pad into the
+game's buttons, A 0x1 (horizontal attack), B 0x2 (vertical), K 0x4 (kick), G 0x8 (guard), through sub_82171AE8(pad,
+bits): the d-pad and START let through (0xBC00 of the pad manager's bits, 0x82771080 + 128 a pad: +0 held, +4 newly
+pressed), and for each of eight buttons pressed (their bits in the table at 0x8275C12C: LT 0x2, LB 0x4, RT 0x10, B 0x20,
+A 0x40, RB 0x80, Y 0x100, X 0x200) the combination its option says: the pad's layout at 0x828FD514 + 12 a pad, eight
+option indices into the table at 0x82755474 (0 nothing, A, B, K, G, A+G, B+G, A+B, K+G, A+K, B+K, A+B+K, A+B+K+G: 13 of
+the 16; A+B+G, A+K+G and B+K+G cannot be set). The layout comes from the save's Control Settings (0x82911AA8: 60 bytes
+a pad, four 15-byte records, byte 12 the type chosen; a record's first 8 bytes in the menu's order A B X Y LB LT RB RT,
+which sub_8213DEC0 copies in the table's order when the type changes): a fresh save has Type A, A G, B K, X A, Y B, LB
+A+G, LT B+G, RB A+B, RT A+B+K. The stick clicks (0x1, 0x8) press nothing. The launcher's `[fight]` (PROTOCOL.md 3.1)
+sets any combination on any of those buttons and the stick clicks. Online the netplay turns the player's own pad into
+Type A's face buttons before it sends it (`controls::ToDefaultLayout`): every button `[fight]` sets presses the face
+buttons of its combination and nothing of its own, which both games' Type A (an online game's save is fresh) turn into
+that combination, and the spectators see the same. Equivalent to the game's own shortcut: the battle ORs the buttons
+pressed and takes newly pressed ones from the change of that set, so a shortcut and its buttons at once come out the
+same. Offline the hook of sub_82171AE8 takes player 1's pad (pad 0, the first controller and the keyboard; the
+netplay not active): the bits of the buttons `[fight]` sets go out of what the game converts, their combinations in.
+Only the battle's conversion sees any of it: the menus read the pads as they are. `SC5_DBG_FIGHT=1` logs the game's
+buttons each pad newly pressed. Checked 2026-11-20: offline Training (LB A+B+K+G, LS K, X B, RT nothing; Y and RB the
+game's own), and two games with 40 ms each way, player 1's LB K+G, LS A+B+K+G, X B: both games saw those presses on
+the same frames, in sync to the result.
 
 **Controls and display** (controls.cpp, display.cpp; docs\PROTOCOL.md 3.1): the keyboard and the controllers' button
 map from `controls.toml`, the controllers assigned to players by the SDK's DeviceAssignment interface (player 2's by

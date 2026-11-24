@@ -8,7 +8,7 @@ import pytest
 
 from server.client import ServerError
 
-from .conftest import hello_and_accept
+from .conftest import hello_and_accept, run_to_go
 
 
 def create_msg(**kw):
@@ -242,3 +242,82 @@ async def test_online_lists_who_is_searching(server, connect):
     await kitana.request({"type": "queue_leave"})
     pushed = await watcher.expect("online", timeout=5, pred=lambda m: "id" not in m and len(m["searchers"]) == 1)
     assert pushed["searchers"] == [{"name": "Tanya", "game": "sc5", "queue": "sc5/versus/ranked"}]
+
+
+async def test_the_loser_chooses_the_next_lobby_match_at_the_result_screens(server, connect, udp_peers):
+    """A versus lobby's match that went straight between the two: both games stay at their result screens, where the
+    match's loser chooses the next one on the game's own menu, and both launchers ready from there (in_place, with that
+    choice): the next match starts at once on the last match's route. "rematch" plays the fighters both games saw again,
+    "select" picks again; one launcher readying the usual way takes both the usual way (hello, punch)."""
+    server.cfg.lobby_countdown = 0.2
+    host, guest = await connect("Taki"), await connect("Kilik")
+    code = (await host.request(create_msg(character="")))["lobby"]["id"]
+    await guest.request({"type": "lobby_join", "lobby": code, "character": ""})
+    await host.request({"type": "lobby_ready", "ready": True})
+    await guest.request({"type": "lobby_ready", "ready": True})
+    uh, ug = await udp_peers(), await udp_peers()
+    gh, gg = await run_to_go(server, [(host, uh), (guest, ug)])
+    assert (gh["p1"], gh["p2"]) == ("-", "-")
+    for conn in (host, guest):
+        await conn.request({"type": "result", "match": gh["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0,
+                            "p1_char": "3.0", "p2_char": "0.1"})
+    assert (await host.expect("match_result", match=gh["match"]))["status"] == "agreed"
+    await host.expect("lobby", pred=lambda m: m["lobby"]["match"] is None)
+
+    # the loser chose REMATCH in the game: both games report it, both launchers ready in place
+    await host.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "rematch"})
+    assert not host.take_all("match_found")
+    await guest.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "rematch"})
+    for conn, before, side in ((host, gh, 1), (guest, gg, 2)):
+        found = await conn.expect("match_found")
+        assert found["in_place"] is True and found["result_choice"] is True and found["side"] == side
+        go = await conn.expect("match_go", match=found["match"])
+        assert go["match"] != before["match"] and go["seed"] != before["seed"] and go["remote"] == before["remote"]
+        assert (go["p1"], go["p2"]) == ("3.0", "0.1")
+    for conn in (host, guest):
+        await conn.request({"type": "result", "match": go["match"], "winner": 2, "p1_rounds": 0, "p2_rounds": 2,
+                            "p1_char": "3.0", "p2_char": "0.1"})
+    await guest.expect("match_result", match=go["match"])
+
+    # CHARACTER SELECT: both pick again on the select screen, still from the result screens
+    for conn in (host, guest):
+        await conn.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "select"})
+    for conn in (host, guest):
+        found = await conn.expect("match_found")
+        assert found["in_place"] is True
+        go = await conn.expect("match_go", match=found["match"])
+        assert (go["p1"], go["p2"]) == ("-", "-")
+    for conn in (host, guest):
+        await conn.request({"type": "result", "match": go["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0})
+    await host.expect("match_result", match=go["match"])
+
+    # one launcher in place, the other readying in the lobby: the usual way for both (its game parks first)
+    await host.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "rematch"})
+    await guest.request({"type": "lobby_ready", "ready": True})
+    for conn in (host, guest):
+        assert (await conn.expect("match_found"))["in_place"] is False
+
+
+async def test_king_of_the_hill_never_goes_on_from_the_result_screens(server, connect, udp_peers):
+    """King of the Hill keeps its own flow: match_found offers no choice on the result screen, and a ready in place
+    after its match is the usual ready (hello, punch)."""
+    server.cfg.lobby_countdown = 0.2
+    host, guest = await connect("Taki"), await connect("Kilik")
+    code = (await host.request(create_msg(character="", koth=True)))["lobby"]["id"]
+    await guest.request({"type": "lobby_join", "lobby": code, "character": ""})
+    await host.request({"type": "lobby_ready", "ready": True})
+    await guest.request({"type": "lobby_ready", "ready": True})
+    founds = [await c.expect("match_found") for c in (host, guest)]
+    assert all(f["result_choice"] is False and f["in_place"] is False for f in founds)
+    host.inbox.insert(0, founds[0])
+    guest.inbox.insert(0, founds[1])
+    uh, ug = await udp_peers(), await udp_peers()
+    gh, _ = await run_to_go(server, [(host, uh), (guest, ug)])
+    for conn in (host, guest):
+        await conn.request({"type": "result", "match": gh["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0,
+                            "p1_char": "3.0", "p2_char": "0.1"})
+    await host.expect("match_result", match=gh["match"])
+    for conn in (host, guest):
+        await conn.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "rematch"})
+    for conn in (host, guest):
+        assert (await conn.expect("match_found", timeout=3))["in_place"] is False

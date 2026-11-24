@@ -20,12 +20,14 @@
 #include "sc5/controls.h"
 #include "sc5/display.h"
 #include "sc5/dlc.h"
+#include "sc5/framemeter.h"
 #include "sc5/link.h"
 #include "sc5/system_ui.h"
 #include "sc5/net/netplay.h"
 #include "sc5/net/synctest.h"
 #include "sc5/unlocks.h"
 #include "sc5/testinput.h"
+#include "sc5/result_overlay.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -225,9 +227,13 @@ void Sc5App::OnPostSetup() {
   }
 }
 
+// The frame meter's font (sc5/framemeter.h), before the runtime builds its font atlas
+void Sc5App::OnConfigureFonts(ImFontAtlas* atlas) { sc5::framemeter::AddFonts(atlas); }
+
 // The window's title, once the window is there: the name players know, SCV Online (the app's own name, "sc5",
-// stays: its config file and user folder carry it)
+// stays: its config file and user folder carry it); and the frame meter over practice (sc5/framemeter.h)
 void Sc5App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
-  (void)drawer;
   if (rex::ui::Window* w = window()) w->SetTitle(std::string("SCV Online ") + REXGLUE_BUILD_TITLE);
+  sc5::framemeter::CreateOverlay(drawer);
+  sc5::overlay::Install(drawer);  // what the game draws over its picture: a lobby match's loser's choice
 }

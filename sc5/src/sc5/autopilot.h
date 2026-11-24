@@ -23,6 +23,9 @@ struct Plan {
   int wins = 2;                // rounds a player must win
   bool hand_over = false;      // a plain game: the player takes the select screen over (the autopilot stops there)
   bool two_players = false;    // VS Battle's "Player VS Player" (offline versus: the second pad picks player 2)
+  // the match's loser chooses the next one on the result screen's menu (a lobby's match: the start line's choose=1):
+  // REMATCH or CHARACTER SELECT with their own controller, player 1 after a draw; the other game follows
+  bool choose = false;
 };
 
 // launcher: the game is the launcher's (SC5_NET=1); else nothing happens
@@ -55,6 +58,21 @@ std::string LostWhy();
 // The match's result, once the fight is over: the winner (1 or 2), the rounds each won, and each side's character as
 // the game's id with the costume after a dot ("21.1"). True once per match.
 bool MatchOver(int& winner, int& p1_rounds, int& p2_rounds, std::string& p1_char, std::string& p2_char);
+
+// The match's loser's choice on the result screen (Plan::choose): "rematch" or "select" once made (theirs on this PC,
+// or followed from the other game's), true from then until the next match
+bool ResultChosen(std::string& choice);
+// What the overlay over the result screen shows while the match's loser chooses the next match (Plan::choose): the
+// chooser (0 player 1, 1 player 2), whether that is this PC's player, where their cursor is (0 REMATCH, 1 CHARACTER
+// SELECT) and whether they chose. Any thread.
+struct ResultChoiceView {
+  bool shown = false;
+  int chooser = 0;
+  bool mine = false;
+  int cursor = 0;
+  bool chosen = false;
+};
+ResultChoiceView ResultChoiceNow();
 
 // what the select screen made for each side in the present match (slot and costume; -1 before)
 int PickedSlot(int side);

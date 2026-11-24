@@ -119,27 +119,76 @@ QString controlLabel(int control) {
     return control >= 0 && control < Count ? QLatin1String(kControls[control].label) : QString();
 }
 
-// Soulcalibur V's default layout: the face buttons are its four, horizontal and vertical attack, kick and guard; the
-// bumpers and triggers press its button combinations, as the game's own button settings set them
-QString controlText(int control, const QString& gameId) {
+// Soulcalibur V's buttons in a fight: the face buttons are its four by default (horizontal and vertical attack, kick
+// and guard), the bumpers and triggers press them together; [fight] can give any of these any combination
+QString controlText(int control, const QString& gameId, int fight) {
     Q_UNUSED(gameId);
     QString action;
-    switch (control) {
-    case Up: action = QStringLiteral("Jump"); break;
-    case Down: action = QStringLiteral("Crouch"); break;
-    case X: action = QStringLiteral("Horizontal attack"); break;
-    case Y: action = QStringLiteral("Vertical attack"); break;
-    case B: action = QStringLiteral("Kick"); break;
-    case A: action = QStringLiteral("Guard"); break;
-    case LB: return QStringLiteral("LB shortcut (left bumper)");
-    case RB: return QStringLiteral("RB shortcut (right bumper)");
-    case LT: return QStringLiteral("LT shortcut (left trigger)");
-    case RT: return QStringLiteral("RT shortcut (right trigger)");
-    case Start: action = QStringLiteral("Pause"); break;
-    default: break;
+    if (isFightButton(control)) {
+        const int mask = fight >= 0 ? fight : fightDefault(control);
+        switch (mask) {
+        case kGameA: action = QStringLiteral("Horizontal attack"); break;
+        case kGameB: action = QStringLiteral("Vertical attack"); break;
+        case kGameK: action = QStringLiteral("Kick"); break;
+        case kGameG: action = QStringLiteral("Guard"); break;
+        case 0: if (control != LS && control != RS) action = QStringLiteral("Nothing in a fight"); break;
+        default: action = comboText(mask); break;
+        }
+    } else {
+        switch (control) {
+        case Up: action = QStringLiteral("Jump"); break;
+        case Down: action = QStringLiteral("Crouch"); break;
+        case Start: action = QStringLiteral("Pause"); break;
+        default: break;
+        }
     }
     const QString button = controlLabel(control);
     return action.isEmpty() ? button : QStringLiteral("%1 (%2)").arg(action, button);
+}
+
+bool isFightButton(int control) {
+    switch (control) {
+    case A: case B: case X: case Y: case LB: case RB: case LT: case RT: case LS: case RS: return true;
+    default: return false;
+    }
+}
+
+// the console's Type A, which a fresh save has (an online game's): read from the game's own settings in memory
+int fightDefault(int control) {
+    switch (control) {
+    case A: return kGameG;
+    case B: return kGameK;
+    case X: return kGameA;
+    case Y: return kGameB;
+    case LB: return kGameA | kGameG;
+    case LT: return kGameB | kGameG;
+    case RB: return kGameA | kGameB;
+    case RT: return kGameA | kGameB | kGameK;
+    default: return 0;
+    }
+}
+
+QString comboText(int mask) {
+    QStringList parts;
+    const char* names[4] = {"A", "B", "K", "G"};
+    for (int i = 0; i < 4; ++i)
+        if (mask >> i & 1) parts << QLatin1String(names[i]);
+    return parts.isEmpty() ? QStringLiteral("Nothing") : parts.join(QLatin1Char('+'));
+}
+
+int comboFromText(const QString& text) {
+    int mask = 0;
+    for (const QChar ch : text) {
+        switch (ch.toUpper().unicode()) {
+        case 'A': mask |= kGameA; break;
+        case 'B': mask |= kGameB; break;
+        case 'K': mask |= kGameK; break;
+        case 'G': mask |= kGameG; break;
+        case '+': case ' ': break;
+        default: return -1;
+        }
+    }
+    return mask;
 }
 
 int controlFromId(const QString& id) {
@@ -267,6 +316,10 @@ Map load() {
             if (i < 0) continue;
             const QStringList target = strings(value);
             m.presses[i] = target.isEmpty() || target.first().isEmpty() ? -1 : controlFromId(target.first());
+        } else if (section == QLatin1String("fight")) {
+            const int c = controlFromId(key);
+            const QStringList v = strings(value);
+            if (c >= 0 && isFightButton(c) && !v.isEmpty()) m.fight[c] = comboFromText(v.first());
         }
     }
     return m;
@@ -296,6 +349,13 @@ bool save(const Map& m, QString* error) {
     QString name = m.player2;
     name.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('"'), QStringLiteral("\\\""));
     text += QStringLiteral("player2 = \"%1\"\n").arg(name);
+    text += QStringLiteral(
+        "\n# What a button presses in a fight, in every mode, online and offline: any of the game's own four buttons\n"
+        "# together, A horizontal attack, B vertical attack, K kick, G guard (\"\" nothing). A button not listed keeps\n"
+        "# the game's own Control Settings (online the console's Type A).\n[fight]\n");
+    for (int c = 0; c < Count; ++c)
+        if (isFightButton(c) && m.fight[c] >= 0)
+            text += QStringLiteral("%1 = \"%2\"\n").arg(controlId(c), m.fight[c] ? comboText(m.fight[c]) : QString());
 
     // whole or not at all: a game reading it at that moment holds up the swap for an instant
     QString why;

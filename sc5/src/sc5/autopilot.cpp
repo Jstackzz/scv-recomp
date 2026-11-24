@@ -28,7 +28,9 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <mutex>
 #include <system_error>
+#include <vector>
 
 #include <fmt/format.h>
 #include <rex/logging.h>
@@ -121,6 +123,21 @@ int g_stage_taken = -1;       // the place the stage select's pick took (the VS 
 uint64_t g_stage_a_at = 0;    // the frame the chooser's own A went through on a stage (their moves wait 3 s after)
 bool g_fresh_save = true;     // the save has never seen the main menu (its first-visit window comes)
 bool g_practice_script = false;  // tests: SC5_TEST_PRACTICE_SCRIPT plays
+// The result screen's menu (Rematch, Character Select, Return to Astral Home) as the autopilot has pressed it: Next
+// taken on the Results screen and where its cursor is (0 Rematch); and, when the match's loser chooses the next match
+// there (Plan::choose), what they chose (0 Rematch, 1 Character Select; -1 not yet)
+bool g_menu_next = false;
+int g_menu_cursor = 0;
+int g_choice = -1;
+int g_choice_cursor = 0;  // where the chooser's cursor is (the overlay's), 0 REMATCH, 1 CHARACTER SELECT
+uint64_t g_menu_at = 0;   // the frame the loser's choice started (0: not yet)
+// the overlay's view of the loser's choice (result_overlay.cpp; any thread: a copy the main thread keeps)
+std::mutex g_view_lock;
+ResultChoiceView g_view;
+size_t g_results = 0;  // the matches this game saw end (tests: which of SC5_TEST_RESULT_CHOICE's choices)
+int64_t g_rematch_mine = -1;  // the launcher's rematch came this many frames after the match's end (-1 not yet)
+uint64_t g_rematch_since = 0;
+bool g_choice_was[3] = {true, true, true};  // the chooser's UP, DOWN and A the frame before (held at first: no press)
 
 uint64_t Now() { return frame::Count(); }
 uint64_t In() { return Now() - g_since; }
@@ -137,6 +154,10 @@ void Enter(Phase p) {
                 game::SequenceName(game::SequenceId()), game::BattleState());
   g_phase = p;
   g_since = Now();
+  if (p != Phase::Result) {
+    std::lock_guard<std::mutex> lock(g_view_lock);
+    g_view = ResultChoiceView{};
+  }
   g_steps.clear();
   g_step_t = 0;
   g_menu_pressed = false;
@@ -400,7 +421,13 @@ void OnSelect() {
       const int type = creation::TypeOf(rec.data());
       auto_slot = type == creation::kOriginal ? select::kCreationSlot : select::SlotOfCharacter(type);
       if (step[side] == 1) {
-        if (select::Costume(side) < 0 || select::Costumes(side) <= 0) return;  // the costume panel comes in
+        // the costume panel comes in: the press that picked the fighter goes on meanwhile (cut off, its rest came as
+        // a new A on the panel, which took the first costume: a created character picked by its checksum came as the
+        // fighter's standard costume, 2026-11-20)
+        if (select::Costume(side) < 0 || select::Costumes(side) <= 0) {
+          RunSteps();
+          return;
+        }
         auto_costume = creation::CostumeOfSlot(type, uint32_t(n), select::Costumes(side));
       }
     }
@@ -640,6 +667,79 @@ void OnStageOnline() {
   if (cursor != 0) g_allow |= input::kA;
 }
 
+// --- the result screen: the loser chooses the next match ---
+
+// The result screen of a match whose loser chooses the next one (Plan::choose, a lobby's). Once the Results screen is
+// up (12 s after the match's end, as Leave and Again press its Next), the match's loser (player 1 after a draw)
+// chooses REMATCH or CHARACTER SELECT with their own controller: UP and DOWN (the stick too) move the choice, A takes
+// it; the overlay over the game shows both options and the cursor on both PCs (result_overlay.cpp). The game's own
+// menu is not opened for it: the two games must press its Next and their choice on the same frames of it, as the
+// launchers' `rematch` makes them (Again: Next, the menu 150 frames later, DOWN for Character Select, A); with the menu
+// open for as long as the choice took, which the two games count a frame or two apart, a player's animation went on
+// in one game and not the other and the rematch parted at its first check (2026-11-20). The game says the choice to
+// its launcher (link.cpp: `chose`) and the other game follows the cursor and the choice (CHOICE packets,
+// net::ResultChoice). Both launchers then ready the lobby's next match from here; no choice in a minute and they park
+// (Leave). Tests: SC5_TEST_RESULT_CHOICE=rematch|select,... stands in for the chooser, one choice per match in turn.
+void OnResultChoice() {
+  if (Now() < g_over_at + 720) {  // the winner's pose, then the Results screen
+    g_choice_was[0] = g_choice_was[1] = g_choice_was[2] = true;
+    return;
+  }
+  if (!g_menu_at) g_menu_at = Now();  // the choice starts
+  const int chooser = g_won[1] > g_won[0] ? 0 : g_won[0] > g_won[1] ? 1 : 0;
+  static uint64_t told = 0;
+  if (told != g_menu_at) {
+    told = g_menu_at;
+    REXLOG_INFO("sc5 autopilot: the result screen: player {} chooses the next match ({})", chooser + 1,
+                chooser == g_plan.side ? "this PC's player" : "the other game follows");
+  }
+  if (g_choice >= 0) {  // chosen: said until the next match (the launchers' rematch, or park)
+    if (chooser == g_plan.side) net::SetLocalChoice({chooser, 1, g_choice});
+    return;
+  }
+  const auto choose = [](int item, const char* who) {
+    g_choice = item;
+    g_choice_cursor = item;
+    REXLOG_INFO("sc5 autopilot: {} chose {} on the result screen at frame {}", who,
+                item ? "CHARACTER SELECT" : "REMATCH", Now());
+  };
+  if (chooser == g_plan.side) {
+    static const std::vector<int> tests = [] {
+      std::vector<int> out;
+      const char* v = std::getenv("SC5_TEST_RESULT_CHOICE");
+      for (const char* p = v ? v : ""; *p;) {
+        const char* end = std::strchr(p, ',');
+        const std::string tok(p, end ? size_t(end - p) : std::strlen(p));
+        out.push_back(tok == "select" ? 1 : 0);
+        p = end ? end + 1 : p + tok.size();
+      }
+      return out;
+    }();
+    const int test = g_results >= 1 && g_results <= tests.size() ? tests[g_results - 1] : -1;
+    if (test >= 0) {
+      if (test == 1 && g_choice_cursor == 0 && Now() >= g_menu_at + 120) g_choice_cursor = 1;
+      else if (Now() >= g_menu_at + 240 && g_choice_cursor == test) choose(test, "the test's chooser");
+    } else {
+      // this PC's player's own controller: a press is a button going down
+      const input::Pad own = OwnPad();
+      const bool now[3] = {(own.buttons & input::kDpadUp) || own.ly > 16000,
+                           (own.buttons & input::kDpadDown) || own.ly < -16000, (own.buttons & input::kA) != 0};
+      if (now[2] && !g_choice_was[2]) choose(g_choice_cursor, "this PC's player");
+      else if (now[1] && !g_choice_was[1]) g_choice_cursor = 1;
+      else if (now[0] && !g_choice_was[0]) g_choice_cursor = 0;
+      for (int i = 0; i < 3; i++) g_choice_was[i] = now[i];
+    }
+    net::SetLocalChoice({chooser, g_choice >= 0 ? 1 : 0, g_choice >= 0 ? g_choice : g_choice_cursor});
+  } else {
+    // the other PC's player chooses: their cursor, then their choice
+    const net::ResultChoice theirs = net::RemoteChoice();
+    if (theirs.chooser == chooser && theirs.cursor >= 0 && theirs.cursor <= 1) {
+      g_choice_cursor = theirs.cursor;
+      if (theirs.phase == 1) choose(theirs.cursor, "the other PC's player");
+    }
+  }
+}
+
 }  // namespace
 
 // The stage select's pick taken (versus.cpp: the VS settings go into the battle setup). The chooser's game says which
@@ -670,6 +770,7 @@ void NewMatch() {
   g_last_step[0] = g_last_step[1] = 0;
   g_fought = g_over = g_over_reported = false;
   g_won[0] = g_won[1] = 0;
+  g_skip_logged = 0;
 }
 
 // the first pad while the autopilot holds the menus; the netplay's inputs once a match's frames run in sync
@@ -728,6 +829,32 @@ void InitPlain(const Plan& plan) {
 bool Practicing() { return g_plan.mode == Mode::Practice && g_phase == Phase::Fight && g_fought; }
 
 bool AtHoldPoint() { return g_phase == Phase::Hold; }
+
+namespace {
+void PublishChoiceView() {
+  ResultChoiceView v;
+  if (g_phase == Phase::Result && g_plan.choose && g_plan.online && g_plan.side <= 1 && g_menu_at) {
+    v.shown = true;
+    v.chooser = g_won[1] > g_won[0] ? 0 : g_won[0] > g_won[1] ? 1 : 0;
+    v.mine = v.chooser == g_plan.side;
+    v.cursor = g_choice >= 0 ? g_choice : g_choice_cursor;
+    v.chosen = g_choice >= 0;
+  }
+  std::lock_guard<std::mutex> lock(g_view_lock);
+  g_view = v;
+}
+}  // namespace
+
+ResultChoiceView ResultChoiceNow() {
+  std::lock_guard<std::mutex> lock(g_view_lock);
+  return g_view;
+}
+
+bool ResultChosen(std::string& choice) {
+  if (g_choice < 0 || !g_over) return false;
+  choice = g_choice ? "select" : "rematch";
+  return true;
+}
 std::string LostWhy() { return g_phase == Phase::Lost ? g_lost_why : std::string(); }
 bool Busy() { return g_phase != Phase::Off && g_phase != Phase::Hold && g_phase != Phase::Lost; }
 bool Lost() { return g_phase == Phase::Lost; }
@@ -809,6 +936,24 @@ void Rematch(const Plan& plan, const bool named[2], bool same_stage) {
   g_plan = next;
   g_same_stage = same_stage && g_last_rights > 0;
   NewMatch();
+  // VS Battle's own Rematch has no select screen and no stage select, which a spectator's game goes through all the
+  // same (a lobby's rematch: its launcher starts it for the next match): the fighters come in its start line, the
+  // rest from the feed as for any match. The stage (player 1's game says it, as a chooser's game would) and this
+  // game's player's created character (the pick and the record again)
+  if (!g_reselect && g_plan.online && g_plan.side <= 1) {
+    if (g_plan.side == 0 && g_last_rights > 0) net::SetLocalStage({0, 1, g_last_rights, g_last_rights});
+    const int me = g_plan.side;
+    const int n = created[me] ? creation::SlotOfChecksum(created[me]) : -1;
+    creation::Record rec;
+    if (n >= 0 && slots[me] >= 0 && creation::ReadRecord(uint32_t(n), rec)) {
+      net::Pick p;
+      p.phase = 2;
+      p.slot = slots[me];
+      p.costume = -2;
+      net::SetLocalCreated(me, rec);
+      net::SetLocalPick(me, p, select::PickableMask());
+    }
+  }
   if (!g_reselect) {  // no select screen on the way: the fighters are the last match's (the result line's)
     for (int s = 0; s < 2; s++) {
       g_picked_slot[s] = slots[s];
@@ -819,6 +964,7 @@ void Rematch(const Plan& plan, const bool named[2], bool same_stage) {
   g_over = true;  // still at the result
   g_over_reported = true;
   g_over_at = over_at;
+  g_rematch_mine = -1;  // the menu's frame to be agreed with the other game (Again)
   Enter(Phase::Again);
 }
 
@@ -856,6 +1002,12 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       RoundsWon(g_won);
       g_over = true;
       g_over_at = Now();
+      g_results++;
+      g_menu_next = false;  // the result screen's menu to come, on Rematch
+      g_menu_cursor = 0;
+      g_choice = -1;
+      g_choice_cursor = 0;
+      g_menu_at = 0;
       REXLOG_INFO("sc5 autopilot: the match is over at frame {}: {} - {} (won {} - {}, drawn {}; battle state {:X})", Now(),
                   g_won[0], g_won[1], game::ReadU32(kPlayer[0] + kRoundsWon), game::ReadU32(kPlayer[1] + kRoundsWon),
                   game::ReadU32(kPlayer[0] + kRoundsDrawn), battle);
@@ -1079,22 +1231,36 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
         }
         return;
       }
-      // the way into an online fight: the VS screen (both fighters on their cards) while the fight loads, which START
-      // ends as on the console once the fight has loaded (A, B, X, Y do nothing there), then the stage's fly-over and
-      // the fighters' intros, which START skips too: START on both pads every third of a second while they are up
-      // (2026-11-17: the VS screen 359 frames to 101, the intros 484 to 201, about 9 s less). The games meet at round
-      // 1's call whatever time their way there took (the netplay's barrier). (In the one launcher test with the intros
-      // skipped the two games took a KO's replay differently: the replay's own frame counter, which rollback did not
-      // put back, battle.cpp; it parted the games with the intros played as well.)
+      // The way into an online fight: the VS screen (both fighters on their cards) while the fight loads, the stage's
+      // fly-over and the fighters' intros play as on the console, unless a player skips them with START on their own
+      // controller (the game never sees that START: the autopilot holds the pads until the match runs in sync). Then
+      // both games skip them (net::SkipWanted: this player's or the other's SKIP; a spectator's game follows the
+      // feed's): START on both pads every third of a second while they are up. The VS screen takes it once the fight
+      // has loaded (A, B, X, Y do nothing there), the fly-over and the intros at once (2026-11-17: the VS screen 359
+      // frames to 101, the intros 484 to 201, about 9 s less). The games meet at round 1's call whatever time their way
+      // there took (the netplay's barrier makes what the intro left alike). Tests: SC5_TEST_SKIP_INTRO=1, this game's
+      // player skips.
       if (g_plan.online && !g_fought && (battle == game::kBattleLoading || battle == game::kBattleIntro)) {
-        if (g_skip_logged != battle) {
-          g_skip_logged = battle;
-          REXLOG_INFO("sc5 autopilot: skipping the {} with START from frame {}",
-                      battle == game::kBattleLoading ? "VS screen" : "fly-over and intros", Now());
+        if (g_plan.side <= 1) {
+          static bool start_was = true;  // held into the VS screen: no press
+          const bool start = (OwnPad().buttons & input::kStart) != 0;
+          static const bool test_skip = [] {
+            const char* v = std::getenv("SC5_TEST_SKIP_INTRO");
+            return v && v[0] == '1';
+          }();
+          if ((start && !start_was) || test_skip) net::SetLocalSkip();
+          start_was = start;
         }
-        if (In() % 20 == 0) Tap(input::kStart);
-        RunSteps();
-        g_both = true;
+        if (net::SkipWanted()) {
+          if (g_skip_logged != battle) {
+            g_skip_logged = battle;
+            REXLOG_INFO("sc5 autopilot: skipping the {} with START from frame {}",
+                        battle == game::kBattleLoading ? "VS screen" : "fly-over and intros", Now());
+          }
+          if (In() % 20 == 0) Tap(input::kStart);
+          RunSteps();
+          g_both = true;
+        }
       } else if (g_plan.online && !g_fought && !g_steps.empty()) {
         g_steps.clear();  // a press still queued when round 1's call came: none for the result screen's menus
         g_step_t = 0;
@@ -1102,6 +1268,8 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       if (g_over) Enter(Phase::Result);
       return;
     case Phase::Result:
+      if (g_plan.choose && g_plan.online && g_plan.side <= 1) OnResultChoice();
+      PublishChoiceView();
       return;
     case Phase::Back:
       // B, a press a second, until the main menu
@@ -1145,13 +1313,33 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       }
       if (!g_menu_pressed) {
         if (!g_over || Now() < g_over_at + 720) return;  // the result screen first (or a fight's KO, intro)
-        Push(input::kA, 10, 150);
-        if (leave) {
-          Push(input::kDpadDown, 8, 40);
-          Push(input::kDpadDown, 8, 40);
-        } else if (g_reselect) {
-          Push(input::kDpadDown, 8, 40);
+        // A match's next one from the result screen: both games take the menu from the same frame after the match's
+        // end (net::SetRematchAt), past both games' `rematch` (2 s after the later one) and the Results screen's 12 s.
+        // Pressed as the command came, the two games pressed a frame or two apart, and the game's own Rematch parted
+        // at its first check (a player's animation a frame on in one game, 2026-11-20).
+        if (!leave && g_plan.online && g_plan.side <= 1) {
+          if (g_rematch_mine < 0) {
+            g_rematch_mine = int64_t(Now() - g_over_at);
+            g_rematch_since = Now();
+            net::SetRematchAt(uint32_t(g_rematch_mine));
+          }
+          const int64_t theirs = net::RemoteRematchAt();
+          if (theirs < 0 && Now() < g_rematch_since + 600) return;  // the other game's word (10 s at most)
+          const int64_t at = theirs < 0 ? int64_t(Now() - g_over_at)
+                                        : std::max<int64_t>(720, std::max(g_rematch_mine, theirs) + 120);
+          if (int64_t(Now() - g_over_at) < at) return;
+          REXLOG_INFO("sc5 autopilot: the result screen's menu {} frames after the match's end (the rematch came {} "
+                      "here, {} there){}", int64_t(Now() - g_over_at), g_rematch_mine, theirs,
+                      theirs < 0 ? ": no word from the other game" : int64_t(Now() - g_over_at) > at ? ": late" : "");
         }
+        // Next, the menu's cursor from Rematch to Rematch, Character Select or Return to Astral Home, A: on the same
+        // frames of the menu in both games (the loser's choice never opens it before, OnResultChoice)
+        if (!g_menu_next) Push(input::kA, 10, 150);
+        g_menu_next = true;
+        const int target = leave ? 2 : g_reselect ? 1 : 0;
+        for (int c = g_menu_cursor; c < target; c++) Push(input::kDpadDown, 8, 40);
+        for (int c = g_menu_cursor; c > target; c--) Push(input::kDpadUp, 8, 40);
+        g_menu_cursor = target;
         Push(input::kA, 10, 90);
         // Return to Astral Home asks again, the cursor on No: UP (Yes), A
         if (leave) {

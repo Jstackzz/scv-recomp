@@ -53,7 +53,9 @@ set(SC5_SOURCES
     src/sc5/sparring.cpp
     src/sc5/controls.cpp
     src/sc5/display.cpp
+    src/sc5/framemeter.cpp
     src/sc5/rerun_profile.cpp
+    src/sc5/result_overlay.cpp
 )
 
 # The player package's ready-made sc5.exe: everything but the game's code, which each player's PC compiles from their

@@ -187,7 +187,11 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
 3. **Lobby**: create (name, mode, password, 1, 2 or 3 rounds to win, 3 as on the console, *King of the Hill*),
    join from the list or by its 5-letter code, pick a character (or *Pick in the game*), chat, *Ready*: both players
    ready start the match after
-   the server's 3-2-1 countdown. *Watch* makes you a spectator: each lobby match plays in your game from both
+   the server's 3-2-1 countdown. After a match played straight between the two (no relay), both games stay at their
+   result screens and the match's loser (player 1 after a draw) chooses REMATCH or CHARACTER SELECT in the game with
+   their own controller, on a panel over the Results screen that both players see; the next match then starts from
+   there by itself (PROTOCOL.md 1.10, `in_place`). Nobody choosing in a minute takes both back to the lobby, to ready
+   again. *Watch* makes you a spectator: each lobby match plays in your game from both
    players' feeds (`FeedLink`, PROTOCOL.md 1.10.1 and 3.6). **King of the Hill**: the winner stays on, the next in
    line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
    on the leaderboard. **Online Practice** (`sparring`): two friends by the code, no timer, health refills, nobody is
@@ -216,12 +220,15 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    the game folder's `build-game.cmd` (a player package's, sc5/player/README.md: codegen and clang from the package,
    nothing installed) and shows what it prints; without that script (a source build's `game\`) it says the step is
    not ready.
-7. **Controls**: which keys press each button of the Xbox 360 controller (two at most; click one and press the new
-   key, Esc cancels, *No key* clears it) and what each button of a PC controller presses, named by where it sits
-   (the bottom face button is Xbox A, PlayStation cross, Switch B). The buttons are named by what they do in the
-   game's default layout: X horizontal attack, Y vertical attack, B kick, A guard, the bumpers and triggers its
-   shortcuts. Saved at each change to `controls.toml` (`SC5_CONTROLS`, PROTOCOL.md 3.1); a running game reads it
-   again within a second.
+7. **Controls**: **In a fight**: what each of the Xbox 360 controller's A, B, X, Y, bumpers, triggers and stick clicks
+   presses in a fight, in every mode, online and offline: any combination of the game's own A (horizontal attack), B
+   (vertical attack), K (kick) and G (guard), all 16, where the game's own Control Settings offer 13 and none on the
+   stick clicks; *Default fight buttons* puts the console's Type A back. Online the other player's game sees the
+   presses as set here (PROTOCOL.md 3.1, `[fight]`). Then which keys press each button of the Xbox 360 controller (two
+   at most; click one and press the new key, Esc cancels, *No key* clears it) and what each button of a PC controller
+   presses, named by where it sits (the bottom face button is Xbox A, PlayStation cross, Switch B). Every button is
+   named by what it does in a fight: "Horizontal attack (X)", "A+G (LB)". Saved at each change to `controls.toml`
+   (`SC5_CONTROLS`, PROTOCOL.md 3.1); a running game reads it again within a second.
 8. **Settings**: **Server** (address `host:port` and the fingerprint the server's host gives out, *Connect*; with an
    empty fingerprint the launcher shows the presented one and asks whether to trust it), **Online** (region, max
    ping, input delay 0-4 and *More delay when the ping is high*, the game UDP port (7001), strict ranked, the match
@@ -229,7 +236,8 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    **Display**: the window (windowed, borderless, fullscreen), its resolution, the internal resolution (1280x720 as
    on the console, 2x, 3x or 4x), anti-aliasing (off, FXAA, stronger FXAA), texture filtering (the game's own or 2x
    to 16x anisotropic), v-sync (on; on with a G-SYNC or FreeSync monitor; off), brightness and frame data in
-   practice. Each changes only how a frame looks, never what the game computes, so two players may set them
+   practice (a frame meter as Street Fighter 6's over Training and Online Practice, F7 in the game hides it;
+   GAME.md). Each changes only how a frame looks, never what the game computes, so two players may set them
    differently in one match; they reach the game as `SC5_*` variables and `display.txt`, which a running game follows
    (PROTOCOL.md 3.1). **Sound**: master, music, effects and voices, percent of the game's own. **Game folder**:
    folder, executable and build script. **Tools and development** (a source build): Python, the repository, the local

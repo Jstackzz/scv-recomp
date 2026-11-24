@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include "sc5/display.h"
+#include "sc5/framemeter.h"
 #include "sc5/sound.h"
 
 #include <algorithm>
@@ -55,7 +56,7 @@ struct Settings {
   int anisotropic = 0;                // 0 the game's own, 2 4 8 16
   bool vsync = true, adaptive_sync = true;
   int brightness = 100;  // percent
-  bool frame_data = false;
+  bool frame_data = true;  // the frame meter in practice (framemeter.h): the launcher's default
   int volume_master = 100, volume_music = 100, volume_effects = 100, volume_voices = 100;
 };
 
@@ -181,14 +182,6 @@ rex::graphics::CommandProcessor::SwapPostEffect EffectOf(const std::string& aa) 
   return aa == "fxaa" ? E::kFxaa : aa == "fxaa_extreme" ? E::kFxaaExtreme : E::kNone;
 }
 
-void LogUnsupported(const Settings& s) {
-  static bool told_frames = false;
-  if (!told_frames && s.frame_data) {
-    told_frames = true;
-    REXLOG_INFO("sc5 display: SC5's practice has no frame data display (SC5_FRAMEDATA)");
-  }
-}
-
 // --- brightness: a curve over the game's own gamma ramp (the GPU's display LUT), blacks and whites kept ---
 
 struct Gamma {
@@ -284,7 +277,7 @@ void Apply(const Settings& s, bool at_start) {
   sc5::sound::SetLevels(float(s.volume_music) / 100.0f, float(s.volume_effects) / 100.0f,
                         float(s.volume_voices) / 100.0f);
   g_brightness = s.brightness;
-  LogUnsupported(s);
+  sc5::framemeter::SetEnabled(s.frame_data);
   if (at_start) return;
   rex::cvar::SetFlagByName("vsync", s.vsync ? "true" : "false");
   rex::cvar::SetFlagByName("anisotropic_override", std::to_string(AnisotropicCvar(s.anisotropic)));

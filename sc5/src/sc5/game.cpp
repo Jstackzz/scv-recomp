@@ -175,7 +175,9 @@ void OnFrameEnd(uint64_t frame) {
     if (battle == kBattleLoading || (battle == kBattleBetweenRounds && g_last_battle != kBattleKO)) {
       g_fight_armed = true;
       g_fight_start = -1;
-    } else if (battle == kBattleRoundCall && g_fight_armed) {
+    } else if (battle == kBattleRoundCall &&
+               (g_fight_armed || (g_last_battle == kBattleIdle && SequenceId() == kSeqTraining))) {
+      // (Training goes from its stage select straight to the round's call, with no loading between)
       g_fight_armed = false;
       g_fight_start = int64_t(frame);
       REXLOG_INFO("sc5: fight clock started at frame {}", frame);

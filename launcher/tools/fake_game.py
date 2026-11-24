@@ -17,6 +17,9 @@ It reads SC5_STATUS and SC5_CMD from the environment, like the real game.
     start mode=practice   in_match match=practice until park
     park                  back to ready
     rematch [seed=N]      another match with the same peer
+    choose=1 (start or rematch line): after its result the game writes `chose choice=rematch match=<id>` (the loser's
+                          choice on the result screen, SC5_FAKE_CHOICE=select for the other) after
+                          SC5_FAKE_CHOOSE_SECONDS (default 2), as both of a lobby match's games do
     quit                  exit
 
 A result names the fighters as the real game does, by the game's own character ids with the costume after a dot
@@ -199,6 +202,7 @@ class FakeGame:
         self.frame = 0
         self.seen_ready: set[int] = set()
         self.seen_left: set[int] = set()
+        self.choose_at = 0.0  # choose=1: when the loser's choice on the result screen is said
 
     def status(self, line: str) -> None:
         log(f"status: {line}")
@@ -223,6 +227,7 @@ class FakeGame:
 
     def begin(self, keys: dict[str, str]) -> None:
         self.close_socket()
+        self.choose_at = 0.0
         self.start = keys
         self.match = keys.get("match", "match")
         self.started_at = time.monotonic()
@@ -320,6 +325,8 @@ class FakeGame:
             self.status(f"desync frame=600 match={self.match}")
         else:
             self.status(self.result_line())
+            if self.start.get("choose") == "1":
+                self.choose_at = time.monotonic() + float(os.environ.get("SC5_FAKE_CHOOSE_SECONDS", "2"))
 
     def result_line(self) -> str:
         seed = int(self.start.get("seed", "0"))
@@ -377,6 +384,9 @@ class FakeGame:
                 self.finish()
         elif self.state == "over":
             self.pump_network(now)  # keep answering the peer until park
+            if self.choose_at and now >= self.choose_at:
+                self.choose_at = 0.0
+                self.status(f"chose choice={os.environ.get('SC5_FAKE_CHOICE', 'rematch')} match={self.match}")
 
     def run(self) -> int:
         env = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items()) if k.startswith("SC5_"))

@@ -826,8 +826,9 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     df->addRow(tr("Brightness"), brightness);
     auto* frameData = new QCheckBox(tr("Frame data in practice"));
     frameData->setChecked(cfg::frameData());
-    frameData->setToolTip(tr("In practice, shows how many frames player 1's last attack takes to hit, and how far ahead "
-                             "or behind player 1 is after it hits or is blocked."));
+    frameData->setToolTip(tr("In Training and Online Practice, a frame meter as Street Fighter 6's: both players' "
+                             "frames (startup, impact, recovery, stun), each one's startup, impact, recovery, total "
+                             "and advantage, and the last hit's damage. F7 in the game hides or shows it."));
     df->addRow(QString(), frameData);
     auto* displayNote = ui::label(tr("These change only how the game looks, never what it computes: you and your "
                                      "opponent may set them differently. A game that is running takes them too, its "

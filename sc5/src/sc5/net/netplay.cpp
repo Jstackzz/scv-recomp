@@ -30,6 +30,17 @@
 //            the sender's player's created character for the coming match (a PICK's costume -2): its record in 12
 //            chunks (net/created_transfer.h), each sent every 100 ms until CREATED_ACK says the other game has it
 //  13 CREATED_ACK u8 side, u16 mask   the chunks of that side's record this game has
+//  14 CHOICE u8 chooser, i8 phase, i8 cursor
+//            the result screen's menu after a match whose loser chooses the next one (ResultChoice): from the chooser's
+//            game, where its cursor is (0 Rematch, 1 Character Select) and, phase 1, what they chose; repeated
+//  15 SKIP   -   the sender's player skips the way into the coming fight (the VS screen, the stage's fly-over and the
+//            fighters' intros: START on their own controller); repeated while connecting
+//  16 RSKIP  u32 frame, u8 kind   a KO's replay cut short at that match frame (START or A on a player's own
+//            controller): 0 asked (the frame some 30 ahead), 1 agreed (the frame is still to come here: both games
+//            press A on both pads there), 2 refused; repeated until answered
+//  17 GOAT   u32 frames   the next match from the result screen: this game had the launcher's `rematch` that many frames
+//            after the match's end; both games take the result screen's menu from the same frame counted from there
+//            (RematchAt); repeated while connecting
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -66,6 +77,7 @@
 #include <rex/system/xmemory.h>
 
 #include "sc5/battle.h"
+#include "sc5/controls.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/input.h"
@@ -83,7 +95,8 @@ using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
-                 kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13 };
+                 kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13, kChoice = 14, kSkip = 15,
+                 kReplaySkip = 16, kRematchAt = 17 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -205,6 +218,9 @@ struct Peer {
   bool has_setup = false;
   Setup setup;
   StagePick stage;            // their stage select (player 1's game's: who picks the stage)
+  ResultChoice choice;        // their result screen's menu (the chooser's game's)
+  bool skip_in = false;       // their player skips the way into the coming fight
+  int64_t rematch_at = -1;    // their game had the launcher's rematch that many frames after the match's end
   bool heard_coming = false;  // heard since the coming match was set up
 };
 
@@ -258,10 +274,13 @@ bool KeepAll() {
 //   8 CHECK  u32 frame, u32 hash low, u32 hash high
 //   9 END    u32 frame   the frame the game left the match at
 //  10 STAGE  u8 chooser, i8 phase, i8 cursor, i8 stage   the stage select (StagePick), from the game whose player picks
+//  11 CREATED u8 side, u8 chunk, u8 chunks, u16 len, len bytes   the player's created character (as netplay's 12)
+//  12 SKIP   u8 kind, then kind 0: -   the player skips the way into the coming fight (the barrier's number: that
+//            match's); kind 1: u32 frame   a KO's replay cut short at that frame of the match (agreed: RSKIP)
 // A player's game writes its own; a spectator's (watch) reads both players' and plays every frame from them.
 constexpr uint32_t kFeedMagic = 0x52354353;  // "SC5R"
 enum : uint8_t { kFeedPick = 5, kFeedMeet = 6, kFeedInputs = 7, kFeedCheck = 8, kFeedEnd = 9, kFeedStage = 10,
-                 kFeedCreated = 11 };
+                 kFeedCreated = 11, kFeedSkip = 12 };
 
 // A created character's record on its way (CREATED chunks, the feed's type 11): 12 chunks of 1,200 bytes, the last 140.
 // Exactly those: a chunk count, number or length otherwise, or a chunk again with other bytes, refuses it.
@@ -293,6 +312,8 @@ struct Watched {
   Pick picks[2];
   StagePick stage;  // the stage select, from the game whose player picks the stage
   Incoming created[2];  // each player's created character, from that player's game
+  bool skip_in = false;               // a player skipped the way into this fight
+  std::set<uint32_t> replay_skips;    // the frames a KO's replay was cut short at (agreed by the players' games)
 };
 std::map<uint16_t, Watched> g_watched;
 uint32_t g_watch_stream = 0;
@@ -316,6 +337,20 @@ uint32_t g_local_pickable = 0;
 uint32_t g_local_dlc = 0;
 bool g_picks_changed = false;
 StagePick g_local_stage, g_fed_stage;  // this game's stage select for the coming match, and as last fed
+ResultChoice g_local_choice;             // this game's result screen's menu, when its player chooses the next match
+bool g_local_skip_in = false, g_fed_skip_in = false;  // this game's player skips the way into the coming fight
+int64_t g_local_rematch_at = -1;  // this game had the launcher's rematch that many frames after the match's end
+// A KO's replay cut short (RSKIP): the frame both games agreed on (0 none), the one this game asked for and has no
+// answer to yet (0 none), whether that frame found the replay going (both games press A there), and when the ask went
+struct ReplaySkip {
+  uint32_t at = 0, asked = 0;
+  uint32_t press_at = 0;  // the replay was going at the top of `at`: A on both pads from there for kReplaySkipPress
+  Clock::time_point sent{};
+  uint32_t replay_frames = 0;  // this game's frames of the present replay (tests: SC5_TEST_SKIP_REPLAY)
+};
+constexpr uint32_t kReplaySkipAhead = 30, kReplaySkipPress = 4;
+ReplaySkip g_rskip;
+bool g_rskip_held = true;  // the player's START or A down the frame before (held into the replay: no press)
 // created characters for the coming match: this game's player's record (sent until acknowledged, fed once) and the
 // other player's as it comes
 std::vector<uint8_t> g_local_created[2];
@@ -567,6 +602,13 @@ void HandleFeed(const uint8_t* b, int n) {
     std::memcpy(&v, b + o, 4);
     return v;
   };
+  // A lobby's match that went on from the last one's result screens is its two games' second meeting (or a later
+  // one), and its packets carry that number: a spectator's game, whose count starts at 0 for each match it watches,
+  // counts from the latest one its feed brings before it meets the players
+  if (g_cfg.watch && g_status == Status::Connecting && match > uint16_t(g_match + 1) && match < 0x8000) {
+    REXLOG_INFO("sc5 net: the feed's match is the players' meeting {}", match);
+    g_match = uint16_t(match - 1);
+  }
   Watched& w = g_watched[match];
   switch (b[4]) {
     case kFeedPick:
@@ -582,6 +624,10 @@ void HandleFeed(const uint8_t* b, int n) {
         const int len = b[11] | b[12] << 8;
         if (13 + len <= n) w.created[b[8]].Take(b[9], b[10], b + 13, len);
       }
+      break;
+    case kFeedSkip:
+      if (n >= 9 && b[8] == 0) w.skip_in = true;
+      if (n >= 13 && b[8] == 1) w.replay_skips.insert(u32(9));
       break;
     case kFeedStage:
       if (n >= 12 && b[8] <= 1) {
@@ -677,6 +723,42 @@ void SendInputs() {
   Send(w);
 }
 
+// A KO's replay cut short (RSKIP): this game's answer, or the frame agreed. Both games press A on both pads at the
+// agreed frame for a few frames if the replay is still going there (decided at its top, the same in both: the replay
+// starts and ends on the same frame in the two games), which the replay's manager (sub_8211A8A8) takes as its player's
+// skip (START or A newly pressed on that player's pad). Asked frames are some 30 ahead, past where a rollback reaches.
+void SendReplaySkip(uint32_t frame, uint8_t kind) {
+  Writer w = Header(kReplaySkip);
+  w.U32(frame);
+  w.U8(kind);
+  Send(w);
+}
+
+void ReplaySkipAgreed(uint32_t frame) {
+  if (g_rskip.at == frame) return;
+  g_rskip.at = frame;
+  g_rskip.asked = 0;
+  REXLOG_INFO("sc5 net: the KO's replay is cut short at frame {} (now {})", frame, g_frame);
+  Writer f = FeedHeader(kFeedSkip, g_match);
+  f.U8(1);
+  f.U32(frame);
+  Feed(f);
+}
+
+void OnReplaySkip(uint32_t frame, uint8_t kind) {
+  if (kind == 0) {  // the other game asks: yes while the frame is still to come here and nothing earlier was agreed
+    const bool yes = (g_rskip.at == frame) ||
+                     (!g_rskip.at && (!g_rskip.asked || frame <= g_rskip.asked) && g_frame < frame);
+    if (yes) ReplaySkipAgreed(frame);
+    SendReplaySkip(frame, yes ? 1 : 2);
+  } else if (kind == 1 && g_rskip.asked == frame) {
+    ReplaySkipAgreed(frame);
+  } else if (kind == 2 && g_rskip.asked == frame) {
+    REXLOG_INFO("sc5 net: the other game refused cutting the KO's replay short at frame {}", frame);
+    g_rskip.asked = 0;
+  }
+}
+
 void HandlePacket(const uint8_t* b, int n) {
   if (n < 8) return;
   uint32_t magic;
@@ -754,6 +836,21 @@ void HandlePacket(const uint8_t* b, int n) {
     p.stage.phase = int8_t(b[9]);
     p.stage.cursor = int8_t(b[10]);
     p.stage.stage = int8_t(b[11]);
+  } else if (type == kChoice && n >= 11) {
+    if (match != coming) return;
+    p.choice.chooser = b[8] <= 1 ? b[8] : -1;
+    p.choice.phase = int8_t(b[9]);
+    p.choice.cursor = int8_t(b[10]);
+  } else if (type == kRematchAt && n >= 12) {
+    if (match != coming) return;
+    p.rematch_at = int64_t(u32(8));
+  } else if (type == kSkip && n >= 8) {
+    if (match != coming) return;
+    if (!p.skip_in) REXLOG_INFO("sc5 net: the other player skips the way into match {}", coming);
+    p.skip_in = true;
+  } else if (type == kReplaySkip && n >= 13) {
+    if (match != g_match || g_status != Status::InSync) return;
+    OnReplaySkip(u32(8), b[12]);
   } else if (type == kSetup && n >= 21) {
     if (match != coming) return;
     p.has_setup = true;
@@ -843,6 +940,30 @@ void SendComing() {
         Feed(fs);
       }
     }
+    // the result screen's menu, from the game whose player chooses the next match
+    if (g_local_choice.chooser >= 0) {
+      Writer w = HeaderComing(kChoice);
+      w.U8(uint8_t(g_local_choice.chooser));
+      w.U8(uint8_t(int8_t(g_local_choice.phase)));
+      w.U8(uint8_t(int8_t(g_local_choice.cursor)));
+      Send(w);
+    }
+    // the frames after the match's end this game had the launcher's rematch at
+    if (g_local_rematch_at >= 0) {
+      Writer w = HeaderComing(kRematchAt);
+      w.U32(uint32_t(g_local_rematch_at));
+      Send(w);
+    }
+    // this game's player skips the way into the coming fight; the spectators once
+    if (g_local_skip_in) {
+      Send(HeaderComing(kSkip));
+      if (!g_fed_skip_in) {
+        g_fed_skip_in = true;
+        Writer f = FeedHeader(kFeedSkip, uint16_t(g_match + 1));
+        f.U8(0);
+        Feed(f);
+      }
+    }
     // this game's player's created character: every chunk the other game does not have yet; the spectators once
     for (int s = 0; s < 2; s++) {
       const std::vector<uint8_t>& rec = g_local_created[s];
@@ -901,6 +1022,11 @@ void ClearComing() {
   for (Pick& p : g_local_picks) p = Pick{};
   g_local_stage = g_fed_stage = StagePick{};
   g_peer.stage = StagePick{};
+  g_local_choice = ResultChoice{};
+  g_peer.choice = ResultChoice{};
+  g_local_skip_in = g_fed_skip_in = false;
+  g_peer.skip_in = false;
+  g_local_rematch_at = g_peer.rematch_at = -1;
   g_my_setup_set = false;
   for (Pick& p : g_peer.picks) p = Pick{};
   g_peer.has_setup = false;
@@ -1337,6 +1463,9 @@ void Pace() {
 void SendOwn() {
   input::Pad local;
   if (!testinput::ScriptedPad(uint32_t(g_slot), local)) local = input::ReadPhysical(0);
+  // the player's own buttons for fights (the launcher's [fight]) as the game's default layout presses them: both games
+  // and the spectators see the combination the player meant, whatever each player set (sc5/controls.h)
+  controls::ToDefaultLayout(local);
   const uint32_t at = g_frame + uint32_t(Delay());
   // no pausing a match: START stays with this PC, and BACK too but in Online Practice, where it ends the match (it
   // goes to the other game, which ends it as well; neither game's pad reads see it)
@@ -1367,6 +1496,9 @@ bool FrameInput(uint32_t user, input::Pad& out) {
   }
   out = Unpack(g_now[user]);
   out.buttons &= uint16_t(~input::kBack);  // Online Practice's BACK is the netplay's, not the game's
+  // a KO's replay cut short (RSKIP): A on both pads for a few frames from the agreed frame, in both games
+  if (g_rskip.press_at && g_frame >= g_rskip.press_at && g_frame < g_rskip.press_at + kReplaySkipPress)
+    out.buttons |= input::kA;
   // a new packet every frame, numbered by the frame: the same when a rollback runs it again
   out.packet = (uint32_t(g_match) << 24) + g_frame + 1;
   return true;
@@ -1498,6 +1630,7 @@ void ApplyFix() {
 // 1's counters and state machine, and start the match's frames together.
 bool Meet(PPCContext& ctx, uint8_t* base) {
   g_match++;
+  g_rskip = ReplaySkip{};
   g_status = Status::Barrier;
   Peer& p = g_peer;
   p.inputs.clear();
@@ -1518,7 +1651,9 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   w.U8(uint8_t(words.size()));
   for (uint32_t v : words) w.U32(v);
   w.U8(uint8_t(OwnDelay()));
-  REXLOG_INFO("sc5 net: meeting for match {} at frame {}", g_match, frame::Count());
+  const std::string fight = controls::FightText();
+  REXLOG_INFO("sc5 net: meeting for match {} at frame {} (this player's buttons in a fight: {})", g_match,
+              frame::Count(), fight.empty() ? "the game's own" : fight);
   // the fight's state alike (MeetSync): what came early for this match is kept
   if (g_sync.match != g_match) g_sync = MeetSync{g_match};
   g_sync.mine = FightBlocks(ctx, base, g_slot == 0);
@@ -1653,6 +1788,7 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
 // then player 1's counters, state machine and fight taken as player 2's game takes them, and the match's frames
 bool WatchMeet(PPCContext& ctx, uint8_t* base) {
   g_match++;
+  g_rskip = ReplaySkip{};
   g_status = Status::Barrier;
   REXLOG_INFO("sc5 net: a spectator meeting match {} at frame {}", g_match, frame::Count());
   const auto started = Clock::now();
@@ -1780,6 +1916,8 @@ void WatchNeutral() {
 
 // a spectator's frame: never a guess, the frame waits for both inputs; far behind the players (a spectator who came
 // late), frames run unseen until it is within half a second of them
+void ReplaySkipTop();
+
 void WatchTop(PPCContext& ctx, uint8_t* base) {
   FeedPump();
   const Watched& w = g_watched[g_match];
@@ -1787,6 +1925,7 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   while (unseen < 120 && std::min(w.contiguous[0], w.contiguous[1]) > g_frame + 30 && RoundFought()) {
     WatchNeutral();
     ReseedAtStateChange(ctx, base);  // as the players' games do
+    ReplaySkipTop();
     SetFrameInputs(g_frame);
     sparring::OnFrame(g_frame);
     WatchCheck(ctx, base, g_frame);
@@ -1809,9 +1948,78 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   }
   g_waiting = false;
   ReseedAtStateChange(ctx, base);
+  ReplaySkipTop();
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);
   WatchCheck(ctx, base, g_frame);
+}
+
+// A KO's replay cut short (RSKIP): this game's player's START or A while one plays asks the other game for a frame some
+// 30 ahead (tests: SC5_TEST_SKIP_REPLAY=<n> asks n frames into each replay)
+void ReplaySkipAsk() {
+  input::Pad own;
+  if (!testinput::ScriptedPad(uint32_t(g_slot), own)) own = input::ReadPhysical(0);
+  const bool down = (own.buttons & (input::kStart | input::kA)) != 0;
+  bool press = down && !g_rskip_held;
+  g_rskip_held = down;
+  if (!battle::InKoReplay()) {
+    g_rskip.replay_frames = 0;
+    return;
+  }
+  g_rskip.replay_frames++;
+  static const int64_t test = [] {
+    const char* v = std::getenv("SC5_TEST_SKIP_REPLAY");
+    return v ? std::atoll(v) : -1;
+  }();
+  if (test >= 0 && int64_t(g_rskip.replay_frames) == test) press = true;
+  if (press && !g_rskip.at && !g_rskip.asked) {
+    g_rskip.asked = g_frame + kReplaySkipAhead;
+    g_rskip.sent = Clock::now();
+    SendReplaySkip(g_rskip.asked, 0);
+    REXLOG_INFO("sc5 net: this player cuts the KO's replay short: frame {} asked (now {})", g_rskip.asked, g_frame);
+  } else if (g_rskip.asked && Clock::now() - g_rskip.sent > std::chrono::milliseconds(100)) {
+    g_rskip.sent = Clock::now();
+    SendReplaySkip(g_rskip.asked, 0);
+  }
+}
+
+// the asked frame reached and no answer yet: this game waits for the other's word (it may have agreed)
+bool ReplaySkipWait() {
+  if (!g_rskip.asked || g_frame < g_rskip.asked) return true;
+  const auto start = Clock::now();
+  while (g_rskip.asked) {
+    Receive();
+    if (!g_rskip.asked) break;
+    if (Clock::now() - g_rskip.sent > std::chrono::milliseconds(100)) {
+      g_rskip.sent = Clock::now();
+      SendReplaySkip(g_rskip.asked, 0);
+    }
+    if (Clock::now() - start > kPeerTimeout) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return true;
+}
+
+// at the top of a match frame (a spectator's too, from the feed): the agreed frame decides the presses
+void ReplaySkipTop() {
+  uint32_t at = g_rskip.at;
+  if (g_cfg.watch) {
+    const std::set<uint32_t>& s = g_watched[g_match].replay_skips;
+    auto it = s.lower_bound(g_frame);
+    at = it != s.end() && *it == g_frame ? *it : 0;
+  }
+  if (at && g_frame == at && !g_rskip.press_at) {
+    if (battle::InKoReplay()) {
+      g_rskip.press_at = at;
+      REXLOG_INFO("sc5 net: frame {}: A for the KO's replay, cut short", at);
+    } else {
+      REXLOG_INFO("sc5 net: frame {}: the KO's replay was over already", at);
+    }
+  }
+  if (g_rskip.press_at && g_frame >= g_rskip.press_at + kReplaySkipPress) {
+    g_rskip.press_at = 0;
+    if (!g_cfg.watch) g_rskip.at = 0;
+  }
 }
 
 void OnTop(PPCContext& ctx, uint8_t* base) {
@@ -1902,9 +2110,12 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
       // other's (with a round trip longer than the input delay, lockstep made the intro wait at almost every frame)
       g_peer.confirmed = g_frame + 1;
       g_neutral = true;
+      ReplaySkipAsk();  // a player's START or A in a KO's replay cuts it short for both games
+      if (!ReplaySkipWait()) return Lost(Status::Disconnected);
       Pace();  // the two games kept even here too, or they start the round apart
     }
   }
+  ReplaySkipTop();
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);  // Online Practice's rules at the frame's top, after it was kept (a rerun starts there)
   SettleChecks();
@@ -2106,6 +2317,39 @@ void SetLocalStage(const StagePick& s) {
     l = s;
     g_picks_changed = true;
   }
+}
+
+void SetLocalChoice(const ResultChoice& c) {
+  ResultChoice& l = g_local_choice;
+  if (l.chooser != c.chooser || l.phase != c.phase || l.cursor != c.cursor) {
+    l = c;
+    g_picks_changed = true;
+  }
+}
+
+ResultChoice RemoteChoice() { return g_peer.choice; }
+
+void SetRematchAt(uint32_t frames) {
+  if (g_local_rematch_at == int64_t(frames)) return;
+  g_local_rematch_at = int64_t(frames);
+  g_picks_changed = true;
+}
+
+int64_t RemoteRematchAt() { return g_peer.rematch_at; }
+
+void SetLocalSkip() {
+  if (g_local_skip_in) return;
+  g_local_skip_in = true;
+  g_picks_changed = true;
+  REXLOG_INFO("sc5 net: this player skips the way into match {}", g_match + 1);
+}
+
+bool SkipWanted() {
+  if (g_cfg.watch) {  // a spectator: a player's, from the feed
+    auto it = g_watched.find(uint16_t(g_match + 1));
+    return it != g_watched.end() && it->second.skip_in;
+  }
+  return g_local_skip_in || g_peer.skip_in;
 }
 
 void SetLocalCreated(int side, const std::vector<uint8_t>& record) {

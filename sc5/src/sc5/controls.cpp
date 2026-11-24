@@ -22,13 +22,17 @@
 #include <SDL3/SDL.h>
 
 #include <rex/filesystem.h>
+#include <rex/hook.h>
 #include <rex/input/device_assignment.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 
+#include "sc5/frame.h"
 #include "sc5/input.h"
+#include "sc5/net/netplay.h"
 
 namespace sc5::controls {
 namespace {
@@ -87,7 +91,49 @@ struct Map {
   std::array<int, kSourceCount> presses{};
   std::string player2;  // player 2's controller by name; "" the second plugged in
   bool any_sdl = false;  // a button only SDL reports presses something
+  std::array<int, kCount> fight;  // [fight]: the game's buttons a button presses in a fight (kGame*), -1 the game's own
+  Map() { fight.fill(-1); }
 };
+
+// The buttons [fight] can set, and each one's bit in the game's own pad state (the pad manager at 0x82771080, + 128 a
+// pad: what the battle's conversion sub_82171AE8 reads; its table at 0x8275C12C has the eight of the game's Control
+// Settings, LT 0x2 LB 0x4 RT 0x10 B 0x20 A 0x40 RB 0x80 Y 0x100 X 0x200; the stick clicks, 0x1 and 0x8, press nothing
+// there: the conversion lets through only the d-pad and START, 0xBC00)
+struct FightButton {
+  int control;
+  uint32_t game_bit;
+};
+constexpr FightButton kFightButtons[] = {{kA, 0x40},  {kB, 0x20},  {kX, 0x200}, {kY, 0x100}, {kLB, 0x4},
+                                         {kRB, 0x80}, {kLT, 0x2},  {kRT, 0x10}, {kLS, 0x1},  {kRS, 0x8}};
+// Type A's face buttons for each of the game's buttons: X horizontal attack (A), Y vertical (B), B kick (K), A guard (G)
+constexpr uint16_t kFaceOf[4] = {input::kX, input::kY, input::kB, input::kA};
+
+bool IsFightControl(int c) {
+  for (const FightButton& f : kFightButtons)
+    if (f.control == c) return true;
+  return false;
+}
+
+// "A+B+K+G" (any order, any case; "" nothing) -> kGame* bits, -1 when it is not that
+int ComboFromText(const std::string& text) {
+  int mask = 0;
+  for (size_t i = 0; i < text.size(); i++) {
+    const char ch = char(std::toupper(uint8_t(text[i])));
+    if (ch == '+' || ch == ' ') continue;
+    const char* letters = "ABKG";
+    const char* at = std::strchr(letters, ch);
+    if (!at || !ch) return -1;
+    mask |= 1 << (at - letters);
+  }
+  return mask;
+}
+
+std::string ComboText(int mask) {
+  std::string out;
+  for (int i = 0; i < 4; i++)
+    if (mask >> i & 1) out += std::string(out.empty() ? "" : "+") + "ABKG"[i];
+  return out.empty() ? "nothing" : out;
+}
 
 // without the file (the launcher's own defaults, launcher/src/Controls.cpp): arrows or WASD move, J I L K are X Y B A
 // (horizontal, vertical, kick, guard; Space guards too), U and O the bumpers, Y and P the triggers, Enter Start,
@@ -236,6 +282,10 @@ bool Load(const fs::path& path, Map& m) {
     } else if (section == "ports" && key == "player2") {
       const auto names = Quoted(value);
       m.player2 = names.empty() ? std::string() : names[0];
+    } else if (section == "fight") {
+      const int c = ControlFromId(key);
+      const auto names = Quoted(value);
+      if (c >= 0 && IsFightControl(c) && !names.empty()) m.fight[c] = ComboFromText(names[0]);
     }
   }
   for (int i = 0; i < kSourceCount; i++)
@@ -268,8 +318,14 @@ void ReloadIfChanged() {
         g_map = m;
         g_stamp = stamp;
         g_have_stamp = true;
-        REXLOG_INFO("sc5 controls: from {} (keyboard {}, player 2's controller {})", path.string(),
-                    m.keyboard ? "on" : "off", m.player2.empty() ? "the second plugged in" : "\"" + m.player2 + "\"");
+        std::string fight;
+        for (const FightButton& f : kFightButtons)
+          if (m.fight[f.control] >= 0)
+            fight += std::string(fight.empty() ? "" : " ") + kControlIds[f.control] + "=" +
+                     ComboText(m.fight[f.control]);
+        REXLOG_INFO("sc5 controls: from {} (keyboard {}, player 2's controller {}; in a fight {})", path.string(),
+                    m.keyboard ? "on" : "off", m.player2.empty() ? "the second plugged in" : "\"" + m.player2 + "\"",
+                    fight.empty() ? "the game's own buttons" : fight);
       }
     }
   }
@@ -452,4 +508,83 @@ void Apply(uint32_t user, Pad& pad) {
   }
 }
 
+namespace {
+
+std::array<int, kCount> FightNow() {
+  ReloadIfChanged();
+  std::lock_guard<std::mutex> lock(g_lock);
+  return g_map.fight;
+}
+
+}  // namespace
+
+void ToDefaultLayout(Pad& pad) {
+  const std::array<int, kCount> fight = FightNow();
+  int game = 0;
+  bool any = false;
+  for (const FightButton& f : kFightButtons) {
+    const int c = f.control;
+    if (fight[c] < 0) continue;
+    any = true;
+    bool down;
+    if (c == kLT) {
+      down = pad.left_trigger >= kTriggerPressed;
+      pad.left_trigger = 0;
+    } else if (c == kRT) {
+      down = pad.right_trigger >= kTriggerPressed;
+      pad.right_trigger = 0;
+    } else {
+      down = (pad.buttons & kControlBits[c]) != 0;
+      pad.buttons = uint16_t(pad.buttons & ~kControlBits[c]);
+    }
+    if (down) game |= fight[c];
+  }
+  if (!any) return;
+  for (int i = 0; i < 4; i++)
+    if (game >> i & 1) pad.buttons |= kFaceOf[i];
+}
+
+std::string FightText() {
+  const std::array<int, kCount> fight = FightNow();
+  std::string out;
+  for (const FightButton& f : kFightButtons)
+    if (fight[f.control] >= 0)
+      out += std::string(out.empty() ? "" : " ") + kControlIds[f.control] + "=" + ComboText(fight[f.control]);
+  return out;
+}
+
+// offline, player 1's pad: the bits of the buttons [fight] sets (`strip`) and the game's buttons they press (`add`)
+void OfflineFight(uint32_t bits, uint32_t& strip, uint32_t& add) {
+  const std::array<int, kCount> fight = FightNow();
+  for (const FightButton& f : kFightButtons) {
+    if (fight[f.control] < 0) continue;
+    strip |= f.game_bit;
+    if (bits & f.game_bit) add |= uint32_t(fight[f.control]);
+  }
+}
+
 }  // namespace sc5::controls
+
+// The battle's conversion of a pad's buttons into the game's (sub_82171AE8, from the battle's input task sub_8213DEC0,
+// twice a player a frame: the buttons held and those newly pressed; r3 the pad, r4 its bits as the pad manager keeps
+// them; r3 back: kGame* with the d-pad and START let through). Offline (no match of the netplay's, whose pads come in
+// Type A already: ToDefaultLayout) player 1's pad (pad 0: the first controller and the keyboard) takes [fight]: each
+// button set there presses its combination, every other button what the game's own Control Settings give it.
+// Tests: SC5_DBG_FIGHT=1 logs each pad's game buttons newly pressed (its second call a frame).
+REX_EXTERN(__imp__sub_82171AE8);
+REX_HOOK_RAW(sub_82171AE8) {
+  const uint32_t pad = ctx.r3.u32, bits = ctx.r4.u32;
+  uint32_t strip = 0, add = 0;
+  if (pad == 0 && !sc5::net::Active()) sc5::controls::OfflineFight(bits, strip, add);
+  if (strip) ctx.r4.u64 = bits & ~strip;
+  __imp__sub_82171AE8(ctx, base);
+  if (strip) ctx.r3.u64 = ctx.r3.u32 | add;
+  static const bool dbg = [] { const char* v = std::getenv("SC5_DBG_FIGHT"); return v && v[0] == '1'; }();
+  if (dbg && pad < 4) {
+    static int call[4] = {};
+    if ((call[pad] ^= 1) == 0 && (ctx.r3.u32 & 0xF))
+      REXLOG_INFO("sc5 controls: pad {} newly pressed game buttons {} (its bits {:08X}{}) at frame {}", pad,
+                  sc5::controls::ComboText(int(ctx.r3.u32 & 0xF)), bits, (bits & strip) ? ", [fight]" : "",
+                  sc5::frame::Count());
+  }
+}

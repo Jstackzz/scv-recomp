@@ -17,6 +17,8 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -492,11 +494,186 @@ void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager) {
   }
 }
 
+namespace {
+
+// The card the VS screen shows for a created character from the other PC. The VS screen (from its copy of the slot's
+// picture, 0x82909C60 for player 2's) and Creation's list draw a character's card from the picture in its slot: a file
+// from +13,576 (16 bytes: its kind, a byte the kind uses, its size, width and height, a checksum of its data checked
+// when the kind has 0x80; then its data), which sub_8218B1C0 loads when its size is not 0 and sub_8218B298 uploads.
+// Creation keeps the character it shot there as kind 0x80 (172x256, a compressed "PTC+MSHM" file of up to 16,240
+// bytes), which does not come with the record, so the card was black. In its place a picture of our own: SCV Online's
+// navy and gold, a figure with a question mark, made once.
+//
+// Its form is the loader's kind 2 (sub_8218B860; byte 1 = 3: an A8R8G8B8 texture, linear, one of the forms
+// sub_8218A238 takes), whose data the upload decodes (sub_824FFA68): a 10-byte little-endian header (width, row pitch in
+// bytes, height, flags: 0x18 four channels, 0x20 each coded on its own with no colour transform), then each channel (A,
+// R, G, B: the texture's bytes in that order) as sub_824FF048 reads it: a 64-bit little-endian mask of the coefficients
+// present, in the codec's order (the game's table at 0x82702660: k -> row * 8 + column), a byte added after the inverse
+// DCT, 64 quantization multipliers (row-major), then each present coefficient's quantized value for every 8x8 block in
+// turn (signed bytes; 0x80 n repeats the last value n times). The inverse DCT is MPEG's reference integer one
+// (sub_82503F28), so the forward one here is the standard DCT. 128x192 (rows of 32 texels), which the VS screen
+// stretches over the card as it does Creation's 172x256; JPEG's luminance quantization, coarser until the file fits.
+constexpr uint32_t kCardAt = 13576;
+constexpr int kCardW = 128, kCardH = 192;
+constexpr uint32_t kZigzag = 0x82702660;
+
+struct Rgb {
+  float r, g, b;
+};
+
+// the card at a point of it, in Creation's 172x256
+Rgb CardAt(float x, float y) {
+  constexpr Rgb kGold{226, 182, 82}, kDarkGold{150, 118, 52}, kFigure{200, 210, 230}, kInk{20, 32, 70};
+  constexpr float kW = 172, kH = 256, kHeadX = 86, kHeadY = 96, kHeadR = 34, kBodyY = 236, kBodyRx = 70, kBodyRy = 82;
+  const float edge = std::min(std::min(x, kW - x), std::min(y, kH - y));
+  if (edge < 6) return kGold;
+  if (edge >= 10 && edge < 12) return kDarkGold;
+  if (edge >= 10) {
+    // a question mark over the head: an arc from the left over the top down to below its middle, a stem, a dot
+    const float dx = x - kHeadX, dy = y - 84, r = std::sqrt(dx * dx + dy * dy);
+    if (r >= 8 && r <= 16 && std::atan2(-dy, dx) * 57.29578f >= -90) return kInk;
+    if (x >= kHeadX - 4 && x <= kHeadX + 4 && y >= 92 && y <= 106) return kInk;
+    if (dx * dx + (y - 115) * (y - 115) <= 5.5f * 5.5f) return kInk;
+    const float hy = y - kHeadY, bx = dx / kBodyRx, by = (y - kBodyY) / kBodyRy;
+    if (dx * dx + hy * hy <= kHeadR * kHeadR || bx * bx + by * by <= 1) return kFigure;
+  }
+  const float t = y / kH;  // a navy gradient, lighter at the top
+  return {28 - 18 * t, 44 - 30 * t, 92 - 56 * t};
+}
+
+void PutLe16(std::vector<uint8_t>& v, uint32_t x) {
+  v.push_back(uint8_t(x));
+  v.push_back(uint8_t(x >> 8));
+}
+
+// one channel of the card (kCardW x kCardH values) in the codec, onto `out`
+void EncodeChannel(const std::vector<float>& plane, const uint8_t* q, const uint32_t* zigzag, std::vector<uint8_t>& out) {
+  constexpr int kAcross = kCardW / 8, kBlocks = kAcross * (kCardH / 8);
+  static const std::array<float, 64> cosines = [] {
+    std::array<float, 64> c{};
+    for (int u = 0; u < 8; u++)
+      for (int x = 0; x < 8; x++) c[size_t(u * 8 + x)] = std::cos(float((2 * x + 1) * u) * 3.14159265f / 16);
+    return c;
+  }();
+  std::vector<std::array<int8_t, 64>> coefficients(kBlocks);
+  for (int b = 0; b < kBlocks; b++) {
+    const int left = (b % kAcross) * 8, top = (b / kAcross) * 8;
+    for (int v = 0; v < 8; v++) {
+      for (int u = 0; u < 8; u++) {
+        float sum = 0;
+        for (int y = 0; y < 8; y++)
+          for (int x = 0; x < 8; x++)
+            sum += (plane[size_t((top + y) * kCardW + left + x)] - 128) * cosines[size_t(u * 8 + x)] *
+                   cosines[size_t(v * 8 + y)];
+        const float f = 0.25f * (u ? 1 : 0.70710678f) * (v ? 1 : 0.70710678f) * sum / q[v * 8 + u];
+        coefficients[size_t(b)][size_t(v * 8 + u)] = int8_t(std::clamp(int(std::lround(f)), -127, 127));
+      }
+    }
+  }
+  uint64_t mask = 0;
+  std::vector<uint8_t> planes;
+  for (int k = 0; k < 64; k++) {
+    const uint32_t at = zigzag[k];
+    bool any = false;
+    for (const auto& c : coefficients) any = any || c[at] != 0;
+    if (!any) continue;
+    mask |= uint64_t(1) << k;
+    int8_t last = 0;
+    for (int b = 0; b < kBlocks;) {
+      if (coefficients[size_t(b)][at] != last) {
+        last = coefficients[size_t(b)][at];
+        planes.push_back(uint8_t(last));
+        b++;
+        continue;
+      }
+      int n = 0;
+      for (; b < kBlocks && coefficients[size_t(b)][at] == last && n < 255; b++) n++;
+      planes.push_back(0x80);
+      planes.push_back(uint8_t(n));
+    }
+  }
+  for (int i = 0; i < 8; i++) out.push_back(uint8_t(mask >> (8 * i)));
+  out.push_back(128);
+  out.insert(out.end(), q, q + 64);
+  out.insert(out.end(), planes.begin(), planes.end());
+}
+
+// the card's picture file, made once (empty if it does not fit)
+const std::vector<uint8_t>& Card() {
+  static std::vector<uint8_t> file;
+  static bool made = false;
+  if (made) return file;
+  made = true;
+  uint32_t zigzag[64];
+  uint64_t seen = 0;
+  for (int k = 0; k < 64; k++) {
+    zigzag[k] = game::ReadU32(kZigzag + 4 * uint32_t(k));
+    if (zigzag[k] < 64) seen |= uint64_t(1) << zigzag[k];
+  }
+  if (seen != ~uint64_t(0) || zigzag[0] != 0) {  // not the codec's order: another build of the game
+    REXLOG_WARN("sc5 creation: the picture codec's coefficient order is not at {:08X}: no VS card", kZigzag);
+    return file;
+  }
+  // the card at its size, each texel the average of 16 points of it
+  std::vector<float> planes[3];
+  for (auto& p : planes) p.resize(size_t(kCardW * kCardH));
+  for (int y = 0; y < kCardH; y++) {
+    for (int x = 0; x < kCardW; x++) {
+      Rgb sum{0, 0, 0};
+      for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+          const Rgb c = CardAt((x + (sx + 0.5f) / 4) * 172 / kCardW, (y + (sy + 0.5f) / 4) * 256 / kCardH);
+          sum = {sum.r + c.r, sum.g + c.g, sum.b + c.b};
+        }
+      }
+      planes[0][size_t(y * kCardW + x)] = sum.r / 16;
+      planes[1][size_t(y * kCardW + x)] = sum.g / 16;
+      planes[2][size_t(y * kCardW + x)] = sum.b / 16;
+    }
+  }
+  static constexpr uint8_t kJpeg[64] = {16, 11, 10, 16, 24,  40,  51,  61,  12, 12, 14, 19, 26,  58,  60,  55,
+                                        14, 13, 16, 24, 40,  57,  69,  56,  14, 17, 22, 29, 51,  87,  80,  62,
+                                        18, 22, 37, 56, 68,  109, 103, 77,  24, 35, 55, 64, 81,  104, 113, 92,
+                                        49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99};
+  for (const float scale : {1.0f, 1.5f, 2.0f, 3.0f, 4.0f}) {
+    uint8_t q[64];
+    for (int i = 0; i < 64; i++) q[i] = uint8_t(std::clamp(int(std::lround(kJpeg[i] * scale)), 1, 255));
+    std::vector<uint8_t> data(16, 0);
+    PutLe16(data, kCardW);
+    PutLe16(data, kCardW * 4);
+    PutLe16(data, kCardH);
+    PutLe16(data, 0x38);
+    PutLe16(data, 0);
+    // alpha: no coefficients, 255 everywhere
+    data.insert(data.end(), 8, uint8_t(0));
+    data.push_back(255);
+    data.insert(data.end(), 64, uint8_t(1));
+    for (const auto& p : planes) EncodeChannel(p, q, zigzag, data);
+    if (data.size() > kSlotSize - kCardAt) continue;
+    data[0] = 2;  // kind 2, no checksum
+    data[1] = 3;  // A8R8G8B8
+    data[2] = uint8_t(data.size() >> 8);
+    data[3] = uint8_t(data.size());
+    data[5] = kCardW;
+    data[7] = kCardH;
+    file = std::move(data);
+    REXLOG_INFO("sc5 creation: the VS card for the other PC's created characters: {} bytes (quantization x{})",
+                file.size(), scale);
+    return file;
+  }
+  REXLOG_WARN("sc5 creation: the VS card for the other PC's created characters does not fit its slot");
+  return file;
+}
+
+}  // namespace
+
 bool PlaceRemote(int side, const Record& r) {
   const uint32_t s = Slot(RemoteSlot(side));
   if (!s || !Check(r).empty()) return false;
   uint8_t* slot = Host(s);
-  std::memset(slot, 0, kSlotSize);  // no picture: its card shows none
+  std::memset(slot, 0, kSlotSize);
+  // the other PC's picture does not come: ours on its card
+  if (const std::vector<uint8_t>& card = Card(); !card.empty()) std::memcpy(slot + kCardAt, card.data(), card.size());
   std::memcpy(slot + kRecordAt, r.data(), kRecordSize);
   PutBe32(slot + kHeaderNumber, 1);
   PutBe32(slot + (TypeOf(r.data()) == kOriginal ? kHeaderOriginal : kHeaderFighter), 1);
@@ -610,6 +787,7 @@ void OnHoldPoint() {
     return;
   }
   ImportOwn(image);
+  Card();  // made now, not during a select screen
   // tests: SC5_TEST_CREATION_RECORD=<file>: a record (13,340 bytes) placed as the other PC's would be, for player 2
   if (const char* rec = std::getenv("SC5_TEST_CREATION_RECORD"); rec && *rec) {
     Record r(kRecordSize);
