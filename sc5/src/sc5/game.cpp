@@ -1,6 +1,7 @@
 // What the game is doing, see game.h.
 
 #include "sc5/game.h"
+#include "sc5/hud.h"
 
 #include <atomic>
 #include <chrono>
@@ -187,6 +188,7 @@ void OnFrameEnd(uint64_t frame) {
     }
     g_last_battle = battle;
   }
+  sc5::hud::OnFrameEnd();  // the round markers against the rounds won (logged)
   sc5::dbg::OnFrameEnd();  // TEMPORARY (debug_watch.cpp)
   // TEMPORARY: SC5_TEST_STALL=<fight frame>:<ms>,...: the frame's end held that long (does the game follow the clock?)
   static std::vector<std::pair<int64_t, int>> stalls = [] {

@@ -411,6 +411,21 @@ What had to be added to the game's snapshot, each found with the diagnostics bel
   7 frames (saved at 6015, put back at 6022) and the other, which had run 6022 on a guess first, did not (Xiba against
   Leixia with 40 ms each way: P1's counters 7 apart from frame 6023, the check at 6030 apart). The counts and words
   are kept with each frame, and so is each slot that holds a save.
+- **The HUD's round markers** (hud.cpp). A round's end (sub_8213E180, from the "fighting" state's update) gives the
+  winner the round through sub_82146C48: the player's rounds won (+0x1108, a halfword, and the other count at +0x75C)
+  and the HUD's own count of them (a heap object, `[0x829F2F9C]` while its +48 is `[0x829F2F98]`: +0x94 player 1,
+  +0x98 player 2) each go up by one, and the marker's light starts (sub_8217D090, effect 1966 / 1967). The HUD draws
+  five markers a side from its own count every frame (sub_82181588) and takes the players' counts only as a round
+  starts (sub_8231CAA0). Nothing put the HUD's count back: a rollback over a KO's frame counted the round once in the
+  first run and again in the rerun, and a KO only a wrong guess had (the real input took it back) stayed counted, so a
+  player was shown with a round or more they did not have until the next round's call, and on the last round to the
+  result: four markers lit in a first to 3, the two PCs apart, the match ending by the real count (the streamed first
+  to 30 of 2026-11-20). Siegfried pushing Mitsurugi out, 60 ms each way with 25 ms of jitter and 3% loss, delay 1,
+  player 2 tapping guard every 2 frames (2026-11-24): every round's KO was counted twice in one game or both, two KOs
+  at 3376 and 3516 came only on a guess, and one game showed five markers in round 3 with one round won. The two words
+  are kept with each frame (`SC5_HUD_KEEP=0` leaves them out, tests); the log says `sc5 hud:` where a frame shown has
+  other markers than rounds won, and where a KO shown was taken back. Still shown from a KO taken back: its call (a
+  "PERFECT" over a round that went on) and the marker's light.
 
 What must not be put back:
 

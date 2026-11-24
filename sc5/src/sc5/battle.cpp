@@ -1,6 +1,7 @@
 // The game's own battle state snapshots, see battle.h.
 
 #include "sc5/battle.h"
+#include "sc5/hud.h"
 #include "sc5/rng.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
@@ -154,6 +155,10 @@ std::vector<Region> DynamicRegions() {
         out.push_back({slot, 12 + std::min(Get32(slot + 4), kSlotStride - 12)});
       }
   }
+  // the HUD's count of each side's rounds won, which its markers show (hud.cpp): a KO counted there in a frame's first
+  // run is counted again in its rerun, and one only a wrong guess had stays (a player shown with a round more)
+  if (const uint32_t hud = sc5::hud::Object(); hud && sc5::hud::KeepMarkers())
+    out.push_back({hud + sc5::hud::kMarkers, sc5::hud::kMarkersSize});
   // the battle's cameras (see kCameraDirector)
   if (const uint32_t d = Get32(kCameraDirector); valid(d)) {
     out.push_back({d, kCameraSystem});
