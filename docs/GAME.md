@@ -730,7 +730,9 @@ the next match (CHOICE).
   With all of it, the same match on the 27 places as two players' games run it (`HUNT_PLAY=1`: a failed check plays
   the round again or makes a round's call alike): every match to the same result in both games; 25 with every check
   alike and nothing to do, 2 with one round's call made alike (stage 23 at frame 1,068, stage 22 at 5,512); no round
-  played again.
+  played again. And the 14 pairs of characters of the heap sweep, both mashing for 9,000 frames, the same way
+  (`tools/pairsweep.sh`): all 14 to the same result in both games with every check alike, no call made alike and no
+  round played again.
 - **The check at a round's call** (netplay.cpp `CallCheck`, `CallSync`; 0.1.4). Outside a round's fighting the two
   games run on neutral inputs and compare nothing, and the game itself is not the same there on two PCs: after a KO
   a fighter's script waits on its voice (CRI's playback status, the audio's own time: sound.cpp), so the winner's line
