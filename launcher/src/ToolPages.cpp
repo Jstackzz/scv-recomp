@@ -679,15 +679,19 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     ui::fillRegions(region, cfg::region());
     auto* maxPing = new QComboBox;
     ui::fillMaxPing(maxPing, cfg::maxPing());
-    auto* delay = new QSpinBox;
-    delay->setRange(0, 4);
-    delay->setValue(cfg::inputDelay());
-    delay->setSuffix(tr(" frames"));
-    auto* autoDelay = new QCheckBox(tr("More delay when the ping is high"));
-    autoDelay->setChecked(cfg::autoDelay());
-    autoDelay->setToolTip(tr("A match with a high ping gets more input delay, about its ping's frames each way but "
-                             "one (4 frames at 180 ms, 6 at most), so the game rolls back less and characters jump "
-                             "less. Both games play the larger delay of the two."));
+    // Auto (the default): the match's delay from its measured ping, the same in both games; or the player's own
+    // number of frames, which the match plays when it is the larger of the two players'
+    auto* delay = new QComboBox;
+    delay->addItem(cfg::inputDelayText(cfg::kAutoDelay), cfg::kAutoDelay);
+    for (int d = 0; d <= 4; ++d) delay->addItem(cfg::inputDelayText(d), d);
+    delay->setCurrentIndex(std::max(0, delay->findData(cfg::inputDelay())));
+    delay->setToolTip(tr("Auto picks the delay from the ping measured when the match starts: 1 frame under 67 ms, a "
+                         "frame more for every 33 ms above (2 to 100 ms, 3 to 133 ms, 4 to 166 ms, 5 to 200 ms, 6 "
+                         "above), so the game rolls back less and characters jump less. A number keeps that many "
+                         "frames, more when the other player's is larger. Both games always play the same delay."));
+    auto* delayAuto = ui::label(tr("Auto: the delay comes from the ping between you and your opponent, the same in "
+                                   "both games."), "Muted");
+    delayAuto->setWordWrap(true);
     auto* port = new QSpinBox;
     port->setRange(1024, 65535);
     port->setValue(cfg::gamePort());
@@ -739,7 +743,7 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     of->addRow(tr("Region"), region);
     of->addRow(tr("Max ping"), maxPing);
     of->addRow(tr("Input delay"), delay);
-    of->addRow(QString(), autoDelay);
+    of->addRow(QString(), delayAuto);
     of->addRow(tr("Game UDP port"), port);
     of->addRow(QString(), strict);
     of->addRow(QString(), matchSound);
@@ -946,8 +950,14 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
 
     connect(region, &QComboBox::currentIndexChanged, this, [region] { cfg::set(QStringLiteral("online/region"), region->currentData()); });
     connect(maxPing, &QComboBox::currentIndexChanged, this, [maxPing] { cfg::set(QStringLiteral("online/max_ping"), maxPing->currentData()); });
-    connect(delay, &QSpinBox::valueChanged, this, [](int v) { cfg::set(QStringLiteral("online/delay"), v); });
-    connect(autoDelay, &QCheckBox::toggled, this, [](bool on) { cfg::set(QStringLiteral("online/auto_delay"), on); });
+    connect(delay, &QComboBox::currentIndexChanged, this, [delay, delayAuto] {
+        const int d = delay->currentData().toInt();
+        cfg::set(QStringLiteral("online/input_delay"), d < 0 ? QStringLiteral("auto") : QString::number(d));
+        delayAuto->setText(d < 0 ? tr("Auto: the delay comes from the ping between you and your opponent, the same in "
+                                      "both games.")
+                                 : tr("%1 of delay, or the other player's when it is larger (Auto counts as the "
+                                      "ping's).").arg(cfg::inputDelayText(d)));
+    });
     connect(port, &QSpinBox::valueChanged, this, [this](int v) {
         cfg::set(QStringLiteral("online/game_port"), v);
         if (upnp_ && cfg::upnp()) upnp_->map(static_cast<quint16>(v));

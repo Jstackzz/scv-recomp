@@ -39,7 +39,9 @@ LOBBY_CODE_LEN = 5
 LOBBY_NAME_MAX = 32
 CHAT_MAX = 200
 ROUNDS_ALLOWED = (1, 3, 5)
-DELAY_MAX = 4
+DELAY_MAX = 4  # a player's own input delay, frames
+DELAY_AUTO = -1  # a player's "auto" input delay: the match's from its measured round trip (auto_delay)
+AUTO_DELAY_MIN, AUTO_DELAY_MAX = 1, 6
 # what a launcher can do beyond the protocol's start, as its hello says (`features`) and the server's welcome lists:
 # "koth", King of the Hill lobbies (docs/PROTOCOL.md 1.10.2)
 FEATURES: tuple[str, ...] = ("koth",)
@@ -177,6 +179,28 @@ def get_int(msg: dict, key: str, *, lo: int, hi: int, default: int | None = None
     if not lo <= value <= hi:
         raise ProtocolError("bad_request", f"Field '{key}' must be between {lo} and {hi}.")
     return value
+
+
+def get_delay(msg: dict, *, default: int = 2) -> int:
+    """A player's input delay: 0..DELAY_MAX frames, or DELAY_AUTO for `"delay_auto": true` (SCV launchers from 0.1.4,
+    which send a number with it for older servers) or `"delay": "auto"` (MK9 Online's form)."""
+    if msg.get("delay") == "auto" or get_bool(msg, "delay_auto", default=False):
+        return DELAY_AUTO
+    return get_int(msg, "delay", lo=0, hi=DELAY_MAX, default=default)
+
+
+def auto_delay(rtt_ms: int) -> int:
+    """The input delay an "auto" player's match gets for its round trip: the frames of the one-way trip (60 a second,
+    16.7 ms each) rounded up, less the one rollback covers, from 1 to 6. Under 67 ms 1, then a frame more every 33 ms:
+    2 to 100 ms, 3 to 133, 4 to 166, 5 to 200, 6 above. Rollback then has at most a frame or two to correct, plus the
+    network's jitter: SCV's rollbacks are cheap (1.5 ms a frame run again) but every frame of one shows as a
+    character jumping. MK3D Online's rule (the one-way frames rounded, less one: delay 1 up to 83 ms) left a US-UK
+    pair (2026-11-20) at delay 1 and rolling back up to 5 frames; MK9 Online's (rounded up plus half a frame, 2 to 8)
+    is a frame more, for a game whose rollbacks cost 7-10 ms a frame."""
+    if rtt_ms <= 0:
+        return AUTO_DELAY_MIN
+    frames = -(-rtt_ms * 3 // 100)  # ceil(rtt_ms / 33.33): the one-way trip's frames, rounded up
+    return max(AUTO_DELAY_MIN, min(AUTO_DELAY_MAX, frames - 1))
 
 
 def get_game_mode(msg: dict) -> tuple[str, str]:

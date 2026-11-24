@@ -25,7 +25,7 @@ struct QueueRequest {
     bool ranked = false;
     bool strict = false;
     int maxPing = 0;
-    int delay = 2;
+    int delay = -1;  // frames, or cfg::kAutoDelay: the match's from its measured ping (the server decides)
 };
 
 class MatchController : public QObject {

@@ -44,18 +44,14 @@ QString rankToken(const QString& title) {
     return key.isEmpty() ? QStringLiteral("-") : key;
 }
 
-// The input delay a match's ping wants (cfg::autoDelay): the frames of its one-way trip but one, which rollback covers,
-// 6 at most: 0 under 50 ms, 1 under 84, 2 under 117, 3 under 150, 4 under 184, 5 under 217, then 6
-int autoDelayFor(int rttMs) {
-    if (rttMs < 0) return 0;
-    return qBound(0, int(std::lround(rttMs / (2000.0 / 60))) - 1, 6);
-}
-
-// the match's input delay: the server's (the larger of both players' settings), raised for the ping both games were
-// measured at (match_go's rtt_ms, the same for both); the games play the larger of their two (netplay AgreeDelay)
+// The match's input delay. A server that knows Auto (match_go's delay_auto, true or false) decided it for both games:
+// the larger of the two players', an Auto one's from the match's ping (cfg::autoDelayFor), so both start lines say the
+// same. An older server took the larger of both numbers (Auto sends 1): this launcher raises it for the ping itself
+// when the player is on Auto (match_go's rtt_ms is the same for both games, which play the larger of their two)
 int matchDelay(const QJsonObject& go) {
     const int delay = go.value(QStringLiteral("delay")).toInt();
-    return cfg::autoDelay() ? qMax(delay, autoDelayFor(go.value(QStringLiteral("rtt_ms")).toInt(-1))) : delay;
+    if (go.contains(QStringLiteral("delay_auto")) || cfg::inputDelay() != cfg::kAutoDelay) return delay;
+    return qMax(delay, cfg::autoDelayFor(go.value(QStringLiteral("rtt_ms")).toInt(-1)));
 }
 
 // Whether a series that is over is followed by the same search (cfg::searchAgain): not when this player left it (LEAVE,
@@ -852,11 +848,11 @@ bool MatchController::findMatch(const QueueRequest& req, QString* error) {
                     {QStringLiteral("max_ping"), req.maxPing},
                     {QStringLiteral("strict"), req.strict},
                     {QStringLiteral("character"), req.character},
-                    {QStringLiteral("delay"), req.delay},
                     {QStringLiteral("relay"), cfg::hideIp()},
                     {QStringLiteral("hide_always"), cfg::hideIpAlways()},
                     {QStringLiteral("link"), server_->linkType()}};
     if (serverRttMs() >= 0) msg.insert(QStringLiteral("server_rtt"), serverRttMs());
+    cfg::putDelay(msg, req.delay);
     pingWiden_ = {};
     server_->send(msg);
     searchClock_.start();
@@ -1067,12 +1063,13 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         openFeed(msg);
         pendingStart_ = startLine(go_);
         const int delay = matchDelay(msg);
-        setPhase(Phase::Starting,
-                 delay > msg.value(QStringLiteral("delay")).toInt()
-                     ? tr("Starting the match against %1 (%2 ms: %3 frames of input delay for that ping)...")
-                           .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt()).arg(delay)
-                     : tr("Starting the match against %1 (%2 ms)...")
-                           .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt()));
+        // the delay both games play, and why: Auto's, from the ping, or a player's own
+        const bool fromPing = msg.value(QStringLiteral("delay_auto")).toBool() ||
+                              (!msg.contains(QStringLiteral("delay_auto")) && cfg::inputDelay() == cfg::kAutoDelay);
+        setPhase(Phase::Starting, tr("Starting the match against %1 (ping %2 ms, input delay %3%4)...")
+                                      .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt())
+                                      .arg(cfg::inputDelayText(delay),
+                                           fromPing ? tr(", Auto for that ping") : QString()));
         emit matchStarted(msg);
         resultFighters_.clear();
         // the game may still be coming up (SC5 boots to its hold point in about 40 s): it has that and the start's own
@@ -1643,10 +1640,11 @@ void MatchController::readyInPlace(QString choice) {  // by value: it is often p
     lobbyChoice_ = false;
     atResultTimer_.start(30000);  // the next match comes at once once both are ready
     QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
-                      {QStringLiteral("delay"), cfg::inputDelay()}, {QStringLiteral("relay"), cfg::hideIp()},
+                      {QStringLiteral("relay"), cfg::hideIp()},
                       {QStringLiteral("hide_always"), cfg::hideIpAlways()},
                       {QStringLiteral("link"), server_->linkType()}, {QStringLiteral("in_place"), true},
                       {QStringLiteral("choice"), choice}};
+    cfg::putDelay(ready, cfg::inputDelay());
     if (serverRttMs() >= 0) ready.insert(QStringLiteral("server_rtt"), serverRttMs());
     server_->send(ready);
     setPhase(Phase::AtResult, choice == QLatin1String("select")
@@ -1887,7 +1885,9 @@ bool MatchController::startLocalTest(const QString& gameId, const QString& mode,
     const auto line = [&](int side, int local, int remote) {
         return QStringLiteral("start game=%1 mode=%2 side=%3 local_port=%4 remote=127.0.0.1:%5 delay=%6 seed=%7 "
                               "p1=%8 p2=%9 rounds=5 ranked=0 match=%10")
-            .arg(gameId, mode).arg(side).arg(local).arg(remote).arg(cfg::inputDelay()).arg(seed).arg(p1, p2, match);
+            .arg(gameId, mode).arg(side).arg(local).arg(remote)
+            .arg(cfg::inputDelay() < 0 ? cfg::autoDelayFor(0) : cfg::inputDelay())  // one PC: Auto's least
+            .arg(seed).arg(p1, p2, match);
     };
     localStartA_ = line(1, portA, portB);
     localStartB_ = line(2, portB, portA);

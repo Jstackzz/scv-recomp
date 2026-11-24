@@ -232,7 +232,9 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    (`SC5_CONTROLS`, PROTOCOL.md 3.1); a running game reads it again within a second.
 8. **Settings**: **Server** (address `host:port` and the fingerprint the server's host gives out, *Connect*; with an
    empty fingerprint the launcher shows the presented one and asks whether to trust it), **Online** (region, max
-   ping, input delay 0-4 and *More delay when the ping is high*, the game UDP port (7001), strict ranked, the match
+   ping, input delay (*Auto (from the ping)*, the default since 0.1.4: the server picks the match's delay from the
+   ping measured at its start, 1 frame under 67 ms and a frame more every 33 ms above, 6 at most, the same in both
+   games; or 0-4 frames, played when larger than the other player's), the game UDP port (7001), strict ranked, the match
    found chime, UPnP, *Hide my IP address from opponents* and *Even when the ping through the server is high*),
    **Display**: the window (windowed, borderless, fullscreen), its resolution, the internal resolution (1280x720 as
    on the console, 2x, 3x or 4x), anti-aliasing (off, FXAA, stronger FXAA), texture filtering (the game's own or 2x

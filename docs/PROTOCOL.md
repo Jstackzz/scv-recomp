@@ -263,7 +263,11 @@ S: {"type":"queue_left","reason":"left"}
 - `link` (optional, 0.1.8): the network this PC reaches the server through,
   `ethernet`, `wifi` or `other` (anything else is dropped); shown to the
   opponent with `match_found.connection`.
-- `delay` is the player's preferred input delay in frames (0-4).
+- `delay` is the player's preferred input delay in frames (0-4). Auto (SCV
+  0.1.4, the launcher's default): `"delay_auto":true` (the server also takes
+  MK9 Online's `"delay":"auto"`) with a number for an older server, which
+  ignores the flag (SCV launchers send 1): the match's delay then comes from
+  its measured round trip (1.8 `match_go`).
 - `death_traps` (optional, default `true`): MK3D Online's arenas' death traps, which the server still takes and
   passes on (`match_found`, `match_go`, `spectate`, lobbies). Soulcalibur V has nothing it would turn off: SCV
   launchers never send it, and the start line (3.3) has no key for it.
@@ -404,7 +408,17 @@ S: {"type":"queue_left","reason":"left"}
    mode, in a casual or lobby match too (someone who never played it ranked:
    the starting one; 1.3 `ranks`), for the badges the games draw beside the
    timer (3.3 `p1_rank`). `delay` = the larger of both
-   preferences, at least 1 in ranked. `seed` is
+   preferences, an Auto one's (1.7) from `rtt_ms` (the larger of the two
+   players' measured round trips, the same for both games:
+   `protocol.auto_delay`, the one-way trip's frames rounded up, less one,
+   1 to 6: 1 under 67 ms, 2 to 100, 3 to 133, 4 to 166, 5 to 200, then 6),
+   at least 1 in ranked; both players get the same, and `"delay_auto":true`
+   when an Auto one took part (SCV 0.1.4; a launcher that finds no
+   `delay_auto` in `match_go`, an older server's, raises the delay for the
+   ping itself when its player is on Auto). Before Auto every match of the
+   night of 2026-11-20 ran at delay 1 (the launcher's raise was MK3D
+   Online's, the one-way frames rounded less one: 1 up to 83 ms), a US-UK
+   pair among them, which rolled back up to 5 frames. `seed` is
    a fresh 32-bit value. `death_traps`: always `true` with SCV launchers (1.7).
    `feed`: a lobby match, whose spectators watch it from what both games write
    (1.10.1). Sides are random for queue matches; in a lobby the
@@ -601,7 +615,7 @@ C: {"type":"lobby_leave"}
 C: {"type":"lobby_chat","text":"gg"}
 C: {"type":"lobby_character","character":"Ivy"}
 C: {"type":"lobby_ready","ready":true,"delay":2,"relay":false,"hide_always":false,"link":"wifi","server_rtt":31}
-                                           (delay optional, 0-4; relay, link, server_rtt 0.1.8;
+                                           (delay optional, 0-4, delay_auto 1.7; relay, link, server_rtt 0.1.8;
                                             "in_place":true,"choice":"rematch"|"select" SCV 0.1.4: below)
 C: {"type":"lobby_start"}                       (host only: at once; launchers from 0.1.11 never send it)
 C: {"type":"lobby_settings","death_traps":false}               (host only, 0.1.8; SCV launchers never send it)
@@ -1250,9 +1264,9 @@ the game reads can never be lost. The launcher writes a new command only after t
 | `quit` | exit the process cleanly |
 
 `start` keys: `game` (`sc5`); `mode` (`versus`, `sparring`, `practice`); `side` (local player, 1 or 2); `local_port`
-(UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: the larger of both players' settings,
-raised for the match's ping when the player lets it: the frames of the one-way trip but one, 6 at most; each game
-tells the other its delay when they meet, and both play the larger of the two); `seed` (32 bit, identical on both
+(UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: `match_go`'s, the same in both games,
+the larger of both players' settings, an Auto one's from the match's ping, 1.8; each game tells the other its delay
+when they meet, and both play the larger of the two); `seed` (32 bit, identical on both
 sides); `p1`/`p2` (roster ids from `launcher/data/sc5.json`, identical on both sides, or `-`: the player of that side
 picks on the game's own select screen, below; an id with a costume after a dot, `12.1`, is the game's own character id
 from a `result` line, which the autopilot picks in both games with that costume: a ranked set's winner keeping theirs;

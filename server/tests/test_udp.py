@@ -505,3 +505,49 @@ async def test_no_direct_try_when_the_server_never_does_one(server, connect, udp
 async def test_the_welcome_says_when_a_hidden_match_tries_directly(server, connect):
     a = await connect("Dairou")
     assert a.welcome["direct_above_ms"] == server.cfg.direct_above_ms == 100
+
+
+def test_auto_delay_bands():
+    """An "auto" player's match delay from the round trip: the one-way trip's frames rounded up, less one, 1 to 6."""
+    bands = {0: 1, 20: 1, 50: 1, 66: 1, 67: 2, 90: 2, 100: 2, 101: 3, 133: 3, 134: 4, 166: 4, 167: 5, 200: 5,
+             201: 6, 400: 6}
+    assert {rtt: P.auto_delay(rtt) for rtt in bands} == bands
+    assert P.get_delay({"delay": 1, "delay_auto": True}) == P.DELAY_AUTO
+    assert P.get_delay({"delay": "auto"}) == P.DELAY_AUTO
+    assert P.get_delay({"delay": 3}) == 3 and P.get_delay({}) == 2
+
+
+async def go_with(server, connect, udp_peers, delays: tuple[dict, dict], rtt: int, *, ranked: bool = False):
+    """A queue match whose players searched with these delays, both pings reported as `rtt` ms: both match_go."""
+    a, b = await connect("Cervantes"), await connect("Nightmare")
+    ua, ub = await udp_peers(), await udp_peers()
+    await a.request({**queue_msg(character="Siegfried", ranked=ranked), **delays[0]})
+    await b.request({**queue_msg(character="Ivy", ranked=ranked), **delays[1]})
+    pairs = [(a, ua), (b, ub)]
+    founds = [await conn.expect("match_found") for conn, _ in pairs]
+    for (conn, udp), found in zip(pairs, founds):
+        await hello_and_accept(server, conn, udp, found)
+    peers = [await conn.expect("match_peer") for conn, _ in pairs]
+    reports = await asyncio.gather(*[
+        udp.punch(peer["peer"], match=peer["match"], key=peer["key"], side=peer["side"], timeout=5)
+        for (_, udp), peer in zip(pairs, peers)])
+    for (conn, _), peer, report in zip(pairs, peers, reports):
+        conn.send({"type": "ping_report", "match": peer["match"], **report, "rtt_ms": rtt})
+    return [await conn.expect("match_go") for conn, _ in pairs]
+
+
+async def test_an_auto_delay_comes_from_the_matchs_ping(server, connect, udp_peers):
+    """Auto (delay_auto, the launcher's default since 0.1.4) takes the match's measured round trip: both games get the
+    same delay, the larger of an auto one's and a set one's, and match_go says an auto one took part."""
+    ga, gb = await go_with(server, connect, udp_peers, ({"delay": 1, "delay_auto": True}, {"delay": 0}), 90)
+    assert (ga["delay"], gb["delay"], ga["delay_auto"], gb["delay_auto"]) == (2, 2, True, True)
+
+
+async def test_a_set_delay_overrides_auto_when_larger(server, connect, udp_peers):
+    ga, gb = await go_with(server, connect, udp_peers, ({"delay": "auto"}, {"delay": 4}), 40)
+    assert (ga["delay"], gb["delay"], ga["delay_auto"]) == (4, 4, True)
+
+
+async def test_two_set_delays_ignore_the_ping(server, connect, udp_peers):
+    ga, gb = await go_with(server, connect, udp_peers, ({"delay": 0}, {"delay": 1}), 180)
+    assert (ga["delay"], gb["delay"], ga["delay_auto"]) == (1, 1, False)

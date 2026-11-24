@@ -1071,9 +1071,10 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
     if (!me_ready && cliLobbyReadyFor_ != cliLobbyDone_) {
         cliLobbyReadyFor_ = cliLobbyDone_;
         applog::write(QStringLiteral("cli: ready in lobby %1").arg(lobby.value(QStringLiteral("id")).toString()));
-        server_->send({{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
-                       {QStringLiteral("delay"), cfg::inputDelay()}, {QStringLiteral("relay"), cfg::hideIp()},
-                       {QStringLiteral("hide_always"), cfg::hideIpAlways()}});
+        QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
+                          {QStringLiteral("relay"), cfg::hideIp()}, {QStringLiteral("hide_always"), cfg::hideIpAlways()}};
+        cfg::putDelay(ready, cfg::inputDelay());
+        server_->send(ready);
     }
     // both ready: the server starts the match after its countdown
     if (opts_.lobby == QLatin1String("host") && all_ready && cliLobbyStarts_ == cliLobbyDone_) {

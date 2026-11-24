@@ -1273,7 +1273,7 @@ class Server:
         max_ping = P.get_int(msg, "max_ping", lo=0, hi=2000, default=0)
         strict = P.get_bool(msg, "strict", default=False)
         character = P.get_character(msg)
-        delay = P.get_int(msg, "delay", lo=0, hi=P.DELAY_MAX, default=2)
+        delay = P.get_delay(msg, default=2)
         death_traps = P.get_bool(msg, "death_traps", default=True)
         relay = P.get_bool(msg, "relay", default=False)
         relay_always = relay and P.get_bool(msg, "hide_always", default=False)
@@ -1674,7 +1674,10 @@ class Server:
         m.rtt_ms = rtt
         m.seed = self.rng.getrandbits(32)
         m.deadline = now + self.cfg.max_match_seconds
-        delay = max(p.delay for p in m.players)
+        # the larger of the two players' delays, an "auto" one's from the match's round trip (the larger of the two
+        # measured, the same for both games): both games are told the same delay
+        auto = any(p.delay == P.DELAY_AUTO for p in m.players)
+        delay = max(P.auto_delay(rtt) if p.delay == P.DELAY_AUTO else p.delay for p in m.players)
         if m.ranked:
             delay = max(1, delay)
         p1, p2 = m.players
@@ -1683,7 +1686,8 @@ class Server:
             assert p.session is not None and p.ping is not None
             p.session.send({
                 "type": "match_go", "match": m.id, "game": m.game, "mode": m.mode, "ranked": m.ranked,
-                "side": p.side, "remote": p.ping["remote"], "rtt_ms": rtt, "delay": delay, "seed": m.seed,
+                "side": p.side, "remote": p.ping["remote"], "rtt_ms": rtt, "delay": delay, "delay_auto": auto,
+                "seed": m.seed,
                 "rounds": m.rounds, "p1": p1.character or "-", "p2": p2.character or "-",
                 "p1_name": p1.name, "p2_name": p2.name, "p1_title": titles[0], "p2_title": titles[1],
                 "lobby": m.lobby.id if m.lobby else None, "death_traps": m.death_traps, "feed": m.lobby is not None,
@@ -1692,7 +1696,8 @@ class Server:
             self._start_feed(m)
         self.db.update_match(m.id, status="playing", started=now, seed=m.seed, rtt_ms=rtt)
         tunnelled = " and ".join(p.name for p in m.players if p.tunnel)
-        log.info("match %s go: %s vs %s, rtt %d ms, delay %d%s%s", m.id, p1.name, p2.name, rtt, delay,
+        log.info("match %s go: %s vs %s, rtt %d ms, delay %d%s%s%s", m.id, p1.name, p2.name, rtt, delay,
+                 " (auto)" if auto else "",
                  ", through the relay" if m.relay is not None else "",
                  f" ({tunnelled} tunnelled)" if tunnelled else "")
         self._mark_online()
@@ -2869,7 +2874,7 @@ class Server:
         if member.spectator:
             raise P.ProtocolError("not_player", "Spectators do not ready up: take a place to play first.")
         member.ready = P.get_bool(msg, "ready")
-        member.delay = P.get_int(msg, "delay", lo=0, hi=P.DELAY_MAX, default=member.delay)
+        member.delay = P.get_delay(msg, default=member.delay)
         member.relay = P.get_bool(msg, "relay", default=False)
         member.relay_always = member.relay and P.get_bool(msg, "hide_always", default=False)
         # ready from the last match's result screen, where its loser chose the next match (both launchers say so)
