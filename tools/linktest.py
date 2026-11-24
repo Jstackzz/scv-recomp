@@ -306,6 +306,7 @@ def main():
                 stage = "park"
             elif stage == "park" and all(x == "ready" for x in st) and a.again and not again_done:
                 again_done = True
+                a.park_after = 0  # the second match plays to its end (--park-after parked the first)
                 match = match + "-again"
                 stage = "boot"
                 print(f"{time.time() - t0:7.1f}s again", flush=True)

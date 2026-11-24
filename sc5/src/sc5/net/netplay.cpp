@@ -1118,6 +1118,11 @@ bool Open(const Settings& st) {
   g_ring_frame.fill(-1);
   g_match = 0;
   g_match_delay = -1;
+  // the matches count from 1 again: what the barrier kept of the last session's match 1 (MeetSync) is not this one's.
+  // Kept, its "FIX built / FIXOK came / applied" let both games through the next barrier at once with nothing made
+  // alike, and a match started after a park went out of step at its first check (frame 120: 7 of 7 after a desync on
+  // two players' PCs, 2026-11-20, each time until both games were closed)
+  g_sync = MeetSync{};
   ClearComing();
   g_local_pickable = 0;
   g_opened_at = Clock::now();
