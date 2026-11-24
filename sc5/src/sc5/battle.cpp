@@ -513,6 +513,34 @@ SC5_VISUAL_SYSTEM(sub_82191358)
 SC5_VISUAL_SYSTEM(sub_82191BE0)
 SC5_VISUAL_SYSTEM(sub_82193200)
 SC5_VISUAL_SYSTEM(sub_821929F0)
+//  - the stage's particles (sub_824ADBD8, from the task sub_82489500: its emitters sub_82488708, sub_82488E28 and
+//    sub_82489028 draw each particle's place and speed from Park-Miller, 60 to 70 draws a frame on the stage with
+//    water, ids 21 and 22), whose particles live in heap objects: a game that went back drew its own number of times,
+//    and the next Park-Miller number the fight took came out apart: each player's +0x5DAE0 / +0x5DAF0 (sub_821DF318
+//    from a move's script, sub_821DE088), then the fight itself (health 160 against 68 at frame 5640). Algol against
+//    Yoshimitsu pushed out of the ring, 60 ms each way with jitter and loss: every check apart from frame 480 on
+//    stage 21 and from 570 on stage 22 (2026-11-24); the players of 2026-11-20 lost matches on stage 22 this way.
+SC5_VISUAL_SYSTEM(sub_824ADBD8)
+//  - the effects' emitters, all of them (the module from sub_82373290 to sub_82379B20: every function of it that draws
+//    from a generator itself; sub_82373660 was the first found). A stage has its own (sub_82211950 from the stage's
+//    update fires sub_82374F70, whose sub_82373AF8 drew 6 Park-Miller numbers in one game and 9 in the other at frame
+//    475 on stage 21, the frame before the draw above came out apart: found with SC5_DBG_DRAWS, tools/py/drawscmp.py),
+//    so a match went out of step on the stages whose emitters nobody had met yet
+SC5_VISUAL_SYSTEM(sub_823738C8)
+SC5_VISUAL_SYSTEM(sub_82373AF8)
+SC5_VISUAL_SYSTEM(sub_823761B8)
+SC5_VISUAL_SYSTEM(sub_82376528)
+SC5_VISUAL_SYSTEM(sub_82377488)
+SC5_VISUAL_SYSTEM(sub_82377910)
+SC5_VISUAL_SYSTEM(sub_82378468)
+SC5_VISUAL_SYSTEM(sub_82378B58)
+SC5_VISUAL_SYSTEM(sub_82378D80)
+SC5_VISUAL_SYSTEM(sub_82378E58)
+SC5_VISUAL_SYSTEM(sub_82379438)
+SC5_VISUAL_SYSTEM(sub_82379508)
+SC5_VISUAL_SYSTEM(sub_82379748)
+SC5_VISUAL_SYSTEM(sub_823798B8)
+SC5_VISUAL_SYSTEM(sub_82379B20)
 SC5_VISUAL_SYSTEM(sub_82373660)
 #undef SC5_VISUAL_SYSTEM
 

@@ -25,4 +25,12 @@ bool InVisual();
 // streams went apart before a match, and the intro draws from them)
 void ResetVisual();
 
+// tests: SC5_DBG_DRAWS=<file>: every Park-Miller number the fight draws (not the visual systems'), by match frame, as
+// the frame's last run drew them: "frame: caller:state ..." (the caller's return address, the generator's state before
+// the draw), written once the frame's inputs are all known. Two games' files side by side show the first frame whose
+// draws differ and who drew: a system that draws another number of times when a frame runs again. net/netplay.cpp
+// says which match frame runs (DrawsFrame at each run's top) and which are final (DrawsSettled).
+void DrawsFrame(uint32_t match_frame);
+void DrawsSettled(uint32_t below);
+
 }  // namespace sc5::rng

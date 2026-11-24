@@ -4,6 +4,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <map>
+#include <utility>
 #include <vector>
 
 #include <rex/hook.h>
@@ -107,9 +110,58 @@ void LeaveVisual() {
 
 bool InVisual() { return g_depth > 0; }
 
+namespace {
+bool DrawsOn() {
+  static const bool on = std::getenv("SC5_DBG_DRAWS") != nullptr;
+  return on;
+}
+std::map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> g_draws;  // match frame -> (caller, state before)
+uint32_t g_draws_frame = 0xFFFFFFFFu;
+FILE* g_draws_file = nullptr;
+}  // namespace
+
+void DrawsFrame(uint32_t match_frame) {
+  if (!DrawsOn()) return;
+  g_draws_frame = match_frame;
+  g_draws[match_frame].clear();
+}
+
+void DrawsSettled(uint32_t below) {
+  if (!DrawsOn()) return;
+  if (!g_draws_file) g_draws_file = std::fopen(std::getenv("SC5_DBG_DRAWS"), "w");
+  while (!g_draws.empty() && g_draws.begin()->first < below) {
+    if (g_draws_file) {
+      std::fprintf(g_draws_file, "%u:", g_draws.begin()->first);
+      for (const auto& [caller, state] : g_draws.begin()->second) std::fprintf(g_draws_file, " %08X:%08X", caller, state);
+      std::fputc('\n', g_draws_file);
+    }
+    g_draws.erase(g_draws.begin());
+  }
+  if (g_draws_file) std::fflush(g_draws_file);
+}
+
+void NoteDraw(uint32_t caller) {
+  if (!DrawsOn() || g_depth > 0 || g_draws_frame == 0xFFFFFFFFu || !frame::OnMainThread()) return;
+  uint32_t state;
+  std::memcpy(&state, Mem()->TranslateVirtual<const uint8_t*>(kParkMiller), 4);
+  g_draws[g_draws_frame].emplace_back(caller, __builtin_bswap32(state));
+}
+
 void ResetVisual() { g_visual.valid = false; }
 
 }  // namespace sc5::rng
+
+// tests: the fight's Park-Miller draws by caller (SC5_DBG_DRAWS)
+REX_EXTERN(__imp__sub_824A33D8);
+REX_EXTERN(__imp__sub_824A3248);
+REX_HOOK_RAW(sub_824A33D8) {
+  sc5::rng::NoteDraw(uint32_t(ctx.lr));
+  __imp__sub_824A33D8(ctx, base);
+}
+REX_HOOK_RAW(sub_824A3248) {
+  sc5::rng::NoteDraw(uint32_t(ctx.lr));
+  __imp__sub_824A3248(ctx, base);
+}
 
 REX_HOOK_RAW(sub_82195D48) {
   sc5::rng::EnterVisual(ctx, base);

@@ -1607,9 +1607,27 @@ void ReseedAtStateChange(PPCContext& ctx, uint8_t* base) {
   game::SetSeed(int64_t(g_match_seed));
 }
 
+// The fight's random numbers from the match's seed and the frame's number, at the top of every run of every frame of a
+// match (its first run, each rerun, a spectator's). The generators are kept with a frame and put back by a rollback,
+// but a system whose own state rollback cannot put back (an emitter of effects, a stage's particles: heap objects)
+// draws another number of times in a frame run again, and from then on every number the fight drew was another in the
+// game that went back: one such system nobody had met was enough to part two games for the rest of the match (stage 21,
+// battle.cpp). Seeded per frame, what a frame draws depends on nothing an earlier frame drew, in either game.
+// (The known systems of that kind still draw from the visual states, sc5/rng.h: within a frame the fight's draws must
+// not come after theirs.) SC5_NET_NO_FRAME_SEED (tests): as before, seeded where the battle's state changes only.
+void SeedFrame(PPCContext& ctx, uint8_t* base, uint32_t f) {
+  static const bool off = std::getenv("SC5_NET_NO_FRAME_SEED") != nullptr;
+  if (off || !g_match_seed) return;
+  const uint32_t seed = (g_match_seed ^ (f * 0x9E3779B9u)) + 0x7F4A7C15u;
+  game::SetSeed(int64_t(seed));
+  game::Reseed(ctx, base, seed);
+  game::SetSeed(int64_t(g_match_seed));
+}
+
 // frame f's inputs: what the game's pad reads get until the next frame's top (and its count of frames shown)
 void SetFrameInputs(uint32_t f) {
   Put32(kFramesShown, g_shown_base + f);
+  rng::DrawsFrame(f);
   // tests: SC5_TEST_DESYNC_AT=<match frame>: this game's player 1 loses a point of health there, in every run of that
   // frame (a desync made to order: what the check, the detail exchange and the launcher do with one)
   static const uint32_t desync_at = std::getenv("SC5_TEST_DESYNC_AT") ? uint32_t(std::atoi(std::getenv("SC5_TEST_DESYNC_AT"))) : 0;
@@ -1726,6 +1744,50 @@ void Lost(Status s) {
   REXLOG_WARN("sc5 net: match {} over: {}", g_match, StatusName(s));
 }
 
+// tests: SC5_NET_CHECK_RESTORE=1: right after a rollback put a kept frame back, the battle is saved again and compared
+// with what was kept: every word of the fight the game's restore left otherwise (it sets some things up anew rather
+// than putting them back: a game that went back then has them otherwise than one that did not, and the next check
+// fails though both fights went the same way). The first 40 restores that differ are logged.
+void ProbeRestore(PPCContext& ctx, uint8_t* base, uint32_t kept, uint32_t frame) {
+  static const bool on = std::getenv("SC5_NET_CHECK_RESTORE") != nullptr;
+  static uint32_t probe = 0;
+  static int logged = 0;
+  if (!on || logged >= 40) return;
+  if (!probe) probe = battle::NewStream();
+  if (!probe || !battle::Save(ctx, base, probe)) return;
+  const auto* a = battle::Blocks(kept);
+  const auto* b = battle::Blocks(probe);
+  const uint8_t* da = battle::Data(kept);
+  const uint8_t* db = battle::Data(probe);
+  if (!a || !b || !da || !db) return;
+  std::string where;
+  int words = 0;
+  if (a->size() != b->size()) where = fmt::format(" {} blocks kept, {} now;", a->size(), b->size());
+  for (size_t i = 0; i < a->size() && i < b->size(); i++) {
+    const battle::Block& x = (*a)[i];
+    const battle::Block& y = (*b)[i];
+    if (x.size != y.size) {
+      where += fmt::format(" block {} ({}) {} bytes kept, {} now;", i, PlaceName(x.source), x.size, y.size);
+      break;
+    }
+    if (x.source != y.source && x.source >= 0x80000000u && x.source < 0xA0000000u) {
+      where += fmt::format(" block {} from {} kept, {} now;", i, PlaceName(x.source), PlaceName(y.source));
+      break;
+    }
+    for (uint32_t o = 0; o + 4 <= x.size; o += 4) {
+      if (!std::memcmp(da + x.pos + o, db + y.pos + o, 4) || battle::KindOf(x.source + o) != battle::Kind::Fight) continue;
+      uint32_t va, vb;
+      std::memcpy(&va, da + x.pos + o, 4);
+      std::memcpy(&vb, db + y.pos + o, 4);
+      if (words++ < 24)
+        where += fmt::format(" {}:{:08X}>{:08X}", PlaceName(x.source + o), __builtin_bswap32(va), __builtin_bswap32(vb));
+    }
+  }
+  if (where.empty()) return;
+  logged++;
+  REXLOG_INFO("sc5 net: the restore of frame {} left {} words of the fight otherwise:{}", frame, words, where);
+}
+
 // Inputs that came for frames that ran on a guess: when a guess was wrong, the battle goes back to the top of that
 // frame and the frames since run again with what is known now. False when it cannot go back that far.
 bool CorrectGuesses(PPCContext& ctx, uint8_t* base) {
@@ -1751,6 +1813,7 @@ bool CorrectGuesses(PPCContext& ctx, uint8_t* base) {
     REXLOG_ERROR("sc5 net: the game would not take back frame {}", wrong);
     return false;
   }
+  ProbeRestore(ctx, base, g_ring[slot], wrong);
   frame::SetCount(g_ring_count[slot]);
   input::KeysBack(g_ring_count[slot]);
   sound::RollbackBegin(g_ring_count[slot]);
@@ -1770,6 +1833,7 @@ bool CorrectGuesses(PPCContext& ctx, uint8_t* base) {
         g_ring_frame[f % kRing] = -1;  // the first run's snapshot of it is of the guess
       }
     }
+    SeedFrame(ctx, base, f);
     SetFrameInputs(f);
     sparring::OnFrame(f);  // Online Practice's rules, as the frame's first run had them
     DumpAtTop(ctx, base, f);
@@ -2427,6 +2491,7 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
     WatchNeutral();
     ReseedAtStateChange(ctx, base);  // as the players' games do
     ReplaySkipTop();
+    SeedFrame(ctx, base, g_frame);
     SetFrameInputs(g_frame);
     sparring::OnFrame(g_frame);
     WatchCheck(ctx, base, g_frame);
@@ -2450,6 +2515,7 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   g_waiting = false;
   ReseedAtStateChange(ctx, base);
   ReplaySkipTop();
+  SeedFrame(ctx, base, g_frame);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);
   WatchCheck(ctx, base, g_frame);
@@ -2630,12 +2696,14 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
   }
   ReplaySkipTop();
+  SeedFrame(ctx, base, g_frame);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);  // Online Practice's rules at the frame's top, after it was kept (a rerun starts there)
   SettleChecks();
   CompareChecks();
   DumpAtTop(ctx, base, g_frame);
   DumpSettled(g_rolling ? g_peer.confirmed : g_frame + 1);
+  rng::DrawsSettled(g_rolling ? g_peer.confirmed : g_frame);
 }
 
 // tests: SC5_NET_DUMP_AT=<frame>,...: the battle's snapshot at the top of those match frames (their inputs set) as the
