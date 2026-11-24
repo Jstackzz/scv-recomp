@@ -31,6 +31,8 @@ def counted(a):
                 if dr <= o < dr + 0x800:
                     return False
             return not (0x22638 <= o < 0x5DAD4 and any(p <= o < p + 4 for p in PTRS))
+    if 0x829F55D0 <= a < 0x829F55D0 + 16 * 64 and (a - 0x829F55D0) % 64 < 8:
+        return False
     if 0x829F3330 <= a < 0x829F3330 + 880 and 16 <= (a - 0x829F3330) % 176 < 20:
         return False
     if (0x829F5528 <= a < 0x829F5530 or 0x829F59D4 <= a < 0x829F59D8 or 0x829F55D0 <= a < 0x829F55D8

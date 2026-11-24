@@ -411,7 +411,11 @@ Kind KindOf(uint32_t source) {
   // in the two games), the number different from game to game and run to run like the float at +0xC44: Elysium against
   // Edge Master as their next styles loaded, 1468 against 1477, 1383 against 1577, 1553 against 1387, the fights alike
   // in all else to the match's end and the next round on the same frame (40 ms each way, 2026-11-18)
-  if (source >= 0x829F55D0u && source < 0x829F55D8u) return Kind::Pointer;
+  // (... and so in each of the 16 entries of that list, 64 bytes apart: sub_8220F370 adds an entry a kind of thing the
+  // stage does, and a fight with more of them fills the next ones: the second's number 829 against 944 from frame 810
+  // on stage 27, 537 against 684 from 3630 on stage 11, the third's 1563 against 1860, Algol against Yoshimitsu pushed
+  // out of the ring with 60 ms each way, 2026-11-24; the fights alike in all else to the same result)
+  if (source >= 0x829F55D0u && source < 0x829F55D0u + 16 * 64 && ((source - 0x829F55D0u) & 63) < 8) return Kind::Pointer;
   // ... and the number each of five effect slots is made with (the pool at 0x829F3330: 176 bytes a slot, taken in turn,
   // +880; sub_82184A58 from a move's script hands sub_821845F0 a word of its fighter's, which that keeps at the slot's
   // +16): 1 in one game and 2 in the other from frame 355 to the match's end, Algol against Yoshimitsu on stage 1C with
