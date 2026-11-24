@@ -2549,8 +2549,7 @@ class Server:
         return s.lobby
 
     def on_lobby_create(self, s: Session, msg: dict[str, Any]) -> None:
-        if s.queue is not None or s.lobby is not None or s.match is not None:
-            raise P.ProtocolError("busy", "Leave the queue, lobby or match first.")
+        self._not_busy_for_lobby(s)
         game, mode = P.get_game_mode(msg)
         self._quit_series(s)
         default_name = f"{s.name}'s lobby"
@@ -2574,7 +2573,9 @@ class Server:
         self._member_connection(host, msg)
         # Online Practice is for its two players alone: nobody watches it
         spectators = 0 if mode in P.LOBBY_ONLY_MODES else self.cfg.max_spectators
-        lobby = Lobby(id=self._new_lobby_code(), name=name, game=game, mode=mode, region=region, rounds=rounds,
+        code = self._new_lobby_code()
+        self._switch_lobby(s, code)  # everything checked: out of the one this player was in
+        lobby = Lobby(id=code, name=name, game=game, mode=mode, region=region, rounds=rounds,
                       password=password, host=s, members=[host], created=time.time(),
                       death_traps=death_traps, max_spectators=spectators, koth=koth)
         self.lobbies[lobby.id] = lobby
@@ -2592,13 +2593,35 @@ class Server:
                  if (game is None or lb.game == game) and lb.mode not in P.LOBBY_ONLY_MODES]
         self._reply(s, msg, {"type": "lobbies", "lobbies": items})
 
+    def _switch_lobby(self, s: Session, to: str) -> None:
+        """A session is in one lobby at most: one that creates or joins another leaves the one it is in first (its
+        match not under way: `busy` then), told so with `lobby_left` naming the lobby it goes to (`joined`)."""
+        old = s.lobby
+        if old is None:
+            return
+        self._leave_lobby(s)
+        s.send({"type": "lobby_left", "lobby": old.id, "joined": to})
+        log.info("lobby %s: %s went on to lobby %s", old.id, s.name, to)
+
+    def _not_busy_for_lobby(self, s: Session) -> None:
+        """Creating or joining a lobby: not while searching, nor while a match of this player's is set up or runs
+        (one in the lobby they are in included); a lobby they are in otherwise is left for the new one."""
+        if s.queue is not None:
+            raise P.ProtocolError("busy", "You are searching for a match: cancel the search first.")
+        if s.match is not None:
+            raise P.ProtocolError("busy", "Your match is still on: finish it first.")
+
     def on_lobby_join(self, s: Session, msg: dict[str, Any]) -> None:
-        if s.queue is not None or s.lobby is not None or s.match is not None:
-            raise P.ProtocolError("busy", "Leave the queue, lobby or match first.")
+        self._not_busy_for_lobby(s)
         code = P.get_str(msg, "lobby", max_len=16).strip().upper()
         lobby = self.lobbies.get(code)
         if lobby is None:
             raise P.ProtocolError("no_such_lobby", "No lobby with that code.")
+        if s.lobby is lobby:  # already in it: its state again, nothing changes
+            state = lobby.full_state(lambda m: self._title_of(m.account_id, lobby.game, lobby.mode),
+                                     lambda m: self._respect_of(m.account_id, lobby.game, lobby.mode))
+            self._reply(s, msg, {"type": "lobby", "lobby": state})
+            return
         spectate = P.get_bool(msg, "spectate", default=False)
         if lobby.mode in P.LOBBY_ONLY_MODES and (spectate or len(lobby.players()) >= 2):
             raise P.ProtocolError("lobby_full", "Online Practice is for two players, and this one has both.")
@@ -2617,6 +2640,7 @@ class Server:
         password = P.get_str(msg, "password", default="", max_len=64)
         if lobby.password and not hmac.compare_digest(lobby.password.encode(), password.encode()):
             raise P.ProtocolError("bad_lobby_password", "Wrong lobby password.")
+        self._switch_lobby(s, lobby.id)  # everything checked: out of the one this player was in
         self._quit_series(s)
         character = "" if lobby.mode in P.LOBBY_ONLY_MODES else P.get_character(msg)  # Online Practice: picked in game
         member = LobbyMember(s, character, spectator=spectate or in_line)

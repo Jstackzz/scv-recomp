@@ -635,8 +635,14 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
 - The full `lobby` state is pushed to every member after any change; `chat`
   holds the last 30 messages. Chat text: 1-200 characters, at most one
   message per 0.5 s per player (`slow_down`).
-- `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy`,
-  `no_such_lobby`, `lobby_full`, `bad_lobby_password`. `rounds` is 1, 3 or 5, the best of (the launcher names them
+- `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy` (searching,
+  or a match of this player's set up or running), `no_such_lobby`, `lobby_full`,
+  `bad_lobby_password`. A session is in one lobby at most (SCV 0.1.4): creating or
+  joining another one, once the server has checked it lets the player in, leaves the
+  one they are in, as `lobby_leave` would, and says so first with
+  `{"type":"lobby_left","lobby":"<the old one>","joined":"<the new one>"}` (until
+  then `busy`); a request turned away leaves them where they were, and joining the
+  lobby they are in replies with its state. `rounds` is 1, 3 or 5, the best of (the launcher names them
   1, 2 or 3 rounds to win, 3 by default); matchmaking's matches are best of 5, first to 3 as the console's Battle Count.
 - Two players both ready start the lobby's match by themselves (0.1.11): the
   server counts down 3 s (`starts_in`, the seconds left, in every `lobby` state
