@@ -174,7 +174,7 @@ async def test_a_desync_report_is_logged_with_the_player(server, connect, caplog
     assert any("DESYNC_REPORT Raiden sc5" in m and "match 7658cd7bfcd7 at frame 30: 2 lines" in m for m in said)
     assert any(m == "DESYNC_REPORT Raiden | " + lines[1] for m in said)
     for bad in ({"lines": ["bad\x07line"]}, {"lines": "not a list"}, {"lines": ["x" * 201]},
-                {"lines": ["line"] * 41}, {"frame": -1, "lines": []}, {"frame": True, "lines": []},
+                {"lines": ["line"] * 201}, {"frame": -1, "lines": []}, {"frame": True, "lines": []},
                 {"game": "nope", "lines": []}):
         with pytest.raises(ServerError) as exc:
             await c.request({"type": "desync_report", "game": "sc5", "match": "m", "frame": 30, **bad})

@@ -43,7 +43,32 @@ NEEDS_LOGIN = {
 }
 CRASH_REPORTS_PER_SESSION = 20  # a game crashing over and over says so this many times, then no more
 DESYNC_REPORTS_PER_SESSION = 10  # matches out of step a session reports, then no more
-DESYNC_LINES = 40  # a desync report's lines from the game's log, 200 characters each at most
+# a desync report's lines from the game's log, 200 characters each at most (40 until SCV 0.1.4, when the game's own
+# `sc5 desync:` detail lines, up to about 80, came after its failed check); the message may be up to
+# P.MAX_DESYNC_LINE long, every other one P.MAX_LINE
+DESYNC_LINES = 200
+DESYNC_WAIT = 600.0  # a match's first desync report waits this long for the other player's (DESYNC_PAIR)
+DESYNC_PENDING_MAX = 500  # reports waiting for their pair at most
+# what a desync report's lines say of the match, for DESYNC_PAIR (the game's log, sc5/src/sc5: versus.cpp, autopilot)
+DESYNC_STAGE = re.compile(r"sc5 versus: (?:VS settings .*\bstage ([0-9A-Fa-f]+)|(?:player 1's )?stage ([0-9A-Fa-f]+),)")
+DESYNC_PICK = re.compile(r"autopilot: side ([12]) picked (.{1,40}?) \(slot")
+DESYNC_START_PICKS = re.compile(r"link: (?:command )?(?:start|rematch)\b.*\bp1=(\S+) p2=(\S+)")
+
+
+def desync_setup(lines: list[str]) -> tuple[str, tuple[str, str]]:
+    """The stage and the two fighters a desync report's lines name (the last of each before anything else): the
+    game's stage number as it logs it, the fighters by name ("?" for what the lines leave out)."""
+    stage, picks, named = "?", ["?", "?"], ["?", "?"]
+    for line in lines:
+        if (m := DESYNC_STAGE.search(line)) is not None:
+            stage = m.group(1) or m.group(2)
+        elif (m := DESYNC_PICK.search(line)) is not None:
+            picks[int(m.group(1)) - 1] = m.group(2)
+        elif (m := DESYNC_START_PICKS.search(line)) is not None:
+            named = [p if p not in ("-", "") else "?" for p in (m.group(1), m.group(2))]
+            picks = ["?", "?"]  # a later match's start: its own picks come after it
+    fighters = tuple(p if p != "?" else n for p, n in zip(picks, named))
+    return stage, (fighters[0], fighters[1])
 LEFT_LINES = 20  # a game that ended before its match started: its log's last lines, 200 characters each at most
 CRASH_TEXT = re.compile(r"[\x20-\x7E]*")  # printable ASCII only: it goes into the log as is
 # F3 reports (what a player saw drawn wrong: the game's capture, its log), docs/PROTOCOL.md 1.13.2
@@ -143,6 +168,19 @@ class ServerConfig:
     upnp_renew: float = 1200.0
     scrypt_n: int = auth.SCRYPT_N
     mm: MatchmakingConfig = field(default_factory=MatchmakingConfig)
+
+
+@dataclass
+class DesyncSide:
+    """One player's desync report of a match, waiting for the other's (DESYNC_PAIR)."""
+
+    account: int
+    name: str
+    frame: int
+    version: str
+    stage: str
+    fighters: tuple[str, str]
+    at: float
 
 
 @dataclass
@@ -576,6 +614,7 @@ class Server:
         self.relay_routes: dict[tuple[str, int], RelayRoute] = {}
         self.tunnel_routes: dict[int, RelayRoute] = {}  # by account: what a tunnelled player sends
         self.ping_cache = PingCache()
+        self.desyncs: dict[str, DesyncSide] = {}  # by match: a desync report waiting for the other player's
         self.login_failures: dict[str, collections.deque[float]] = {}
         self.tcp_port = self.cfg.port
         self.udp_port = self.cfg.udp_port
@@ -651,7 +690,7 @@ class Server:
         self.db = Database(self.cfg.db_path)
         loop = asyncio.get_running_loop()
         self._tcp = await asyncio.start_server(
-            self._handle, self.cfg.host, self.cfg.port, ssl=ssl_ctx, limit=P.MAX_LINE + 2
+            self._handle, self.cfg.host, self.cfg.port, ssl=ssl_ctx, limit=P.MAX_DESYNC_LINE + 2
         )
         self.tcp_port = self._tcp.sockets[0].getsockname()[1]
         transport, _ = await loop.create_datagram_endpoint(
@@ -804,7 +843,7 @@ class Server:
                     break
                 if not line:
                     break
-                if len(line) > P.MAX_LINE + 2:
+                if len(line) > P.MAX_LINE + 2 and not self._long_line_allowed(line):
                     s.send({"type": "error", "code": "too_long", "message": "Message too long."})
                     break
                 line = line.strip()
@@ -817,6 +856,17 @@ class Server:
             s.close()
             with suppress(Exception):
                 await asyncio.wait_for(writer.wait_closed(), timeout=2)
+
+    @staticmethod
+    def _long_line_allowed(line: bytes) -> bool:
+        """Every message is MAX_LINE long at most but a desync report, which may be MAX_DESYNC_LINE (its lines: the
+        game's detail after the failed check, SCV 0.1.4); anything else that long closes the connection."""
+        if len(line) > P.MAX_DESYNC_LINE + 2:
+            return False
+        try:
+            return P.decode_line(line.strip()).get("type") == "desync_report"
+        except P.ProtocolError:
+            return False
 
     def _drop(self, s: Session) -> None:
         if s not in self.sessions:
@@ -2756,7 +2806,32 @@ class Server:
                  s.client_version or "?", match or "?", frame, len(lines))
         for line in lines:
             log.info("DESYNC_REPORT %s | %s", s.name, line)
+        self._pair_desync(s, match, frame, lines)
         self._reply(s, msg, {"type": "desync_ack"})
+
+    def _pair_desync(self, s: Session, match: str, frame: int, lines: list[str]) -> None:
+        """Both players' reports of one match in: one DESYNC_PAIR line names the two players, the frames each game
+        saw the check fail at, the stage and the two fighters (from each report's lines), so a night's desyncs read
+        at a glance from the journal. A report waits for the other's DESYNC_WAIT seconds at most."""
+        if not match or s.account_id is None:
+            return
+        now = time.time()
+        for key in [k for k, d in self.desyncs.items() if d.at < now - DESYNC_WAIT]:
+            del self.desyncs[key]
+        mine = DesyncSide(s.account_id, s.name or "?", frame, s.client_version or "?", *desync_setup(lines), now)
+        other = self.desyncs.get(match)
+        if other is None or other.account == mine.account:
+            if len(self.desyncs) < DESYNC_PENDING_MAX:
+                self.desyncs[match] = mine
+            return
+        del self.desyncs[match]
+        a, b = other, mine
+        stage = a.stage if a.stage == b.stage else f"{a.stage} / {b.stage} (they differ)"
+        fighters = (" vs ".join(a.fighters) if a.fighters == b.fighters
+                    else f"{' vs '.join(a.fighters)} / {' vs '.join(b.fighters)} (they differ)")
+        log.info("DESYNC_PAIR %s %s at frame %d, %s at frame %d%s; stage %s; %s (launchers %s and %s)", match,
+                 a.name, a.frame, b.name, b.frame, "" if a.frame == b.frame else " (the frames differ)", stage,
+                 fighters, a.version, b.version)
 
     def _reports_bytes(self) -> int:
         total = 0

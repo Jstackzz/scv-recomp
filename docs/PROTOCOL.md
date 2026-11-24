@@ -51,8 +51,8 @@ Spirit Sword 1915, Eternal Soul 2035; a new player starts at 475.
   trust on first use).
 - Framing: **newline-delimited JSON**. Every message is one JSON object encoded
   as UTF-8 on a single line terminated by `\n` (a preceding `\r` is
-  tolerated). Maximum line length 16 384 bytes; the server closes connections
-  that exceed it.
+  tolerated). Maximum line length 16 384 bytes (a `desync_report` 65 536,
+  1.13.1); the server closes connections that exceed it.
 - Every object has a `"type"` string. Unknown fields are ignored by both sides
   (forward compatibility). Unknown types get `error{code:"unknown_type"}`.
 - A request may carry `"id"` (any JSON scalar). The direct reply to that
@@ -893,26 +893,59 @@ S: {"type":"desync_ack"}
 A launcher whose match went out of step (its game's `desync` status, after the
 `result` with outcome `desync`) sends what its game logged of it: from the log's
 start, Windows, the processor and the game's executable (the log's `Game:` line, `default.xex` and its
-SHA-1); from the match's start (the link's `start` line), the picks, the setup
-both games agreed on (or the lines saying it differs) and the failed check (the
-per-second stats left out; 36 lines at most); last, the game's extracted files:
-how many, how large, and a hash of their names and sizes (a modded or reduced
-copy of the disc differs there), and (SCV 0.1.2) the PC: `This PC: <processor>,
-<n> threads, Windows <kernel version>, game code for <x86-64-v3 or v2>` (what
-build-game.cmd compiled the game's code for there). SCV's game logs its
-netplay as `sc5 net:` (the failed check: `DESYNC at frame <f>: <hash> here,
-<hash> there`), its setup as `sc5 versus:`, its picks as `autopilot: side <n>
-picked`: the report takes those, and the game's own errors and warnings but the
-graphics' (which repeat by the thousand). IP addresses and user folders are taken out.
+SHA-1); from the match's start (the link's `start` or `rematch` line, and the
+`command` line the game logs before it), the lines below; last, the game's
+extracted files: how many, how large, and a hash of their names and sizes (a
+modded or reduced copy of the disc differs there), and (SCV 0.1.2) the PC:
+`This PC: <processor>, <n> threads, Windows <kernel version>, game code for
+<x86-64-v3 or v2>` (what build-game.cmd compiled the game's code for there).
+SCV's game logs its netplay as `sc5 net:` (the failed check: `DESYNC at frame
+<f>: <hash> here, <hash> there`), its setup as `sc5 versus:`, its picks as
+`autopilot: side <n> picked`; from SCV 0.1.4 it writes detail lines right after
+the failed check, each with `sc5 desync:` (up to about 80, at most 200
+characters each). Of the match's lines the report keeps (SCV 0.1.4):
+
+- every `sc5 desync:` line (100 at most);
+- the setup: the start, the picks, the stage, the meeting, the words both games
+  agreed on, the blocks of the fight (40 at most);
+- of the statistics the game logs every 10 s (`... rollbacks (...`, `keeping a
+  frame top ...`), only the last report before the failed check;
+- the last 30 other lines before the failed check (round ends, ring outs, the
+  game's own errors and warnings, not the graphics', which repeat by the
+  thousand), the failed check itself, and up to 10 lines after it;
+
+in the log's order, 200 lines and about 56,000 characters at most (past that
+the other lines go first, the oldest first, then the detail from its last).
+Until 0.1.4 it kept 36 lines, the statistics among them (MK3D Online's filter,
+`netplay: frame <n>:`, never matched SCV's `sc5 net: frame <n>: ... rollbacks`),
+so in a long match the statistics filled it and the lines just before the check
+(the round's end, a ring out) were cut. IP addresses and user folders are taken
+out.
+
 The server logs each line with the player's name (`DESYNC_REPORT <name> |
 <line>`, after a line naming the game, launcher version, match and frame), so
 both players' reports of a match stand side by side, and keeps nothing: at most
-40 lines of 200 printable characters (else `bad_request`), 10 reports a session.
+200 lines (40 until SCV 0.1.4) of 200 printable characters (else
+`bad_request`), 10 reports a session. A `desync_report` alone may be a line of
+up to 64 KB (`MAX_DESYNC_LINE`; every other message still 16 KB, 1.1, else
+`too_long` and the connection closed). Once both players' reports of a match
+are in (two accounts, the same `match`, within 10 minutes), the server logs one
+summary line, so a night's desyncs read at a glance from the journal:
+
+```
+DESYNC_PAIR 7658cd7bfcd7 Taki at frame 41730, Kilik at frame 41730; stage 17; Siegfried vs Mitsurugi (launchers 0.1.4 and 0.1.4)
+```
+
+with each report's frame (`(the frames differ)` when they do), the stage as the
+game logs it (its `sc5 versus:` line) and the two fighters (the picks, else the
+start line's `p1`/`p2`), each pair of them followed by `(they differ)` when the
+two reports disagree (`?` for what a report's lines leave out).
+
 From 0.1.24 the failed check's lines are followed by the blocks it covered as
 short hashes (`netplay: frame 3300 block 1 at 002E9704, pieces 0-29: ...`: each
 block's 64-byte pieces, 16 bits a piece, pointers left out as the check leaves
 them): the pieces that differ between the two players' reports are where the
-games parted.
+games parted (MK3D Online's game; SCV's detail is its `sc5 desync:` lines).
 
 From 1.0.2 a game checks every 30th frame once both players' real inputs before
 it are in (before, only a frame that happened to run on real inputs alone was
@@ -927,11 +960,10 @@ math follows the host's) and display, and `netplay: differs at <frame>, block <n
 <16 words>` for every piece the other game's hashes disagree with (12 at most),
 so the server's log holds both players' words side by side. The desync status
 waits for that, 2 s at most; with an older game on the other side the piece
-hashes come as before. The report keeps every line from the failed check's on
-(28 at most) and fills the rest of its 36 with the match's first lines; the
-game files' line adds `contents <hash>`, every file's bytes hashed once in the
-background (`game-files-<game>.txt` beside the launcher keeps each file's hash,
-size and time), or `contents not hashed yet`.
+hashes come as before (MK3D Online's game). The game files' line adds `contents
+<hash>`, every file's bytes hashed once in the background
+(`game-files-<game>.txt` beside the launcher keeps each file's hash, size and
+time), or `contents not hashed yet`.
 
 ### 1.13.2 F3 reports (0.1.18)
 

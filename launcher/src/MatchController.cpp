@@ -20,6 +20,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -231,55 +232,127 @@ QString reportLine(const QByteArray& raw) {
 }
 
 // What a desync report says of a game's log (PROTOCOL.md 1.13.1): the PC (Windows, processor, the game's executable)
-// from the log's start, then the last match's lines from its start (the link's "start" line): the picks, the setup
-// both games agreed on (or did not), the check that failed and its detail (where the two games parted, the words that
-// differ); the per-second stats left out, 36 lines at most: every line from the failed check's on (28 at most), then
-// as many of the match's first lines as fit
+// from the log's start, then the match's lines, from its start (the link's start or rematch line) on: its setup (the
+// start, the picks, the stage, the meeting, the words both games agreed on, the blocks of the fight), the last
+// statistics report before the failed check (the per-10-s ones were most of a report before 0.1.4 and pushed out
+// what came just before the check), the last 30 other lines before the check (round ends, ring outs, the game's own
+// errors and warnings), the check, every `sc5 desync:` line (the game's detail after its check, up to about 80) and a
+// few lines after those. At most kDesyncChars characters, as the server's message limit allows (the other lines go
+// first, the oldest first, then detail lines from the last)
+constexpr qsizetype kDesyncChars = 56000, kDesyncLines = 198;
 QStringList desyncLines(const QString& sessionDir) {
     QFile file(QDir(sessionDir).filePath(QStringLiteral("game.log")));
     if (!file.open(QIODevice::ReadOnly)) return {};
-    QStringList out;
+    QStringList head;
     for (const QByteArray& raw : file.read(16384).split('\n')) {
         if (raw.contains("] OS: ") || raw.contains("] CPU: ") || raw.contains("] Game: "))
-            out << reportLine(raw);
+            head << reportLine(raw);
     }
-    file.seek(std::max<qint64>(0, file.size() - 262144));
+    // a long match (stats every 10 s) and the detail: the log's last megabyte
+    file.seek(std::max<qint64>(0, file.size() - (1 << 20)));
     const QList<QByteArray> tail = file.readAll().split('\n');
-    qsizetype start = tail.size();
-    for (qsizetype i = tail.size() - 1; i >= 0; --i) {
-        if (tail[i].contains("link: start ")) {
+    // the failed check (the last one: the match being reported), and the match it is in: the last start before it
+    qsizetype check = -1;
+    for (qsizetype i = tail.size() - 1; i >= 0 && check < 0; --i)
+        if (tail[i].contains("DESYNC at frame")) check = i;
+    const qsizetype end = check >= 0 ? check : tail.size();
+    qsizetype start = 0;
+    for (qsizetype i = end - 1; i >= 0; --i) {
+        if (tail[i].contains("link: start ") || tail[i].contains("link: rematch") ||
+            tail[i].contains("link: command start") || tail[i].contains("link: command rematch")) {
             start = i;
+            // the command line the game logs just before (its p1= and p2=, what the start line does not say)
+            if (i > 0 && tail[i - 1].contains("link: command ")) start = i - 1;
             break;
         }
     }
-    static const QRegularExpression stats(QStringLiteral("netplay: frame \\d+: "));
-    QStringList match;
-    for (qsizetype i = start; i < tail.size(); ++i) {
-        const QByteArray& raw = tail[i];
-        // SC5's game: its netplay ("sc5 net:", the failed check with both hashes), the link, the VS setup both games
-        // agreed on, the picks, and its own errors and warnings (not the graphics', which repeat by the thousand)
+    static const QRegularExpression oldStats(QStringLiteral("netplay: frame \\d+: "));  // MK3D Online's statistics
+    const auto isStats = [](const QByteArray& raw) {
+        return raw.contains("rollbacks (") || raw.contains("keeping a frame top") ||
+               oldStats.match(QString::fromLatin1(raw)).hasMatch();
+    };
+    const auto isDetail = [](const QByteArray& raw) { return raw.contains("sc5 desync:"); };
+    const auto isSetup = [](const QByteArray& raw) {
+        for (const char* key : {"link: start", "link: rematch", "link: command start", "link: command rematch",
+                                "autopilot: side", "sc5 versus:", "autopilot: the stage", "stage select took",
+                                "meeting for match", "agreed words", "of the fight", " in sync, seed",
+                                "sc5 net: player ", "netplay: stage", "picked character"})
+            if (raw.contains(key)) return true;
+        return false;
+    };
+    // what of the game's log a report may carry: SC5's netplay ("sc5 net:"), the link, the VS setup, the picks, the
+    // detail, and the game's own errors and warnings (not the graphics', which repeat by the thousand)
+    const auto isWanted = [&](const QByteArray& raw) {
         const bool sc5 = raw.contains("sc5 net:") || raw.contains("sc5 versus:") || raw.contains("autopilot: side") ||
                          ((raw.contains("[error]") || raw.contains("[warning]")) && !raw.contains("[gpu]"));
-        const bool wanted = sc5 || raw.contains("netplay:") || raw.contains("link:") ||
-                            raw.contains("autopilot: this player") || raw.contains("picked character") ||
-                            raw.contains("error:") || raw.contains("warning:");
-        if (wanted && !stats.match(QString::fromLatin1(raw)).hasMatch()) match << reportLine(raw);
+        return sc5 || isDetail(raw) || raw.contains("netplay:") || raw.contains("link:") ||
+               raw.contains("autopilot: this player") || raw.contains("autopilot: the stage") ||
+               raw.contains("picked character") || raw.contains("error:") || raw.contains("warning:");
+    };
+    enum Kind { kSetup, kStats, kOther, kCheck, kDetail, kAfter };
+    struct Line {
+        qsizetype at;
+        Kind kind;
+    };
+    QList<Line> keep;
+    qsizetype lastRollbacks = -1, lastKeeping = -1, setups = 0;
+    QList<qsizetype> others;
+    for (qsizetype i = start; i < end; ++i) {
+        const QByteArray& raw = tail[i];
+        if (isDetail(raw)) keep.append({i, kDetail});
+        else if (isStats(raw)) (raw.contains("keeping a frame top") ? lastKeeping : lastRollbacks) = i;
+        else if (isSetup(raw) && setups < 40) {
+            keep.append({i, kSetup});
+            ++setups;
+        } else if (isWanted(raw)) others.append(i);
     }
-    constexpr qsizetype kLines = 36, kFromCheck = 28;
-    qsizetype check = -1;
-    for (qsizetype i = 0; i < match.size(); ++i) {
-        if (match[i].contains(QLatin1String("DESYNC at frame"))) {
-            check = i;
-            break;
+    for (const qsizetype i : {lastRollbacks, lastKeeping})
+        if (i >= 0) keep.append({i, kStats});
+    for (qsizetype n = std::max<qsizetype>(0, others.size() - 30); n < others.size(); ++n) keep.append({others[n], kOther});
+    if (check >= 0) {
+        keep.append({check, kCheck});
+        qsizetype details = 0, after = 0;
+        for (qsizetype i = check + 1; i < tail.size(); ++i) {
+            if (isDetail(tail[i]) && details < 100) {
+                keep.append({i, kDetail});
+                ++details;
+            } else if (!isDetail(tail[i]) && !isStats(tail[i]) && isWanted(tail[i]) && after < 10) {
+                keep.append({i, kAfter});
+                ++after;
+            }
         }
     }
-    if (check >= 0 && match.size() > kLines) {
-        const QStringList from = match.mid(check, kFromCheck);
-        match = match.mid(0, std::min(check, kLines - from.size())) + from;
-    } else if (match.size() > kLines) {
-        match = match.mid(0, 22) + match.mid(match.size() - 14);
+    std::sort(keep.begin(), keep.end(), [](const Line& a, const Line& b) { return a.at < b.at; });
+    // within what one message may carry: the other lines before the check go first, the oldest first, then the lines
+    // after it, then detail lines from the last
+    // a line's share of the message: itself, its quotes and comma, and what JSON escapes in it
+    const auto cost = [](const QString& l) {
+        return l.size() + 4 + l.count(QLatin1Char('\\')) + l.count(QLatin1Char('"'));
+    };
+    QStringList text;
+    qsizetype chars = 0;
+    for (const QString& l : head) chars += cost(l);
+    for (const Line& l : keep) {
+        text << reportLine(tail[l.at]);
+        chars += cost(text.last());
     }
-    return out + match;
+    // and the server's 200 lines, the game files' and this PC's two among them
+    qsizetype count = head.size() + text.size();
+    const auto over = [&] { return chars > kDesyncChars || count > kDesyncLines; };
+    for (const Kind drop : {kOther, kAfter, kDetail}) {
+        const bool fromEnd = drop == kDetail;
+        for (qsizetype n = 0; n < keep.size() && over(); ++n) {
+            const qsizetype i = fromEnd ? keep.size() - 1 - n : n;
+            if (keep[i].kind != drop || text[i].isNull()) continue;
+            chars -= cost(text[i]);
+            --count;
+            text[i] = QString();
+        }
+    }
+    QStringList out = head;
+    for (const QString& l : std::as_const(text))
+        if (!l.isNull()) out << l;
+    return out;
 }
 
 // This PC as a desync report names it: the processor, Windows, and the level the game's code was compiled for here

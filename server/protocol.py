@@ -14,6 +14,7 @@ SERVER_NAME = "sc5-server"
 SERVER_VERSION = __version__
 
 MAX_LINE = 16 * 1024
+MAX_DESYNC_LINE = 64 * 1024  # a desync_report alone may be this long (its lines, docs/PROTOCOL.md 1.13.1)
 MAX_DATAGRAM = 512
 MAX_RELAY_DATAGRAM = 1472  # what the relay passes on: a game packet, up to a whole Ethernet frame of UDP payload
 
