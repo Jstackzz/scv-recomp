@@ -1629,10 +1629,16 @@ void SeedFrame(PPCContext& ctx, uint8_t* base, uint32_t f) {
 void SetFrameInputs(uint32_t f) {
   Put32(kFramesShown, g_shown_base + f);
   rng::DrawsFrame(f);
-  // tests: SC5_TEST_DESYNC_AT=<match frame>: this game's player 1 loses a point of health there, in every run of that
-  // frame (a desync made to order: what the check, the detail exchange and the launcher do with one)
+  // tests: SC5_TEST_DESYNC_AT=<match frame>[:<side>]: this game's player 1 loses a point of health there, in every run
+  // of that frame (a desync made to order: what the check, the detail exchange and the launcher do with one); with a
+  // side, in that player's game only (two launchers' games started with the same variables)
   static const uint32_t desync_at = std::getenv("SC5_TEST_DESYNC_AT") ? uint32_t(std::atoi(std::getenv("SC5_TEST_DESYNC_AT"))) : 0;
-  if (desync_at && f == desync_at && !g_cfg.watch) {
+  static const int desync_side = [] {
+    const char* v = std::getenv("SC5_TEST_DESYNC_AT");
+    const char* colon = v ? std::strchr(v, ':') : nullptr;
+    return colon ? std::atoi(colon + 1) : 0;
+  }();
+  if (desync_at && f == desync_at && !g_cfg.watch && (!desync_side || desync_side == g_slot + 1)) {
     const float hp = FighterHealth(0) - 1.0f;
     uint32_t v;
     std::memcpy(&v, &hp, 4);
