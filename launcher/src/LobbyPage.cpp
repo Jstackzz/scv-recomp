@@ -380,7 +380,7 @@ void LobbyPage::sendJoin(const QJsonObject& msg) {
     showAlert(QString());
     if (controller_->phase() == MatchController::Phase::Searching) {
         controller_->cancelSearch();  // queue_leave goes first, on the same connection
-        chat_->appendPlainText(tr("-- Your match search was cancelled for the lobby."));
+        listInfo_->setText(tr("Your match search was cancelled for the lobby."));
     }
     lastJoin_ = msg;
     retriedJoin_ = false;

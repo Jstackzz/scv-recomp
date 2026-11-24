@@ -185,9 +185,14 @@ private:
     // a game this launcher started for single player, practice or versus, open when an online match (a lobby's, a
     // series' next) needs the online game: closed, and the player told
     void closeSoloForMatch();
-    // the match's game never came back to its hold point after its match (a desync, a park it did not take) and was
-    // closed: the player is told, and it starts again at once when it was a lobby's
-    void restartStuckGame(const QString& gameId, bool forLobby);
+    // park the match's game (it goes back to its hold point once the match's end has played), and look at it again
+    // kStuckMs later: checkStuckGame
+    void parkGame();
+    // the match's game never came back to its hold point after its park (a desync, a park it did not take): once
+    // nothing of this launcher's is on it, it is closed, the player told, and it starts again at once when a lobby or a
+    // match on its way wants it
+    void checkStuckGame();
+    static constexpr int kStuckMs = 120000;  // a real game's park takes ~50 s at most (the match's end, then ~20 s)
     void freezeGame();
     void thawGame();
     void maybeBackToSolo();    // standby: nothing more to play online, single player again
@@ -243,6 +248,9 @@ private:
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)
     QJsonObject queued_;     // the server's reply to the last search
     QTimer parkTimer_, keepaliveTimer_, startTimeout_, finishTimeout_, watchTimeout_;
+    QTimer stuckTimer_;        // after a park: checkStuckGame
+    QElapsedTimer parkClock_;  // since the match's game was last parked
+    bool replacedForPort_ = false;  // this match found replaced a game that held the game port (openUdpThen)
     QTimer watchEndTimeout_;  // the watched match ended early: the watching game's while to be in it, else it parks
     bool watchInMatch_ = false;  // the watching game plays the watched match (it was at its meeting point)
     QString localStartA_, localStartB_, localResultA_, localResultB_;

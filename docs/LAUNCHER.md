@@ -76,7 +76,7 @@ python -m pip install --user pytest pytest-asyncio
 python -m pytest server/tests
 ```
 
-The suite (125 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
+The suite (147 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
 accounts, pinning, rate limiting, queue pairing, accept/decline/timeouts, the UDP rendezvous, relay and tunnel,
 results, series and ranked sets, ranks, lobbies, Online Practice, spectators, King of the Hill, reports, UPnP and
 updates.
@@ -197,6 +197,17 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
    on the leaderboard. **Online Practice** (`sparring`): two friends by the code, no timer, health refills, nobody is
    knocked out, BACK goes back to character select, nothing recorded. *Leave* closes the game the lobby started.
+   The list keeps itself current (every 4 s while the page shows, the selection kept, the player's own lobby marked
+   *YOUR LOBBY* in gold). A player is in one lobby at most: joining or creating another one moves them there (the
+   server leaves the old one for them once the new one lets them in; the game stays), a search running is cancelled
+   first, and a join turned away says why in large type over the list (an older server's `busy` is answered with a
+   leave and the join again). Each member's launcher version comes with the lobby: a player of another version is
+   named in large type before anyone readies (*... has SCV Online 0.1.3 and you have 0.1.4: your games cannot play
+   each other. ... must update*), and Ready stays off against them; another build of the same version is said too.
+   The launcher owns the games it started: a lobby's Ready or match closes a single-player, practice or versus game
+   it started (said in the banner), starting single player while ready un-readies, and a game that is not back at its
+   hold point 2 minutes after its park (a desync it never left) is closed and started again by itself, at once when a
+   lobby or a match on its way wants it.
 4. **Single player**: everything on the disc is unlocked in all three (the game's `unlocks.cpp`, every mode; paid
    DLC from the player's own packages). PLAY starts the game plainly (its own menus); PRACTICE goes to training's
    select screen (`SC5_TRAINING=1`); VERSUS to the two-player select screen (`SC5_VERSUS=1`), player 2 on the
@@ -258,14 +269,18 @@ on Qt's offscreen platform with an SDL virtual gamepad).
 **Crash reports**: a game that ends with an exception's exit code, or whose log ends with the game's crash line, is
 reported to the server (PROTOCOL.md 1.13) with what was going on. **Desync reports**: a match whose games went out
 of step is reported with what the game logged of it (1.13.1): Windows, the processor, the game's executable, the
-match's lines from the link's `start` line, and the extracted disc's files (count, bytes, a hash of names and sizes
+match's lines from the link's `start` line (its setup, the last statistics, the last 30 lines before the failed
+check and every `sc5 desync:` line the game writes after it), and the extracted disc's files (count, bytes, a hash of names and sizes
 and, once hashed in the background, of their contents; `game-files-sc5.txt` beside the settings keeps the hashes).
 **F3 reports** (`ReportSender`, 1.13.2): F3 in the game saves a capture under the session (`SC5_CAPTURE_DIR`); the
 launcher sends its pictures, textures, draws and the end of the game's log to the server, which keeps them under
 `/var/lib/sc5/reports/<day>/`. **How a game ended**: a game that ends during a match reports `left` with `exit`
 and `exit_code`, from the last lines of its log.
 
-**Updates** (`Updater`): the server names the latest release (`welcome.update`, an `update` push, the
+**Updates** (`Updater`): a player package says which build it is (its `VERSION.txt` stamp, `hello`'s `build`),
+so a test build that carries a release's number is offered that release when the update file names the release's
+build (PROTOCOL.md 1.3); the offer's window stays over the game. The server names the latest release
+(`welcome.update`, an `update` push, the
 `client_outdated` reply). A player package offers it in a window (UPDATE NOW, LATER, the notes and the release
 page); UPDATE NOW downloads the zip into `update\` beside the launcher, checks its size and SHA-256 against the
 server's (whose certificate is pinned; the download host is not trusted), unpacks it, checks its `VERSION.txt`
@@ -321,6 +336,9 @@ powershell -File tools\online-e2e.ps1 -Queue ranked                   # a ranked
 powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Watch  # a lobby, two matches, a spectator
 powershell -File tools\online-e2e.ps1 -Queue lobby -Mode sparring     # Online Practice
 powershell -File tools\online-e2e.ps1 -Queue ranked -Draw -Matches 2  # drawn matches: nobody's point in the set
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -OwnLobbyFirst -SoloB  # B moves from its own lobby, its single player closed
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Desync -Stuck  # desync reports paired, stuck games replaced
+powershell -File tools\online-e2e.ps1 -Queue casual -DelayB 3        # input delays: Auto (default) or a number
 powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps                 # King of the Hill, Respect Points, leaderboard
 ```
 

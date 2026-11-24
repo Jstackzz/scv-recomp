@@ -137,18 +137,13 @@ MatchController::MatchController(ServerClient* server, QObject* parent)
         if (phase_ != Phase::Finishing) return;
         closeFeed();
         closeWatchFeed();
-        // parked and not back at its hold point in all that time: a game stuck at the match's end (after a desync,
-        // say) would hold the next match up for minutes, so it goes, and comes again for a lobby that wants it
-        const bool stuck = game_ && game_->isRunning() && !game_->isReady();
-        const QString text = finishText_.isEmpty() ? tr("Match over") : finishText_;
-        const QString gameId = stuck ? game_->gameId() : QString();
-        const bool lobby = stuck && lobbyGame_ == game_;
-        if (stuck)
-            closeGame(tr("The game did not come back to its hold point after the match (it says \"%1\"): closed")
-                          .arg(game_->status()));
-        setPhase(Phase::Idle, text);
-        if (stuck) restartStuckGame(gameId, lobby);
+        setPhase(Phase::Idle, finishText_.isEmpty() ? tr("Match over") : finishText_);
     });
+    // a game parked and still not back at its hold point kStuckMs later (after a desync, say) is stuck: it would hold
+    // the next match up until its players closed it by hand, so it is replaced (checkStuckGame), and looked at again
+    // every 10 s while it stays so
+    stuckTimer_.setSingleShot(true);
+    connect(&stuckTimer_, &QTimer::timeout, this, &MatchController::checkStuckGame);
     // a watched match whose game never got into it (the players' feed never came): parked after this
     watchTimeout_.setSingleShot(true);
     connect(&watchTimeout_, &QTimer::timeout, this, [this] {
@@ -771,13 +766,38 @@ void MatchController::openUdpThen(std::function<void()> next, int tries) {
         next();
         return;
     }
+    const QString match = str(found_, "match");
+    // the port held by this launcher's own game, which never left its last match (it did not take the park, which
+    // lets go of the port at once): it goes, at once, a fresh one starts for the match, and the port is tried again
+    // (before, the match declined itself: "a player declined", and both players closed their games by hand)
+    if (tries <= 20 && game_ && game_->isRunning() && !game_->betweenMatches() && !replacedForPort_ &&
+        phase_ != Phase::AtResult) {
+        replacedForPort_ = true;
+        GameProcess* old = game_;
+        const QString gameId = old->gameId();
+        const bool forLobby = lobbyGame_ == old;
+        closeGame(tr("The game still holds the game port from its last match (it says \"%1\"): closed")
+                      .arg(old->status()));
+        old->kill();
+        QString gerr;
+        if (GameProcess* g = ensureGame(gameId, &gerr)) {
+            if (forLobby) lobbyGame_ = g;
+            emit notice(tr("Your game was stuck after the last match, so the launcher closed it and is starting it "
+                           "again for this match: give it a moment."));
+        } else {
+            log(gerr);
+        }
+        QTimer::singleShot(300, this, [this, next, match] {
+            if (str(found_, "match") == match) openUdpThen(next, 30);
+        });
+        return;
+    }
     if (tries <= 0) {
         log(err);
         phase_ = Phase::Found;
         decline();
         return;
     }
-    const QString match = str(found_, "match");
     QTimer::singleShot(100, this, [this, next, tries, match] {
         if (str(found_, "match") != match) return;  // that match is gone meanwhile
         openUdpThen(next, tries - 1);
@@ -815,10 +835,11 @@ GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) 
         if (error) *error = tr("Your game is still playing the last match's ending: a moment.");
         return nullptr;
     }
-    // a game left at an old match's state with nothing of this launcher's on it (it never took the park after a
-    // desync, say): the next match would wait for it in vain, so it goes and a fresh one starts
+    // a game left at an old match's state with nothing of this launcher's on it, parked long ago or never (it never
+    // took the park after a desync, say): the next match would wait for it in vain, so it goes and a fresh one starts
     bool wasLobbys = false;
     if (game_ && game_->isRunning() && game_->gameId() == gameId && !game_->betweenMatches() &&
+        (!parkClock_.isValid() || parkClock_.elapsed() > kStuckMs) &&
         (phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching) && !gameFrozen_) {
         wasLobbys = lobbyGame_ == game_;
         closeGame(tr("The game never came back from its last match (it says \"%1\"): closed").arg(game_->status()));
@@ -1016,10 +1037,11 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         const bool atResult = phase_ == Phase::AtResult;
         atResultTimer_.stop();
         inPlace_ = atResult && msg.value(QStringLiteral("in_place")).toBool() && game_ && game_->isRunning();
-        if (atResult && !inPlace_ && game_ && game_->isRunning()) game_->command(QStringLiteral("park"));
+        if (atResult && !inPlace_ && game_ && game_->isRunning()) parkGame();
         found_ = msg;
         go_ = {};
         resultSent_ = false;
+        replacedForPort_ = false;
         leaveQuit_ = false;
         lobbyChoice_ = false;
         pendingChoice_.clear();
@@ -1136,13 +1158,15 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         openFeed(msg);
         pendingStart_ = startLine(go_);
         const int delay = matchDelay(msg);
-        // the delay both games play, and why: Auto's, from the ping, or a player's own
-        const bool fromPing = msg.value(QStringLiteral("delay_auto")).toBool() ||
-                              (!msg.contains(QStringLiteral("delay_auto")) && cfg::inputDelay() == cfg::kAutoDelay);
-        setPhase(Phase::Starting, tr("Starting the match against %1 (ping %2 ms, input delay %3%4)...")
-                                      .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt())
-                                      .arg(cfg::inputDelayText(delay),
-                                           fromPing ? tr(", Auto for that ping") : QString()));
+        // the delay both games play, and why: this player's own setting, Auto's for the ping, or the other's setting
+        const int rtt = msg.value(QStringLiteral("rtt_ms")).toInt(), own = cfg::inputDelay();
+        const bool autoTook = msg.value(QStringLiteral("delay_auto")).toBool() ||
+                              (!msg.contains(QStringLiteral("delay_auto")) && own == cfg::kAutoDelay);
+        const QString why = own >= 0 && own == delay                        ? tr("your setting")
+                            : autoTook && delay == cfg::autoDelayFor(rtt) ? tr("Auto for that ping")
+                                                                          : tr("%1's setting").arg(opponentName());
+        setPhase(Phase::Starting, tr("Starting the match against %1 (ping %2 ms, input delay %3: %4)...")
+                                      .arg(opponentName()).arg(rtt).arg(cfg::inputDelayText(delay), why));
         emit matchStarted(msg);
         resultFighters_.clear();
         // the game may still be coming up (SC5 boots to its hold point in about 40 s): it has that and the start's own
@@ -1385,7 +1409,7 @@ void MatchController::endWatch(const QString& text) {
     pendingStart_.clear();
     finishText_ = text;
     if (started && game_ && game_->isRunning() && !game_->isReady()) {
-        game_->command(QStringLiteral("park"));
+        parkGame();
         finishTimeout_.start(45000);
         setPhase(Phase::Finishing, text);
         return;
@@ -1738,7 +1762,7 @@ void MatchController::finishMatch() {
     finishText_.clear();
     if (game_ && game_->isRunning() && !game_->isReady()) {
         // the game parks once its ending has played (it holds the game port until then): ready again, then idle
-        game_->command(QStringLiteral("park"));
+        parkGame();
         finishTimeout_.start(45000);
         setPhase(Phase::Finishing, tr("Match over: the game plays its ending"));
         return;
@@ -1895,22 +1919,43 @@ void MatchController::closeSoloForMatch() {
     }
 }
 
-void MatchController::restartStuckGame(const QString& gameId, bool forLobby) {
-    if (!forLobby || (game_ && game_->isRunning())) {
+void MatchController::parkGame() {
+    if (!game_ || !game_->isRunning()) return;
+    game_->command(QStringLiteral("park"));
+    parkClock_.start();
+    stuckTimer_.start(kStuckMs);
+}
+
+void MatchController::checkStuckGame() {
+    if (!game_ || !game_->isRunning() || game_->betweenMatches()) return;  // back at its hold point, or gone
+    // the game is in use (a match it took the start of, its result screen, a match watched): not now
+    const bool waitedFor = phase_ == Phase::Starting && !pendingStart_.isEmpty();  // the start waits for its ready
+    const bool free = phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching ||
+                      phase_ == Phase::Found || phase_ == Phase::Connecting || waitedFor;
+    if (!free || gameFrozen_ || !parkClock_.isValid() || parkClock_.elapsed() < kStuckMs - 1000) {
+        stuckTimer_.start(10000);
+        return;
+    }
+    const QString gameId = game_->gameId();
+    const bool forLobby = lobbyGame_ == game_;
+    closeGame(tr("The game did not come back to its hold point %1 s after the park (it says \"%2\"): closed")
+                  .arg(parkClock_.elapsed() / 1000).arg(game_->status()));
+    // a match on its way, or a lobby's game: up again now (the match's start goes to it once it is at its hold point)
+    const bool wanted = forLobby || phase_ == Phase::Found || phase_ == Phase::Connecting || waitedFor;
+    if (!wanted) {
         emit notice(tr("Your game did not come back after the last match, so the launcher closed it. It starts "
                        "again by itself for your next match."));
         return;
     }
-    // a lobby's: up again now, so the next Ready finds it at its hold point
     QString err;
     if (GameProcess* g = ensureGame(gameId, &err)) {
-        lobbyGame_ = g;
+        if (forLobby) lobbyGame_ = g;
         emit notice(tr("Your game did not come back after the last match, so the launcher closed it and is starting "
-                       "it again for the lobby's next match: give it a moment."));
+                       "it again for your next match: give it a moment."));
     } else {
         log(err);
-        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. Press Ready to "
-                       "start it again."));
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. It could not "
+                       "start again: %1").arg(err));
     }
 }
 
