@@ -393,6 +393,11 @@ Kind KindOf(uint32_t source) {
   // a static object past player 2's (the snapshot's 3152-byte block from 0x829F4E90) keeps two heap pointers (the
   // first set during a fight: Ezio against Nightmare, a game with its heap 64 MB higher)
   if (source >= 0x829F5528u && source < 0x829F5530u) return Kind::Pointer;
+  // ... and two more before it, at 0x829F46A8, that the stage sets late in a match (stage 2A at frame 8550 with the
+  // rounds at 3-1, stage 18 at 6510 with 2-0, Algol against Yoshimitsu, game 2's heap 2 MB higher: 0x41483010 against
+  // 0x41683010, that shift and nothing else, to the match's end). On two PCs any match that came so far on those
+  // stages failed its next check: stage 2A lost three matches of the first to 30 of 2026-11-20 (2026-11-24)
+  if (source >= 0x829F46A8u && source < 0x829F46B0u) return Kind::Pointer;
   // the battle's state machine keeps one at +0x14 (the menus' object it was set up from; net/netplay.cpp) and one at
   // +0x13C that a fight sets
   if ((source >= 0x82767D1Cu && source < 0x82767D20u) || (source >= 0x82767E44u && source < 0x82767E48u))
