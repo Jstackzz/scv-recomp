@@ -65,9 +65,9 @@ def write_update(server: Server, content: str, stamp: int) -> None:
     os.utime(path, ns=(stamp * 1_000_000_000, stamp * 1_000_000_000))
 
 
-async def launcher(server: Server, version: str) -> tuple[Connection, dict]:
+async def launcher(server: Server, version: str, build: str = "") -> tuple[Connection, dict]:
     conn = Connection("127.0.0.1", server.tcp_port, fingerprint=server.fingerprint)
-    welcome = await conn.connect(version=version)
+    welcome = await conn.connect(version=version, build=build)
     return conn, welcome
 
 
@@ -168,4 +168,50 @@ async def test_a_release_announced_reaches_connected_launchers(server):
     await asyncio.sleep(0.3)  # more ticks: offered once, and not to a launcher that has it
     assert not older.take_all("update") and not current.take_all("update")
     for c in (older, current):
+        await c.close()
+
+
+def test_an_update_file_may_name_its_build():
+    built = {**RELEASE, "build": "2026-11-20 06:17"}
+    assert P.parse_update(built) == built
+    for bad in ("", "x" * 41, "2026-11-20\n06:17", 20261120):
+        with pytest.raises(ValueError):
+            P.parse_update({**RELEASE, "build": bad})
+    assert P.client_build(" 2026-11-20 06:17 ") == "2026-11-20 06:17"
+    assert P.client_build("bad\x07") == "" and P.client_build(None) == "" and P.client_build(7) == ""
+
+
+async def test_a_test_build_of_the_releases_number_is_offered_the_release(server):
+    """A launcher of the release's own version is offered it when it is another build of it (a test build given out
+    before the release took its number: the version alone never told): both builds known, and different. Newer
+    launchers (a developer's), launchers that name no build and an update file that names none are offered nothing."""
+    built = {**RELEASE, "build": "2026-11-20 06:17"}
+    write_update(server, json.dumps(built), 1_800_000_000)
+    for version, build, offered in (("0.1.8", "2026-11-19 22:10", True), ("0.1.8.0", "2026-11-19 22:10", True),
+                                    ("0.1.8", "2026-11-20 06:17", False), ("0.1.8", "", False),
+                                    ("0.1.9", "2026-11-19 22:10", False), ("0.1.7", "2026-11-20 06:17", True)):
+        conn, welcome = await launcher(server, version, build)
+        assert ("update" in welcome) is offered, (version, build)
+        if offered:
+            assert welcome["update"] == built
+        await conn.close()
+    write_update(server, json.dumps(RELEASE), 1_800_000_100)  # no build named: the version alone decides
+    conn, welcome = await launcher(server, "0.1.8", "2026-11-19 22:10")
+    assert "update" not in welcome
+    await conn.close()
+
+
+async def test_a_new_build_of_a_release_is_pushed_to_the_other_builds(server):
+    """The update file names another build of the same version (the release made again): the launchers connected
+    with the earlier one are offered it within the check interval, those with it already are not."""
+    write_update(server, json.dumps({**RELEASE, "build": "2026-11-20 06:17"}), 1_800_000_000)
+    await asyncio.sleep(0.3)
+    first, _ = await launcher(server, "0.1.8", "2026-11-20 06:17")
+    newest, _ = await launcher(server, "0.1.8", "2026-11-21 09:00")
+    write_update(server, json.dumps({**RELEASE, "build": "2026-11-21 09:00"}), 1_800_000_100)
+    pushed = await first.expect("update", timeout=3)
+    assert pushed["build"] == "2026-11-21 09:00"
+    await asyncio.sleep(0.3)
+    assert not newest.take_all("update") and not first.take_all("update")
+    for c in (first, newest):
         await c.close()

@@ -183,6 +183,9 @@ void ServerClient::sendHello() {
                       {QStringLiteral("os"), QStringLiteral("windows")},
                       // King of the Hill lobbies (docs/PROTOCOL.md 1.10.2): a launcher without it only watches them
                       {QStringLiteral("features"), QJsonArray{QStringLiteral("koth")}}};
+    // which build of its version (a package's VERSION.txt stamp): a test build of a release's number is offered the
+    // release, and a lobby shows players whose builds differ (docs/PROTOCOL.md 1.3)
+    if (const QString build = paths::packageBuild(); !build.isEmpty()) hello.insert(QStringLiteral("build"), build);
     send(hello);
 }
 

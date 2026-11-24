@@ -108,12 +108,21 @@ bool swapIn(const QString& from, const QString& to, QStringList* olds, QString* 
 
 Updater::Updater(QObject* parent) : QObject(parent), net_(new QNetworkAccessManager(this)) {}
 
+bool Updater::sameVersionOtherBuild(const QJsonObject& release) {
+    const QString build = release.value(QStringLiteral("build")).toString();
+    return release.value(QStringLiteral("version")).toString() == QLatin1String(SC5_LAUNCHER_VERSION) &&
+           !build.isEmpty() && !paths::packageBuild().isEmpty() && build != paths::packageBuild();
+}
+
 QJsonObject Updater::usable(const QJsonValue& value) {
     const QJsonObject r = value.toObject();
     static const QRegularExpression version(QStringLiteral("^\\d+(\\.\\d+)*$")), sha(QStringLiteral("^[0-9a-f]{64}$"));
     const QString v = r.value(QStringLiteral("version")).toString();
     const double size = r.value(QStringLiteral("size")).toDouble();
-    if (!version.match(v).hasMatch() || !newer(v, QStringLiteral(SC5_LAUNCHER_VERSION))) return {};
+    // newer, or this very version in another build than this package's (a test build given out before the release
+    // took its number: the version alone never offered it the release)
+    if (!version.match(v).hasMatch() || !(newer(v, QStringLiteral(SC5_LAUNCHER_VERSION)) || sameVersionOtherBuild(r)))
+        return {};
     if (!downloadLink(r.value(QStringLiteral("url")).toString())) return {};
     if (!sha.match(r.value(QStringLiteral("sha256")).toString()).hasMatch() || size <= 0 || size > 1 << 30) return {};
     return r;

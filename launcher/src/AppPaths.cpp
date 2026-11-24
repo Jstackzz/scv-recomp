@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 #include "GameData.h"
@@ -74,6 +75,19 @@ QString packagedGameFolder(const QString& gameId) {
 QString toolchainDir() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("toolchain")); }
 
 QString displayFile() { return QDir(g_dataDir).filePath(QStringLiteral("display.txt")); }
+
+QString packageBuild() {
+    static const QString build = [] {
+        QFile f(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("VERSION.txt")));
+        if (!isPackage() || !f.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
+        const QString line = QString::fromUtf8(f.readLine()).remove(QChar(0xFEFF)).trimmed();
+        if (!line.startsWith(QStringLiteral("SC5-Online %1,").arg(QStringLiteral(SC5_LAUNCHER_VERSION)))) return QString();
+        static const QRegularExpression stamp(QStringLiteral("packaged ([0-9A-Za-z :._-]{1,40})$"));
+        const QRegularExpressionMatch m = stamp.match(line);
+        return m.hasMatch() ? m.captured(1).trimmed() : QString();
+    }();
+    return build;
+}
 
 }  // namespace paths
 
@@ -154,9 +168,34 @@ bool pickInGame() { return get(QStringLiteral("online/pick_in_game"), true).toBo
 bool practiceWhileWaiting() { return get(QStringLiteral("online/practice_while_waiting"), true).toBool(); }
 bool searchAgain() { return get(QStringLiteral("online/search_again"), true).toBool(); }
 bool matchSound() { return get(QStringLiteral("online/match_sound"), true).toBool(); }
-// 1 frame unless changed: rollback covers the rest of a match's ping, and every frame of it is felt
-int inputDelay() { return qBound(0, get(QStringLiteral("online/delay"), 1).toInt(), 4); }
-bool autoDelay() { return get(QStringLiteral("online/auto_delay"), true).toBool(); }
+int inputDelay() {
+    const QVariant v = get(QStringLiteral("online/input_delay"));
+    if (!v.isValid()) {
+        // before 0.1.4: a set delay (online/delay, 1 unless changed) raised at a high ping unless that was turned off
+        // (online/auto_delay); one who turned it off keeps their number, everyone else is on Auto
+        const QVariant old = store().value(QStringLiteral("online/delay"));
+        if (!store().value(QStringLiteral("online/auto_delay"), true).toBool() && old.isValid())
+            return qBound(0, old.toInt(), 4);
+        return kAutoDelay;
+    }
+    bool number = false;
+    const int d = v.toString().toInt(&number);
+    return number ? qBound(0, d, 4) : kAutoDelay;
+}
+QString inputDelayText(int delay) {
+    if (delay < 0) return QCoreApplication::translate("cfg", "Auto (from the ping)");
+    return delay == 1 ? QCoreApplication::translate("cfg", "1 frame")
+                      : QCoreApplication::translate("cfg", "%1 frames").arg(delay);
+}
+int autoDelayFor(int rttMs) {
+    if (rttMs <= 0) return 1;
+    const int frames = (rttMs * 3 + 99) / 100;  // the one-way trip's frames (16.7 ms each), rounded up
+    return qBound(1, frames - 1, 6);
+}
+void putDelay(QJsonObject& msg, int delay) {
+    msg.insert(QStringLiteral("delay"), delay < 0 ? 1 : delay);
+    if (delay < 0) msg.insert(QStringLiteral("delay_auto"), true);
+}
 int gamePort() { return get(QStringLiteral("online/game_port"), 7001).toInt(); }
 // as a game the launcher does not start: borderless at the monitor's own resolution
 QString displayMode() { return get(QStringLiteral("display/mode"), QStringLiteral("borderless")).toString(); }

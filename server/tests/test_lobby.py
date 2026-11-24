@@ -11,6 +11,10 @@ from server.client import ServerError
 from .conftest import hello_and_accept, run_to_go
 
 
+def session_of(server, name):
+    return next(s for s in server.sessions if s.name == name)
+
+
 def create_msg(**kw):
     return {"type": "lobby_create", "name": "Friday sets", "game": "sc5", "mode": "versus", "password": "",
             "rounds": 3, "region": "eu", "character": "Scorpion", **kw}
@@ -24,7 +28,8 @@ async def test_lobby_create_join_ready_start(server, connect, udp_peers):
     code = lobby["id"]
     assert len(code) == 5 and lobby["locked"] and lobby["state"] == "open"
     assert lobby["members"] == [{"name": "Goro", "character": "Scorpion", "ready": False, "host": True,
-                                 "spectator": False, "link": None, "ping": None, "title": "Novice"}]
+                                 "spectator": False, "link": None, "ping": None, "title": "Novice",
+                                 "version": "0.1.0", "build": None}]
 
     listed = await guest.request({"type": "lobby_list", "game": "sc5"})
     assert [(lb["id"], lb["players"], lb["locked"]) for lb in listed["lobbies"]] == [(code, 1, True)]
@@ -119,6 +124,79 @@ async def test_host_leaving_hands_over_and_empty_lobby_closes(server, connect):
     await guest.close()
     await asyncio.sleep(0.2)
     assert code not in server.lobbies
+
+
+async def test_joining_another_lobby_leaves_the_one_you_are_in(server, connect):
+    """A session is in one lobby at most: joining (or creating) another one leaves the first, which is told
+    (lobby_left naming where it went), once the new one has let them in; one that turns them away leaves them where
+    they were."""
+    host = await connect("Taki")
+    third = await connect("Kilik")
+    code = (await host.request(create_msg(name="")))["lobby"]["id"]
+    own = (await third.request(create_msg(name="")))["lobby"]["id"]
+    # turned away (a wrong password, no such lobby): still in their own
+    locked = await connect("Ivy")
+    secret = (await locked.request(create_msg(name="", password="pw-123")))["lobby"]["id"]
+    for bad, why in (({"lobby": secret, "password": "nope"}, "bad_lobby_password"),
+                     ({"lobby": "ZZZZZ"}, "no_such_lobby")):
+        with pytest.raises(ServerError) as exc:
+            await third.request({"type": "lobby_join", **bad})
+        assert exc.value.code == why
+    assert server.lobbies[own].members[0].session.name == "Kilik"
+    # the host's lobby: in it, and out of their own (which, empty, is gone)
+    joined = await third.request({"type": "lobby_join", "lobby": code, "character": "Ivy"})
+    assert [m["name"] for m in joined["lobby"]["members"]] == ["Taki", "Kilik"]
+    left = await third.expect("lobby_left")
+    assert left == {"type": "lobby_left", "lobby": own, "joined": code}
+    assert own not in server.lobbies
+    assert session_of(server, "Kilik").lobby is server.lobbies[code]
+    # joining the lobby you are in again: its state, nothing more
+    again = await third.request({"type": "lobby_join", "lobby": code})
+    assert [m["name"] for m in again["lobby"]["members"]] == ["Taki", "Kilik"]
+    assert not third.take_all("lobby_left")
+    # creating one takes a player out of the lobby they were in too; the others there see them go
+    made = (await third.request(create_msg(name="Mine")))["lobby"]
+    assert (await third.expect("lobby_left")) == {"type": "lobby_left", "lobby": code, "joined": made["id"]}
+    await host.expect("lobby", pred=lambda m: [x["name"] for x in m["lobby"]["members"]] == ["Taki"])
+    listed = (await host.request({"type": "lobby_list", "game": "sc5"}))["lobbies"]
+    assert sorted(lb["host"] for lb in listed) == ["Ivy", "Kilik", "Taki"]
+    # searching is not a lobby: the search is cancelled first
+    with pytest.raises(ServerError) as exc:
+        await host.request({"type": "queue_join", "game": "sc5", "mode": "versus", "region": "eu"})
+    assert exc.value.code == "busy"
+    await host.request({"type": "lobby_leave"})
+    await host.request({"type": "queue_join", "game": "sc5", "mode": "versus", "region": "eu"})
+    with pytest.raises(ServerError) as exc:
+        await host.request({"type": "lobby_join", "lobby": made["id"]})
+    assert exc.value.code == "busy"
+
+
+async def test_the_lobby_names_each_members_launcher_version_and_build(server, connect):
+    """Two launchers of different versions cannot play each other: the lobby state says each member's, so their
+    launchers say so before anyone readies (and a test build of the same version, by its build)."""
+    host = await connect("Taki", version="0.1.4", build="2026-11-23 22:31")
+    guest = await connect("Kilik")  # the test client's own version, no build
+    code = (await host.request(create_msg()))["lobby"]["id"]
+    joined = await guest.request({"type": "lobby_join", "lobby": code})
+    assert [(m["name"], m["version"], m["build"]) for m in joined["lobby"]["members"]] == [
+        ("Taki", "0.1.4", "2026-11-23 22:31"), ("Kilik", "0.1.0", None)]
+
+
+async def test_a_player_whose_lobby_match_is_on_cannot_go_to_another_lobby(server, connect, udp_peers):
+    host = await connect("Taki")
+    guest = await connect("Kilik")
+    other = await connect("Ivy")
+    code = (await host.request(create_msg()))["lobby"]["id"]
+    elsewhere = (await other.request(create_msg(name="")))["lobby"]["id"]
+    await guest.request({"type": "lobby_join", "lobby": code})
+    await host.request({"type": "lobby_ready", "ready": True})
+    await guest.request({"type": "lobby_ready", "ready": True})
+    await host.request({"type": "lobby_start"})
+    await guest.expect("match_found")
+    with pytest.raises(ServerError) as exc:
+        await guest.request({"type": "lobby_join", "lobby": elsewhere})
+    assert exc.value.code == "busy"
+    assert session_of(server, "Kilik").lobby is server.lobbies[code]
 
 
 async def test_a_dropped_connection_gets_its_lobby_place_back(server, connect):

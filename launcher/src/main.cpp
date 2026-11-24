@@ -102,7 +102,12 @@ int main(int argc, char* argv[]) {
         QStringLiteral("Development: once the --rematches are chosen, leave the series at once instead of letting it run out."));
     const QCommandLineOption soloOpt(
         QStringLiteral("solo"),
-        QStringLiteral("Development: with --queue, start single player first and search alongside it (standby)."));
+        QStringLiteral("Development: with --queue, start single player first and search alongside it (standby); with "
+                       "--lobby join, start single player before readying in the lobby (its match closes it)."));
+    const QCommandLineOption lobbyOwnFirstOpt(
+        QStringLiteral("lobby-own-first"),
+        QStringLiteral("Development: with --lobby join, create a lobby of one's own first, then join the named one "
+                       "from it (the server moves the player)."));
     const QCommandLineOption practiceOpt(
         QStringLiteral("practice"),
         QStringLiteral("Practice while a Ranked or Casual search waits: on or off (saved like the queue pages' box)."),
@@ -121,7 +126,7 @@ int main(int argc, char* argv[]) {
     for (const auto* o : {&configOpt, &serverOpt, &fpOpt, &userOpt, &pwEnvOpt, &regOpt, &queueOpt, &gameOpt, &modeOpt,
                           &charOpt, &pageOpt, &acceptOpt, &cancelOpt, &localTestOpt, &extractOpt, &lobbyOpt, &lobbyNameOpt, &lobbyCodeFileOpt,
                           &lobbyMatchesOpt, &leaveLobbyOpt, &leaveLobbyInMatchOpt, &kothOpt, &rateOpt, &snapDirOpt, &upnpProbeOpt, &rematchesOpt, &rematchChoiceOpt,
-                          &leaveSeriesOpt, &soloOpt,
+                          &leaveSeriesOpt, &soloOpt, &lobbyOwnFirstOpt,
                           &practiceOpt, &searchAgainOpt, &updatedOpt, &autoUpdateOpt})
         cli.addOption(*o);
     cli.process(app);
@@ -182,6 +187,7 @@ int main(int argc, char* argv[]) {
     opts.rematchChoices = cli.value(rematchChoiceOpt).split(QLatin1Char(','), Qt::SkipEmptyParts);
     opts.leaveSeries = cli.isSet(leaveSeriesOpt);
     opts.solo = cli.isSet(soloOpt);
+    opts.lobbyOwnFirst = cli.isSet(lobbyOwnFirstOpt);
     opts.practice = cli.value(practiceOpt);
     opts.searchAgain = cli.value(searchAgainOpt);
     opts.upnpProbe = cli.isSet(upnpProbeOpt);

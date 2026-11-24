@@ -76,7 +76,7 @@ python -m pip install --user pytest pytest-asyncio
 python -m pytest server/tests
 ```
 
-The suite (125 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
+The suite (147 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
 accounts, pinning, rate limiting, queue pairing, accept/decline/timeouts, the UDP rendezvous, relay and tunnel,
 results, series and ranked sets, ranks, lobbies, Online Practice, spectators, King of the Hill, reports, UPnP and
 updates.
@@ -113,8 +113,9 @@ The official SCV server runs that way on the Oracle Cloud machine that also runs
 and MK9 Online's (7787, 7788): SCV's is TCP 7797 and UDP 7798. Its address and certificate fingerprint go in a
 player package's `defaults.ini` beside the launcher (`[server]` `address=<host>:7797`, `fingerprint=<SHA-256>`), kept
 out of the repository because it names the machine. A release launchers should take: publish its zip, write
-`/var/lib/sc5/update.json` (version, url, sha256, size, notes, page; PROTOCOL.md 1.3), and raise `min-client` with
-the installer's second argument when every player must take it.
+`/var/lib/sc5/update.json` (version, url, sha256, size, notes, page, and build: the zip's `VERSION.txt` stamp, which
+`New-PlayerPackage` prints, so a test build of the same number is offered the release; PROTOCOL.md 1.3), and raise
+`min-client` with the installer's second argument when every player must take it.
 
 ## Launcher
 
@@ -196,6 +197,17 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
    on the leaderboard. **Online Practice** (`sparring`): two friends by the code, no timer, health refills, nobody is
    knocked out, BACK goes back to character select, nothing recorded. *Leave* closes the game the lobby started.
+   The list keeps itself current (every 4 s while the page shows, the selection kept, the player's own lobby marked
+   *YOUR LOBBY* in gold). A player is in one lobby at most: joining or creating another one moves them there (the
+   server leaves the old one for them once the new one lets them in; the game stays), a search running is cancelled
+   first, and a join turned away says why in large type over the list (an older server's `busy` is answered with a
+   leave and the join again). Each member's launcher version comes with the lobby: a player of another version is
+   named in large type before anyone readies (*... has SCV Online 0.1.3 and you have 0.1.4: your games cannot play
+   each other. ... must update*), and Ready stays off against them; another build of the same version is said too.
+   The launcher owns the games it started: a lobby's Ready or match closes a single-player, practice or versus game
+   it started (said in the banner), starting single player while ready un-readies, and a game that is not back at its
+   hold point 2 minutes after its park (a desync it never left) is closed and started again by itself, at once when a
+   lobby or a match on its way wants it.
 4. **Single player**: everything on the disc is unlocked in all three (the game's `unlocks.cpp`, every mode; paid
    DLC from the player's own packages). PLAY starts the game plainly (its own menus); PRACTICE goes to training's
    select screen (`SC5_TRAINING=1`); VERSUS to the two-player select screen (`SC5_VERSUS=1`), player 2 on the
@@ -231,7 +243,9 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    (`SC5_CONTROLS`, PROTOCOL.md 3.1); a running game reads it again within a second.
 8. **Settings**: **Server** (address `host:port` and the fingerprint the server's host gives out, *Connect*; with an
    empty fingerprint the launcher shows the presented one and asks whether to trust it), **Online** (region, max
-   ping, input delay 0-4 and *More delay when the ping is high*, the game UDP port (7001), strict ranked, the match
+   ping, input delay (*Auto (from the ping)*, the default since 0.1.4: the server picks the match's delay from the
+   ping measured at its start, 1 frame under 67 ms and a frame more every 33 ms above, 6 at most, the same in both
+   games; or 0-4 frames, played when larger than the other player's), the game UDP port (7001), strict ranked, the match
    found chime, UPnP, *Hide my IP address from opponents* and *Even when the ping through the server is high*),
    **Display**: the window (windowed, borderless, fullscreen), its resolution, the internal resolution (1280x720 as
    on the console, 2x, 3x or 4x), anti-aliasing (off, FXAA, stronger FXAA), texture filtering (the game's own or 2x
@@ -255,14 +269,18 @@ on Qt's offscreen platform with an SDL virtual gamepad).
 **Crash reports**: a game that ends with an exception's exit code, or whose log ends with the game's crash line, is
 reported to the server (PROTOCOL.md 1.13) with what was going on. **Desync reports**: a match whose games went out
 of step is reported with what the game logged of it (1.13.1): Windows, the processor, the game's executable, the
-match's lines from the link's `start` line, and the extracted disc's files (count, bytes, a hash of names and sizes
+match's lines from the link's `start` line (its setup, the last statistics, the last 30 lines before the failed
+check and every `sc5 desync:` line the game writes after it), and the extracted disc's files (count, bytes, a hash of names and sizes
 and, once hashed in the background, of their contents; `game-files-sc5.txt` beside the settings keeps the hashes).
 **F3 reports** (`ReportSender`, 1.13.2): F3 in the game saves a capture under the session (`SC5_CAPTURE_DIR`); the
 launcher sends its pictures, textures, draws and the end of the game's log to the server, which keeps them under
 `/var/lib/sc5/reports/<day>/`. **How a game ended**: a game that ends during a match reports `left` with `exit`
 and `exit_code`, from the last lines of its log.
 
-**Updates** (`Updater`): the server names the latest release (`welcome.update`, an `update` push, the
+**Updates** (`Updater`): a player package says which build it is (its `VERSION.txt` stamp, `hello`'s `build`),
+so a test build that carries a release's number is offered that release when the update file names the release's
+build (PROTOCOL.md 1.3); the offer's window stays over the game. The server names the latest release
+(`welcome.update`, an `update` push, the
 `client_outdated` reply). A player package offers it in a window (UPDATE NOW, LATER, the notes and the release
 page); UPDATE NOW downloads the zip into `update\` beside the launcher, checks its size and SHA-256 against the
 server's (whose certificate is pinned; the download host is not trusted), unpacks it, checks its `VERSION.txt`
@@ -294,7 +312,8 @@ every `SC5_` variable it was given. `SC5_FAKE_RESULT=desync` makes it report a d
 | `--auto-accept N` | accept a found match after N seconds |
 | `--cancel-search N` | with `--queue`: cancel the search N seconds after it starts, as CANCEL SEARCH does |
 | `--rematches N`, `--rematch-choice rematch,select`, `--leave-series` | with `--queue casual`: choose a rematch after each match, N times, then leave or let it run out |
-| `--solo` | with `--queue`: start single player first and search alongside it (standby) |
+| `--solo` | with `--queue`: start single player first and search alongside it (standby); with `--lobby join`: single player open while readying (the lobby's match closes it) |
+| `--lobby-own-first` | with `--lobby join`: a lobby of one's own first, then the named one joined as a click does (the server moves the player; an older server's busy gets a leave and the join again) |
 | `--practice on\|off`, `--search-again on\|off` | the queue pages' boxes, saved |
 | `--lobby host\|join\|watch --lobby-name NAME [--lobby-code-file F] [--lobby-matches N]` | host a lobby and ready, join it and ready, or watch it as a spectator; the code through a file (Online Practice lobbies are never listed) |
 | `--koth`, `--rate N` | a King of the Hill lobby; rate each match watched, 1 to 10 |
@@ -318,6 +337,9 @@ powershell -File tools\online-e2e.ps1 -Queue ranked                   # a ranked
 powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Watch  # a lobby, two matches, a spectator
 powershell -File tools\online-e2e.ps1 -Queue lobby -Mode sparring     # Online Practice
 powershell -File tools\online-e2e.ps1 -Queue ranked -Draw -Matches 2  # drawn matches: nobody's point in the set
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -OwnLobbyFirst -SoloB  # B moves from its own lobby, its single player closed
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Desync -Stuck  # desync reports paired, stuck games replaced
+powershell -File tools\online-e2e.ps1 -Queue casual -DelayB 3        # input delays: Auto (default) or a number
 powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps                 # King of the Hill, Respect Points, leaderboard
 ```
 

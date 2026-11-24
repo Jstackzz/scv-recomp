@@ -112,6 +112,12 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
                                                                          : QStringLiteral("not brought to the front")));
     });
     connect(controller_, &MatchController::soloStarted, this, &MainWindow::frontSoloWhenUp);
+    // what the launcher did with a game by itself (single player closed for an online match, a stuck game started
+    // again): said in the banner, which the player sees over every page
+    connect(controller_, &MatchController::notice, this, [this](const QString& text) {
+        applog::write(QStringLiteral("notice: ") + text);
+        showNotice(text, true);
+    });
     // the launcher with a controller: LB / RB the pages, START finds a match on a queue page
     pad_ = new GamepadNav(this);
     pad_->onPage = [this](int step) {
@@ -785,9 +791,14 @@ void MainWindow::offerUpdate(const QJsonValue& value, bool required) {
     const QJsonObject release = Updater::usable(value);
     if (release.isEmpty()) return;
     const QString version = release.value(QStringLiteral("version")).toString();
-    applog::write(QStringLiteral("update: %1 offered%2").arg(version, required ? QStringLiteral(", needed to play online") : QString()));
+    const bool otherBuild = Updater::sameVersionOtherBuild(release);
+    applog::write(QStringLiteral("update: %1 offered%2%3")
+                      .arg(version, required ? QStringLiteral(", needed to play online") : QString(),
+                           otherBuild ? QStringLiteral(" (the release's build %1; this one is %2)")
+                                            .arg(release.value(QStringLiteral("build")).toString(), paths::packageBuild())
+                                      : QString()));
     update_ = release;
-    updateButton_->setText(tr("UPDATE TO %1").arg(version));
+    updateButton_->setText(otherBuild ? tr("GET THE RELEASE OF %1").arg(version) : tr("UPDATE TO %1").arg(version));
     updateButton_->show();
     if (updater_->busy()) return;
     if (opts_.autoUpdate && Updater::blocker().isEmpty()) {
@@ -858,8 +869,11 @@ void MainWindow::installUpdateWhenFree() {
 
 void MainWindow::showNotice(const QString& text, bool warn) {
     notice_->setText(text);
-    notice_->setStyleSheet(warn ? QStringLiteral("background:#6B3A0A; color:#FFFFFF; padding:8px 24px; font-weight:600;")
-                                : QStringLiteral("background:#101829; color:#EDE6D6; padding:8px 24px; border-bottom:1px solid #B8923A;"));
+    // large and plain: what the launcher has to tell the player (12 pt; a warning bold, white on dark orange)
+    notice_->setStyleSheet(warn ? QStringLiteral("background:#6B3A0A; color:#FFFFFF; padding:10px 24px; font-size:12pt; "
+                                                 "font-weight:700;")
+                                : QStringLiteral("background:#101829; color:#EDE6D6; padding:10px 24px; font-size:12pt; "
+                                                 "border-bottom:1px solid #B8923A;"));
     notice_->show();
     noticeTimer_.start(20000);
 }
@@ -918,6 +932,19 @@ void MainWindow::cliLobby() {
         server_->send(create);
         return;
     }
+    // --solo: single player open while this player readies in the lobby (the lobby's match closes it)
+    if (opts_.solo && !controller_->soloRunning()) {
+        QString err;
+        if (!controller_->startSolo(gameId_, &err)) applog::write(QStringLiteral("cli: single player: %1").arg(err));
+    }
+    // --lobby-own-first: in a lobby of one's own when the one to join turns up (the join moves the player there)
+    if (opts_.lobbyOwnFirst && opts_.lobby == QLatin1String("join")) {
+        applog::write(QStringLiteral("cli: creating a lobby of my own first"));
+        server_->send({{QStringLiteral("type"), QStringLiteral("lobby_create")}, {QStringLiteral("name"), QString()},
+                       {QStringLiteral("game"), gameId_}, {QStringLiteral("mode"), mode},
+                       {QStringLiteral("password"), QString()}, {QStringLiteral("rounds"), 5},
+                       {QStringLiteral("region"), cfg::region()}, {QStringLiteral("character"), opts_.character}});
+    }
     applog::write(QStringLiteral("cli: looking for lobby \"%1\"").arg(name));
     cliLobbyPoll_ = new QTimer(this);
     connect(cliLobbyPoll_, &QTimer::timeout, this, [this] {
@@ -925,16 +952,12 @@ void MainWindow::cliLobby() {
         if (!opts_.lobbyCodeFile.isEmpty()) {
             QFile f(opts_.lobbyCodeFile);
             const QString code = f.open(QIODevice::ReadOnly) ? QString::fromLatin1(f.readAll()).trimmed() : QString();
-            if (code.isEmpty() || cliLobbyJoined_) return;
+            if (code.isEmpty() || cliLobbyJoined_ || (opts_.lobbyOwnFirst && !cliOwnLobbyIn_)) return;
             cliLobbyJoined_ = true;
             cliLobbyPoll_->stop();
             const bool watch = opts_.lobby == QLatin1String("watch");
             applog::write(QStringLiteral("cli: %1 lobby %2 by its code").arg(watch ? QStringLiteral("watching") : QStringLiteral("joining"), code));
-            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
-                           {QStringLiteral("lobby"), code},
-                           {QStringLiteral("password"), QString()},
-                           {QStringLiteral("character"), opts_.character},
-                           {QStringLiteral("spectate"), watch}});
+            cliJoin(code, watch);
             return;
         }
         server_->send({{QStringLiteral("type"), QStringLiteral("lobby_list")}, {QStringLiteral("game"), gameId_}});
@@ -942,11 +965,29 @@ void MainWindow::cliLobby() {
     cliLobbyPoll_->start(1000);
 }
 
+// --lobby join / watch: the lobby by its code; with --lobby-own-first the way a player's click goes (LobbyPage's join:
+// a move from the lobby the player is in, an older server's busy answered with a leave and the join again)
+void MainWindow::cliJoin(const QString& code, bool watch) {
+    if (opts_.lobbyOwnFirst) {
+        if (auto* lobby = qobject_cast<LobbyPage*>(pages_[kLobby])) lobby->joinByCode(code, watch);
+        return;
+    }
+    server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
+                   {QStringLiteral("lobby"), code},
+                   {QStringLiteral("password"), QString()},
+                   {QStringLiteral("character"), opts_.character},
+                   {QStringLiteral("spectate"), watch}});
+}
+
 void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
     const QString type = msg.value(QStringLiteral("type")).toString();
     const QString name = opts_.lobbyName.isEmpty() ? QStringLiteral("e2e lobby") : opts_.lobbyName;
     const bool watch = opts_.lobby == QLatin1String("watch");
-    if (type == QLatin1String("lobbies") && (opts_.lobby == QLatin1String("join") || watch) && !cliLobbyJoined_) {
+    // --lobby-own-first: in the lobby of one's own before joining (its state comes back first)
+    if (type == QLatin1String("lobby") && opts_.lobbyOwnFirst && !cliLobbyJoined_) cliOwnLobbyIn_ = true;
+    const bool mayJoin = cliLobbyBegun_ && (!opts_.lobbyOwnFirst || cliOwnLobbyIn_);
+    if (type == QLatin1String("lobbies") && (opts_.lobby == QLatin1String("join") || watch) && !cliLobbyJoined_ &&
+        mayJoin) {
         for (const auto& v : msg.value(QStringLiteral("lobbies")).toArray()) {
             const QJsonObject lb = v.toObject();
             // King of the Hill: a lobby whose places are taken has a line to wait in
@@ -958,18 +999,16 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
             if (cliLobbyPoll_) cliLobbyPoll_->stop();
             const QString code = lb.value(QStringLiteral("id")).toString();
             applog::write(QStringLiteral("cli: %1 lobby %2").arg(watch ? QStringLiteral("watching") : QStringLiteral("joining"), code));
-            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
-                           {QStringLiteral("lobby"), code},
-                           {QStringLiteral("password"), QString()},
-                           {QStringLiteral("character"), opts_.character},
-                           {QStringLiteral("spectate"), watch}});
+            cliJoin(code, watch);
             break;
         }
         return;
     }
     if (type != QLatin1String("lobby")) return;
-    cliLastLobby_ = msg;
     const QJsonObject lobby = msg.value(QStringLiteral("lobby")).toObject();
+    // --lobby-own-first: the lobby of one's own is only where the player waits for the one to join
+    if (opts_.lobbyOwnFirst && opts_.lobby == QLatin1String("join") && !cliLobbyJoined_) return;
+    cliLastLobby_ = msg;
     if (opts_.lobby == QLatin1String("host") && !opts_.lobbyCodeFile.isEmpty() && !cliLobbyCodeWritten_) {
         cliLobbyCodeWritten_ = true;
         QFile f(opts_.lobbyCodeFile);
@@ -1025,7 +1064,9 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
         return;
     }
     if (members.size() < 2 || !mePlaying || cliLobbyDone_ >= opts_.lobbyMatches) return;
-    if (controller_->phase() != MatchController::Phase::Idle) return;  // the game still plays the last match's end
+    // the game still plays the last match's end (single player open, --solo, readies: the match closes it)
+    if (controller_->phase() != MatchController::Phase::Idle && controller_->phase() != MatchController::Phase::Solo)
+        return;
     bool all_ready = true, me_ready = false;
     for (const auto& v : members) {
         const QJsonObject m = v.toObject();
@@ -1036,9 +1077,10 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
     if (!me_ready && cliLobbyReadyFor_ != cliLobbyDone_) {
         cliLobbyReadyFor_ = cliLobbyDone_;
         applog::write(QStringLiteral("cli: ready in lobby %1").arg(lobby.value(QStringLiteral("id")).toString()));
-        server_->send({{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
-                       {QStringLiteral("delay"), cfg::inputDelay()}, {QStringLiteral("relay"), cfg::hideIp()},
-                       {QStringLiteral("hide_always"), cfg::hideIpAlways()}});
+        QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
+                          {QStringLiteral("relay"), cfg::hideIp()}, {QStringLiteral("hide_always"), cfg::hideIpAlways()}};
+        cfg::putDelay(ready, cfg::inputDelay());
+        server_->send(ready);
     }
     // both ready: the server starts the match after its countdown
     if (opts_.lobby == QLatin1String("host") && all_ready && cliLobbyStarts_ == cliLobbyDone_) {

@@ -1,6 +1,7 @@
 #pragma once
 // Where the launcher keeps its settings, logs and per-session folders, and typed settings access.
 
+#include <QJsonObject>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -17,6 +18,10 @@ bool isPackage();                            // a player package: games\ beside 
 QString packagedGameFolder(const QString& gameId);  // games\<id> beside the launcher (a player package), or empty
 QString toolchainDir();                      // toolchain\ beside the launcher: what compiles the game's code
 QString displayFile();                       // display.txt beside the ini: the display settings for running games
+// which build of its version this launcher is: a player package's VERSION.txt stamp ("SC5-Online 0.1.4, packaged
+// 2026-11-23 22:31" gives "2026-11-23 22:31"); empty in a source build. Two packages of one version (a test build
+// and the release) differ there, which the version number alone never shows (docs/PROTOCOL.md 1.3)
+QString packageBuild();
 }  // namespace paths
 
 namespace cfg {
@@ -57,10 +62,18 @@ bool practiceWhileWaiting();
 // (MatchController::maybeSearchAfterSeries)
 bool searchAgain();
 bool matchSound();  // a chime when a Ranked or Casual match is found (the MATCH FOUND window comes up)
+// The input delay: kAutoDelay (the default since 0.1.4), the match's from its measured ping (the server's choice,
+// match_go's delay; autoDelayFor), or the player's own 0-4 frames, which a match plays when it is the larger of the
+// two players'. Settings, ONLINE ([online] input_delay: "auto" or the number)
+constexpr int kAutoDelay = -1;
 int inputDelay();
-// a match's delay raised for its ping (MatchController autoDelayFor: about the one-way trip's frames but one, 6 at
-// most), so a laggy match rolls back less; both games play the larger of their two
-bool autoDelay();
+QString inputDelayText(int delay);  // "Auto (from the ping)" or "2 frames"
+// what Auto comes to for a round trip: the one-way trip's frames rounded up, less one, 1 to 6 (the server's
+// protocol.auto_delay: 1 under 67 ms, 2 to 100, 3 to 133, 4 to 166, 5 to 200, then 6)
+int autoDelayFor(int rttMs);
+// what a lobby_ready or queue_join says of it: "delay" a number (Auto: 1, what a server from before Auto takes) and
+// "delay_auto" true for Auto
+void putDelay(QJsonObject& msg, int delay);
 int gamePort();
 // The display settings (Settings, DISPLAY): each changes only how a frame looks, never what the game computes, so
 // two players may set them differently in one match (docs/PROTOCOL.md 3.1)

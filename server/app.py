@@ -43,7 +43,32 @@ NEEDS_LOGIN = {
 }
 CRASH_REPORTS_PER_SESSION = 20  # a game crashing over and over says so this many times, then no more
 DESYNC_REPORTS_PER_SESSION = 10  # matches out of step a session reports, then no more
-DESYNC_LINES = 40  # a desync report's lines from the game's log, 200 characters each at most
+# a desync report's lines from the game's log, 200 characters each at most (40 until SCV 0.1.4, when the game's own
+# `sc5 desync:` detail lines, up to about 80, came after its failed check); the message may be up to
+# P.MAX_DESYNC_LINE long, every other one P.MAX_LINE
+DESYNC_LINES = 200
+DESYNC_WAIT = 600.0  # a match's first desync report waits this long for the other player's (DESYNC_PAIR)
+DESYNC_PENDING_MAX = 500  # reports waiting for their pair at most
+# what a desync report's lines say of the match, for DESYNC_PAIR (the game's log, sc5/src/sc5: versus.cpp, autopilot)
+DESYNC_STAGE = re.compile(r"sc5 versus: (?:VS settings .*\bstage ([0-9A-Fa-f]+)|(?:player 1's )?stage ([0-9A-Fa-f]+),)")
+DESYNC_PICK = re.compile(r"autopilot: side ([12]) picked (.{1,40}?) \(slot")
+DESYNC_START_PICKS = re.compile(r"link: (?:command )?(?:start|rematch)\b.*\bp1=(\S+) p2=(\S+)")
+
+
+def desync_setup(lines: list[str]) -> tuple[str, tuple[str, str]]:
+    """The stage and the two fighters a desync report's lines name (the last of each before anything else): the
+    game's stage number as it logs it, the fighters by name ("?" for what the lines leave out)."""
+    stage, picks, named = "?", ["?", "?"], ["?", "?"]
+    for line in lines:
+        if (m := DESYNC_STAGE.search(line)) is not None:
+            stage = m.group(1) or m.group(2)
+        elif (m := DESYNC_PICK.search(line)) is not None:
+            picks[int(m.group(1)) - 1] = m.group(2)
+        elif (m := DESYNC_START_PICKS.search(line)) is not None:
+            named = [p if p not in ("-", "") else "?" for p in (m.group(1), m.group(2))]
+            picks = ["?", "?"]  # a later match's start: its own picks come after it
+    fighters = tuple(p if p != "?" else n for p, n in zip(picks, named))
+    return stage, (fighters[0], fighters[1])
 LEFT_LINES = 20  # a game that ended before its match started: its log's last lines, 200 characters each at most
 CRASH_TEXT = re.compile(r"[\x20-\x7E]*")  # printable ASCII only: it goes into the log as is
 # F3 reports (what a player saw drawn wrong: the game's capture, its log), docs/PROTOCOL.md 1.13.2
@@ -146,6 +171,19 @@ class ServerConfig:
 
 
 @dataclass
+class DesyncSide:
+    """One player's desync report of a match, waiting for the other's (DESYNC_PAIR)."""
+
+    account: int
+    name: str
+    frame: int
+    version: str
+    stage: str
+    fighters: tuple[str, str]
+    at: float
+
+
+@dataclass
 class Report:
     """An F3 report coming in (report_file messages, then report_done): its folder and what was written to it."""
 
@@ -171,6 +209,7 @@ class Session:
         self.ip: str = peer[0]
         self.hello = False
         self.client_version = ""
+        self.client_build = ""  # which build of its version (a package's VERSION.txt stamp), "" unknown
         self.features: set[str] = set()  # what its launcher can do beyond the protocol's start (hello, P.FEATURES)
         self.crash_reports = 0
         self.desync_reports = 0
@@ -445,7 +484,9 @@ class Lobby:
         for m in self.members:
             entry = {"name": m.session.name, "character": m.character, "ready": m.ready, "host": m.session is self.host,
                      "spectator": m.spectator, "link": m.link or None, "ping": m.server_rtt,
-                     "title": title_of(m.session) if title_of else None}
+                     "title": title_of(m.session) if title_of else None,
+                     # their launcher's version and build: two versions cannot play each other (the lobby says so)
+                     "version": m.session.client_version or None, "build": m.session.client_build or None}
             if self.koth:
                 entry["line"] = self.line.index(m) + 1 if m in self.line else None
                 entry["respect"] = respect_of(m.session) if respect_of else 0
@@ -573,6 +614,7 @@ class Server:
         self.relay_routes: dict[tuple[str, int], RelayRoute] = {}
         self.tunnel_routes: dict[int, RelayRoute] = {}  # by account: what a tunnelled player sends
         self.ping_cache = PingCache()
+        self.desyncs: dict[str, DesyncSide] = {}  # by match: a desync report waiting for the other player's
         self.login_failures: dict[str, collections.deque[float]] = {}
         self.tcp_port = self.cfg.port
         self.udp_port = self.cfg.udp_port
@@ -648,7 +690,7 @@ class Server:
         self.db = Database(self.cfg.db_path)
         loop = asyncio.get_running_loop()
         self._tcp = await asyncio.start_server(
-            self._handle, self.cfg.host, self.cfg.port, ssl=ssl_ctx, limit=P.MAX_LINE + 2
+            self._handle, self.cfg.host, self.cfg.port, ssl=ssl_ctx, limit=P.MAX_DESYNC_LINE + 2
         )
         self.tcp_port = self._tcp.sockets[0].getsockname()[1]
         transport, _ = await loop.create_datagram_endpoint(
@@ -656,7 +698,7 @@ class Server:
         )
         self._udp = transport  # type: ignore[assignment]
         self.udp_port = transport.get_extra_info("sockname")[1]
-        self._update_pushed = (self._latest_release() or {}).get("version")  # nobody connected yet to offer it to
+        self._update_pushed = self._release_key(self._latest_release())  # nobody connected yet to offer it to
         self._ticker_task = asyncio.create_task(self._ticker(), name="sc5-ticker")
         scheme = "tcp" if self.cfg.plain else "tls"
         log.info("SC5 server %s listening on %s://%s:%d, UDP rendezvous on %d, database %s",
@@ -801,7 +843,7 @@ class Server:
                     break
                 if not line:
                     break
-                if len(line) > P.MAX_LINE + 2:
+                if len(line) > P.MAX_LINE + 2 and not self._long_line_allowed(line):
                     s.send({"type": "error", "code": "too_long", "message": "Message too long."})
                     break
                 line = line.strip()
@@ -814,6 +856,17 @@ class Server:
             s.close()
             with suppress(Exception):
                 await asyncio.wait_for(writer.wait_closed(), timeout=2)
+
+    @staticmethod
+    def _long_line_allowed(line: bytes) -> bool:
+        """Every message is MAX_LINE long at most but a desync report, which may be MAX_DESYNC_LINE (its lines: the
+        game's detail after the failed check, SCV 0.1.4); anything else that long closes the connection."""
+        if len(line) > P.MAX_DESYNC_LINE + 2:
+            return False
+        try:
+            return P.decode_line(line.strip()).get("type") == "desync_report"
+        except P.ProtocolError:
+            return False
 
     def _drop(self, s: Session) -> None:
         if s not in self.sessions:
@@ -872,8 +925,9 @@ class Server:
                     "server_proto": P.PROTO})
             s.close()
             return
-        version = str(msg.get("version", "0"))
-        update = self._update_for(version)
+        version = str(msg.get("version", "0"))[:40]
+        build = P.client_build(msg.get("build"))
+        update = self._update_for(version, build)
         if not P.version_at_least(version, self.cfg.min_client):
             # the message says where the release is (a launcher without the updater shows only it): the update
             # file's page, else the server's releases page, else no page at all
@@ -888,6 +942,7 @@ class Server:
             return
         s.hello = True
         s.client_version = version
+        s.client_build = build
         features = msg.get("features")
         if isinstance(features, list):
             s.features = {f for f in features if isinstance(f, str) and f in P.FEATURES}
@@ -927,12 +982,26 @@ class Server:
                     log.warning("update file %s ignored: %s", path, exc)
         return self._update
 
-    def _update_for(self, version: str) -> dict[str, Any] | None:
-        """The latest release when a launcher of this version is older."""
+    def _update_for(self, version: str, build: str = "") -> dict[str, Any] | None:
+        """The latest release when a launcher of this version is older, or is this version in another build than the
+        release's (the update file's `build`, the launcher's hello one, both known): a test build given out before the
+        release took its number, whose game is not the release's. A newer launcher (a developer's) is offered nothing."""
         latest = self._latest_release()
-        if latest is None or P.version_at_least(version, latest["version"]):
+        if latest is None:
             return None
-        return latest
+        if not P.version_at_least(version, latest["version"]):
+            return latest
+        same = P.version_at_least(latest["version"], version)  # and at least it (above): the same version
+        if same and build and latest.get("build") and build != latest["build"]:
+            return latest
+        return None
+
+    @staticmethod
+    def _release_key(latest: dict[str, Any] | None) -> str | None:
+        """A release as the push tells them apart: its version, and its build when the update file names one."""
+        if latest is None:
+            return None
+        return f"{latest['version']} ({latest['build']})" if latest.get("build") else latest["version"]
 
     def _push_update(self, now: float) -> None:
         """A release announced while launchers are connected: offered to the older ones at once."""
@@ -940,7 +1009,7 @@ class Server:
             return
         self._update_checked = now
         latest = self._latest_release()
-        version = latest["version"] if latest else None
+        version = self._release_key(latest)
         if version == self._update_pushed:
             return
         self._update_pushed = version
@@ -948,7 +1017,7 @@ class Server:
             return
         offered = 0
         for s in list(self.sessions):
-            if s.hello and not P.version_at_least(s.client_version, latest["version"]):
+            if s.hello and self._update_for(s.client_version, s.client_build) is not None:
                 s.send({"type": "update", **latest})
                 offered += 1
         log.info("release %s announced to %d connected launcher(s)", version, offered)
@@ -1055,7 +1124,8 @@ class Server:
         if series is not None and sp is not None:  # back in the middle of one
             s.send(self._series_msg(series, sp, now))
         self._mark_online()
-        log.info("login %s from %s (launcher %s)", s.name, s.ip, s.client_version)
+        log.info("login %s from %s (launcher %s%s)", s.name, s.ip, s.client_version,
+                 f", build {s.client_build}" if s.client_build else "")
         self._rejoin_lobby(s, now)
 
     def _rejoin_lobby(self, s: Session, now: float) -> None:
@@ -1253,7 +1323,7 @@ class Server:
         max_ping = P.get_int(msg, "max_ping", lo=0, hi=2000, default=0)
         strict = P.get_bool(msg, "strict", default=False)
         character = P.get_character(msg)
-        delay = P.get_int(msg, "delay", lo=0, hi=P.DELAY_MAX, default=2)
+        delay = P.get_delay(msg, default=2)
         death_traps = P.get_bool(msg, "death_traps", default=True)
         relay = P.get_bool(msg, "relay", default=False)
         relay_always = relay and P.get_bool(msg, "hide_always", default=False)
@@ -1654,7 +1724,10 @@ class Server:
         m.rtt_ms = rtt
         m.seed = self.rng.getrandbits(32)
         m.deadline = now + self.cfg.max_match_seconds
-        delay = max(p.delay for p in m.players)
+        # the larger of the two players' delays, an "auto" one's from the match's round trip (the larger of the two
+        # measured, the same for both games): both games are told the same delay
+        auto = any(p.delay == P.DELAY_AUTO for p in m.players)
+        delay = max(P.auto_delay(rtt) if p.delay == P.DELAY_AUTO else p.delay for p in m.players)
         if m.ranked:
             delay = max(1, delay)
         p1, p2 = m.players
@@ -1663,7 +1736,8 @@ class Server:
             assert p.session is not None and p.ping is not None
             p.session.send({
                 "type": "match_go", "match": m.id, "game": m.game, "mode": m.mode, "ranked": m.ranked,
-                "side": p.side, "remote": p.ping["remote"], "rtt_ms": rtt, "delay": delay, "seed": m.seed,
+                "side": p.side, "remote": p.ping["remote"], "rtt_ms": rtt, "delay": delay, "delay_auto": auto,
+                "seed": m.seed,
                 "rounds": m.rounds, "p1": p1.character or "-", "p2": p2.character or "-",
                 "p1_name": p1.name, "p2_name": p2.name, "p1_title": titles[0], "p2_title": titles[1],
                 "lobby": m.lobby.id if m.lobby else None, "death_traps": m.death_traps, "feed": m.lobby is not None,
@@ -1672,7 +1746,8 @@ class Server:
             self._start_feed(m)
         self.db.update_match(m.id, status="playing", started=now, seed=m.seed, rtt_ms=rtt)
         tunnelled = " and ".join(p.name for p in m.players if p.tunnel)
-        log.info("match %s go: %s vs %s, rtt %d ms, delay %d%s%s", m.id, p1.name, p2.name, rtt, delay,
+        log.info("match %s go: %s vs %s, rtt %d ms, delay %d%s%s%s", m.id, p1.name, p2.name, rtt, delay,
+                 " (auto)" if auto else "",
                  ", through the relay" if m.relay is not None else "",
                  f" ({tunnelled} tunnelled)" if tunnelled else "")
         self._mark_online()
@@ -2549,8 +2624,7 @@ class Server:
         return s.lobby
 
     def on_lobby_create(self, s: Session, msg: dict[str, Any]) -> None:
-        if s.queue is not None or s.lobby is not None or s.match is not None:
-            raise P.ProtocolError("busy", "Leave the queue, lobby or match first.")
+        self._not_busy_for_lobby(s)
         game, mode = P.get_game_mode(msg)
         self._quit_series(s)
         default_name = f"{s.name}'s lobby"
@@ -2574,7 +2648,9 @@ class Server:
         self._member_connection(host, msg)
         # Online Practice is for its two players alone: nobody watches it
         spectators = 0 if mode in P.LOBBY_ONLY_MODES else self.cfg.max_spectators
-        lobby = Lobby(id=self._new_lobby_code(), name=name, game=game, mode=mode, region=region, rounds=rounds,
+        code = self._new_lobby_code()
+        self._switch_lobby(s, code)  # everything checked: out of the one this player was in
+        lobby = Lobby(id=code, name=name, game=game, mode=mode, region=region, rounds=rounds,
                       password=password, host=s, members=[host], created=time.time(),
                       death_traps=death_traps, max_spectators=spectators, koth=koth)
         self.lobbies[lobby.id] = lobby
@@ -2592,13 +2668,35 @@ class Server:
                  if (game is None or lb.game == game) and lb.mode not in P.LOBBY_ONLY_MODES]
         self._reply(s, msg, {"type": "lobbies", "lobbies": items})
 
+    def _switch_lobby(self, s: Session, to: str) -> None:
+        """A session is in one lobby at most: one that creates or joins another leaves the one it is in first (its
+        match not under way: `busy` then), told so with `lobby_left` naming the lobby it goes to (`joined`)."""
+        old = s.lobby
+        if old is None:
+            return
+        self._leave_lobby(s)
+        s.send({"type": "lobby_left", "lobby": old.id, "joined": to})
+        log.info("lobby %s: %s went on to lobby %s", old.id, s.name, to)
+
+    def _not_busy_for_lobby(self, s: Session) -> None:
+        """Creating or joining a lobby: not while searching, nor while a match of this player's is set up or runs
+        (one in the lobby they are in included); a lobby they are in otherwise is left for the new one."""
+        if s.queue is not None:
+            raise P.ProtocolError("busy", "You are searching for a match: cancel the search first.")
+        if s.match is not None:
+            raise P.ProtocolError("busy", "Your match is still on: finish it first.")
+
     def on_lobby_join(self, s: Session, msg: dict[str, Any]) -> None:
-        if s.queue is not None or s.lobby is not None or s.match is not None:
-            raise P.ProtocolError("busy", "Leave the queue, lobby or match first.")
+        self._not_busy_for_lobby(s)
         code = P.get_str(msg, "lobby", max_len=16).strip().upper()
         lobby = self.lobbies.get(code)
         if lobby is None:
             raise P.ProtocolError("no_such_lobby", "No lobby with that code.")
+        if s.lobby is lobby:  # already in it: its state again, nothing changes
+            state = lobby.full_state(lambda m: self._title_of(m.account_id, lobby.game, lobby.mode),
+                                     lambda m: self._respect_of(m.account_id, lobby.game, lobby.mode))
+            self._reply(s, msg, {"type": "lobby", "lobby": state})
+            return
         spectate = P.get_bool(msg, "spectate", default=False)
         if lobby.mode in P.LOBBY_ONLY_MODES and (spectate or len(lobby.players()) >= 2):
             raise P.ProtocolError("lobby_full", "Online Practice is for two players, and this one has both.")
@@ -2617,6 +2715,7 @@ class Server:
         password = P.get_str(msg, "password", default="", max_len=64)
         if lobby.password and not hmac.compare_digest(lobby.password.encode(), password.encode()):
             raise P.ProtocolError("bad_lobby_password", "Wrong lobby password.")
+        self._switch_lobby(s, lobby.id)  # everything checked: out of the one this player was in
         self._quit_series(s)
         character = "" if lobby.mode in P.LOBBY_ONLY_MODES else P.get_character(msg)  # Online Practice: picked in game
         member = LobbyMember(s, character, spectator=spectate or in_line)
@@ -2707,7 +2806,32 @@ class Server:
                  s.client_version or "?", match or "?", frame, len(lines))
         for line in lines:
             log.info("DESYNC_REPORT %s | %s", s.name, line)
+        self._pair_desync(s, match, frame, lines)
         self._reply(s, msg, {"type": "desync_ack"})
+
+    def _pair_desync(self, s: Session, match: str, frame: int, lines: list[str]) -> None:
+        """Both players' reports of one match in: one DESYNC_PAIR line names the two players, the frames each game
+        saw the check fail at, the stage and the two fighters (from each report's lines), so a night's desyncs read
+        at a glance from the journal. A report waits for the other's DESYNC_WAIT seconds at most."""
+        if not match or s.account_id is None:
+            return
+        now = time.time()
+        for key in [k for k, d in self.desyncs.items() if d.at < now - DESYNC_WAIT]:
+            del self.desyncs[key]
+        mine = DesyncSide(s.account_id, s.name or "?", frame, s.client_version or "?", *desync_setup(lines), now)
+        other = self.desyncs.get(match)
+        if other is None or other.account == mine.account:
+            if len(self.desyncs) < DESYNC_PENDING_MAX:
+                self.desyncs[match] = mine
+            return
+        del self.desyncs[match]
+        a, b = other, mine
+        stage = a.stage if a.stage == b.stage else f"{a.stage} / {b.stage} (they differ)"
+        fighters = (" vs ".join(a.fighters) if a.fighters == b.fighters
+                    else f"{' vs '.join(a.fighters)} / {' vs '.join(b.fighters)} (they differ)")
+        log.info("DESYNC_PAIR %s %s at frame %d, %s at frame %d%s; stage %s; %s (launchers %s and %s)", match,
+                 a.name, a.frame, b.name, b.frame, "" if a.frame == b.frame else " (the frames differ)", stage,
+                 fighters, a.version, b.version)
 
     def _reports_bytes(self) -> int:
         total = 0
@@ -2825,7 +2949,7 @@ class Server:
         if member.spectator:
             raise P.ProtocolError("not_player", "Spectators do not ready up: take a place to play first.")
         member.ready = P.get_bool(msg, "ready")
-        member.delay = P.get_int(msg, "delay", lo=0, hi=P.DELAY_MAX, default=member.delay)
+        member.delay = P.get_delay(msg, default=member.delay)
         member.relay = P.get_bool(msg, "relay", default=False)
         member.relay_always = member.relay and P.get_bool(msg, "hide_always", default=False)
         # ready from the last match's result screen, where its loser chose the next match (both launchers say so)

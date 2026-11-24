@@ -403,10 +403,10 @@ void QueuePage::refreshRoster() {
                               : tr("You pick your character on the game's select screen when the match starts, with "
                                    "your own controller; your opponent picks on theirs."));
     picker_->setRoster(g->roster(modeId), cfg::get(QStringLiteral("ui/%1/%2/character").arg(gameId_, modeId)).toString());
-    delayInfo_->setText((cfg::autoDelay() ? tr("Input delay %1 frame(s), more at a high ping; game UDP port %2 "
-                                               "(change in Settings)")
-                                          : tr("Input delay %1 frame(s), game UDP port %2 (change in Settings)"))
-                            .arg(qMax(ranked_ ? 1 : 0, cfg::inputDelay())).arg(cfg::gamePort()));
+    const int delay = cfg::inputDelay();
+    delayInfo_->setText(tr("Input delay: %1, game UDP port %2 (change in Settings)")
+                            .arg(cfg::inputDelayText(delay < 0 ? delay : qMax(ranked_ ? 1 : 0, delay)))
+                            .arg(cfg::gamePort()));
 }
 
 void QueuePage::updateStats() {
@@ -454,7 +454,8 @@ bool QueuePage::startSearch(const QString& mode, const QString& character) {
     req.maxPing = maxPing_->currentData().toInt();
     req.strict = ranked_ && strict_->isChecked();
     req.character = m->picksInGame() || cfg::pickInGame() ? QString() : picker_->currentId();
-    req.delay = qMax(ranked_ ? 1 : 0, cfg::inputDelay());
+    const int delay = cfg::inputDelay();
+    req.delay = delay < 0 ? cfg::kAutoDelay : qMax(ranked_ ? 1 : 0, delay);  // ranked: at least a frame
     QString error;
     if (!controller_->findMatch(req, &error)) {
         log_->line(error);

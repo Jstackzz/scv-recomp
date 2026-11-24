@@ -74,6 +74,11 @@ QLabel#Big { font-family: "Bahnschrift"; font-size: 16pt; font-weight: 700; colo
 QLabel#StatValue { font-family: "Bahnschrift"; font-size: 18pt; font-weight: 700; color: #FFFFFF; background: transparent; }
 QLabel#StatLabel { color: #8A93A3; font-size: 8pt; background: transparent; }
 QLabel#Warning { color: #F0B35A; background: transparent; }
+/* what a player must see and act on (a lobby whose players cannot play each other, a join turned away): large white
+   on dark orange, framed in gold */
+QLabel#Alert { font-family: "Bahnschrift"; font-size: 13pt; font-weight: 700; color: #FFFFFF; background: #6B2A0C;
+               border: 2px solid #F0B35A; border-radius: 4px; padding: 8px 12px; }
+QFrame#Card QLabel#Alert { background: #6B2A0C; }
 QLabel#Rank { font-family: "Bahnschrift"; font-size: 11pt; font-weight: 700; color: #E2B85A; background: transparent; }
 QFrame#Card QLabel, QFrame#Card QCheckBox { background: transparent; }
 QFrame#Card QStackedWidget, QFrame#Card QStackedWidget > QWidget { background: transparent; }

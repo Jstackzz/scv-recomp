@@ -36,6 +36,12 @@ public:
     int exitCode() const { return exitCode_; }  // the process's, once it has ended
     QString state() const;                     // first word of it
     bool isReady() const { return state() == QLatin1String("ready"); }
+    // between matches as a game should be: coming up (just started, booting) or at its hold point. Anything else
+    // while nothing of the launcher's runs on it (a match's result, a desync, in_match) is a game that never came
+    // back from its last match
+    bool betweenMatches() const {
+        return status_ == QLatin1String("starting") || state() == QLatin1String("booting") || isReady();
+    }
 
     // Write one command line; if the previous command has not been taken yet it waits up to 2 s
     // (a newer command replaces a waiting one).

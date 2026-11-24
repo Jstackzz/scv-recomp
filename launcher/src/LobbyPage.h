@@ -5,6 +5,7 @@
 // back of the line and the next in line plays the king; everyone else watches and rates each win from 1 to 10, the
 // winner's Respect Points.
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 
@@ -32,11 +33,14 @@ public:
     // goes back to it, so A readies up for the next one (King of the Hill: to the rating first, while it is open)
     void pressReady();
     void focusReady();
+    // join a lobby by its code as the Join code button does (development: --lobby-own-first)
+    void joinByCode(const QString& code, bool spectate) { join(code, false, spectate); }
     // the lobby's mode is lobby-only (Online Practice): its next match comes by itself, nothing to ready up for
     bool lobbyOnly() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     void onMessage(const QJsonObject& msg);
@@ -48,6 +52,12 @@ private:
     void rate(int score);
     void leftLobby(bool keepWatching = false);
     void join(const QString& code, bool locked, bool spectate = false);
+    // a join or create on its way: a search running is cancelled first (the server takes no lobby from a player who
+    // searches), and the request is kept for an older server that turns away a player still in a lobby (busy): this
+    // one leaves it and asks again
+    void sendJoin(const QJsonObject& msg);
+    void showAlert(const QString& text);  // over the list, large: a join turned away, and why
+    void updateVersionAlert();  // the lobby's players whose launchers cannot play this one's (versions)
     bool spectating() const;  // this player watches in the lobby they are in
     QJsonObject me() const;   // this player's entry in the lobby's members
     bool koth() const;
@@ -61,6 +71,14 @@ private:
     QTableWidget* list_;
     QLineEdit* code_;
     QLabel* listInfo_;
+    QLabel* listAlert_;     // a join or create turned away, and why (hidden otherwise)
+    QLabel* versionAlert_;  // in the lobby: who cannot play whom, by their launchers' versions (hidden otherwise)
+    QTimer* listTimer_;     // the list again every few seconds while the page shows
+    QJsonArray lastList_;   // what it showed last (the same again: the table is left alone, its selection kept)
+    QJsonObject lastJoin_;  // the last lobby_join or lobby_create sent
+    bool retriedJoin_ = false;  // sent again after leaving the lobby for an older server
+    bool switching_ = false;    // that leave is on its way: its lobby_left is a move to another lobby
+    bool versionBlocked_ = false;  // the other player's launcher is another version: Ready stays off
     QStackedWidget* right_;
     QLabel* lobbyTitle_;
     QLabel* lobbyInfo_;

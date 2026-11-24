@@ -173,8 +173,10 @@ function New-PlayerPackage {
             $p = Join-Path $root "docs\$d"
             if (Test-Path $p) { Copy-Item -Force $p (Join-Path $Out "docs") }
         }
-        [System.IO.File]::WriteAllText((Join-Path $Out "VERSION.txt"),
-            "SC5-Online $launcherVersion, packaged $(Get-Date -Format 'yyyy-MM-dd HH:mm')`r`n")
+        $packaged = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        [System.IO.File]::WriteAllText((Join-Path $Out "VERSION.txt"), "SC5-Online $launcherVersion, packaged $packaged`r`n")
+        # the release's update.json names it, so a test build of the same version is offered the release (PROTOCOL.md 1.3)
+        "update.json for this package: `"version`": `"$launcherVersion`", `"build`": `"$packaged`""
     }
     $size = (Get-ChildItem $Out -Recurse -File | Measure-Object -Property Length -Sum).Sum
     "package in $Out ({0:N0} MB)" -f ($size / 1MB)

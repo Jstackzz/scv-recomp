@@ -20,6 +20,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -44,18 +45,14 @@ QString rankToken(const QString& title) {
     return key.isEmpty() ? QStringLiteral("-") : key;
 }
 
-// The input delay a match's ping wants (cfg::autoDelay): the frames of its one-way trip but one, which rollback covers,
-// 6 at most: 0 under 50 ms, 1 under 84, 2 under 117, 3 under 150, 4 under 184, 5 under 217, then 6
-int autoDelayFor(int rttMs) {
-    if (rttMs < 0) return 0;
-    return qBound(0, int(std::lround(rttMs / (2000.0 / 60))) - 1, 6);
-}
-
-// the match's input delay: the server's (the larger of both players' settings), raised for the ping both games were
-// measured at (match_go's rtt_ms, the same for both); the games play the larger of their two (netplay AgreeDelay)
+// The match's input delay. A server that knows Auto (match_go's delay_auto, true or false) decided it for both games:
+// the larger of the two players', an Auto one's from the match's ping (cfg::autoDelayFor), so both start lines say the
+// same. An older server took the larger of both numbers (Auto sends 1): this launcher raises it for the ping itself
+// when the player is on Auto (match_go's rtt_ms is the same for both games, which play the larger of their two)
 int matchDelay(const QJsonObject& go) {
     const int delay = go.value(QStringLiteral("delay")).toInt();
-    return cfg::autoDelay() ? qMax(delay, autoDelayFor(go.value(QStringLiteral("rtt_ms")).toInt(-1))) : delay;
+    if (go.contains(QStringLiteral("delay_auto")) || cfg::inputDelay() != cfg::kAutoDelay) return delay;
+    return qMax(delay, cfg::autoDelayFor(go.value(QStringLiteral("rtt_ms")).toInt(-1)));
 }
 
 // Whether a series that is over is followed by the same search (cfg::searchAgain): not when this player left it (LEAVE,
@@ -142,6 +139,11 @@ MatchController::MatchController(ServerClient* server, QObject* parent)
         closeWatchFeed();
         setPhase(Phase::Idle, finishText_.isEmpty() ? tr("Match over") : finishText_);
     });
+    // a game parked and still not back at its hold point kStuckMs later (after a desync, say) is stuck: it would hold
+    // the next match up until its players closed it by hand, so it is replaced (checkStuckGame), and looked at again
+    // every 10 s while it stays so
+    stuckTimer_.setSingleShot(true);
+    connect(&stuckTimer_, &QTimer::timeout, this, &MatchController::checkStuckGame);
     // a watched match whose game never got into it (the players' feed never came): parked after this
     watchTimeout_.setSingleShot(true);
     connect(&watchTimeout_, &QTimer::timeout, this, [this] {
@@ -225,55 +227,127 @@ QString reportLine(const QByteArray& raw) {
 }
 
 // What a desync report says of a game's log (PROTOCOL.md 1.13.1): the PC (Windows, processor, the game's executable)
-// from the log's start, then the last match's lines from its start (the link's "start" line): the picks, the setup
-// both games agreed on (or did not), the check that failed and its detail (where the two games parted, the words that
-// differ); the per-second stats left out, 36 lines at most: every line from the failed check's on (28 at most), then
-// as many of the match's first lines as fit
+// from the log's start, then the match's lines, from its start (the link's start or rematch line) on: its setup (the
+// start, the picks, the stage, the meeting, the words both games agreed on, the blocks of the fight), the last
+// statistics report before the failed check (the per-10-s ones were most of a report before 0.1.4 and pushed out
+// what came just before the check), the last 30 other lines before the check (round ends, ring outs, the game's own
+// errors and warnings), the check, every `sc5 desync:` line (the game's detail after its check, up to about 80) and a
+// few lines after those. At most kDesyncChars characters, as the server's message limit allows (the other lines go
+// first, the oldest first, then detail lines from the last)
+constexpr qsizetype kDesyncChars = 56000, kDesyncLines = 198;
 QStringList desyncLines(const QString& sessionDir) {
     QFile file(QDir(sessionDir).filePath(QStringLiteral("game.log")));
     if (!file.open(QIODevice::ReadOnly)) return {};
-    QStringList out;
+    QStringList head;
     for (const QByteArray& raw : file.read(16384).split('\n')) {
         if (raw.contains("] OS: ") || raw.contains("] CPU: ") || raw.contains("] Game: "))
-            out << reportLine(raw);
+            head << reportLine(raw);
     }
-    file.seek(std::max<qint64>(0, file.size() - 262144));
+    // a long match (stats every 10 s) and the detail: the log's last megabyte
+    file.seek(std::max<qint64>(0, file.size() - (1 << 20)));
     const QList<QByteArray> tail = file.readAll().split('\n');
-    qsizetype start = tail.size();
-    for (qsizetype i = tail.size() - 1; i >= 0; --i) {
-        if (tail[i].contains("link: start ")) {
+    // the failed check (the last one: the match being reported), and the match it is in: the last start before it
+    qsizetype check = -1;
+    for (qsizetype i = tail.size() - 1; i >= 0 && check < 0; --i)
+        if (tail[i].contains("DESYNC at frame")) check = i;
+    const qsizetype end = check >= 0 ? check : tail.size();
+    qsizetype start = 0;
+    for (qsizetype i = end - 1; i >= 0; --i) {
+        if (tail[i].contains("link: start ") || tail[i].contains("link: rematch") ||
+            tail[i].contains("link: command start") || tail[i].contains("link: command rematch")) {
             start = i;
+            // the command line the game logs just before (its p1= and p2=, what the start line does not say)
+            if (i > 0 && tail[i - 1].contains("link: command ")) start = i - 1;
             break;
         }
     }
-    static const QRegularExpression stats(QStringLiteral("netplay: frame \\d+: "));
-    QStringList match;
-    for (qsizetype i = start; i < tail.size(); ++i) {
-        const QByteArray& raw = tail[i];
-        // SC5's game: its netplay ("sc5 net:", the failed check with both hashes), the link, the VS setup both games
-        // agreed on, the picks, and its own errors and warnings (not the graphics', which repeat by the thousand)
+    static const QRegularExpression oldStats(QStringLiteral("netplay: frame \\d+: "));  // MK3D Online's statistics
+    const auto isStats = [](const QByteArray& raw) {
+        return raw.contains("rollbacks (") || raw.contains("keeping a frame top") ||
+               oldStats.match(QString::fromLatin1(raw)).hasMatch();
+    };
+    const auto isDetail = [](const QByteArray& raw) { return raw.contains("sc5 desync:"); };
+    const auto isSetup = [](const QByteArray& raw) {
+        for (const char* key : {"link: start", "link: rematch", "link: command start", "link: command rematch",
+                                "autopilot: side", "sc5 versus:", "autopilot: the stage", "stage select took",
+                                "meeting for match", "agreed words", "of the fight", " in sync, seed",
+                                "sc5 net: player ", "netplay: stage", "picked character"})
+            if (raw.contains(key)) return true;
+        return false;
+    };
+    // what of the game's log a report may carry: SC5's netplay ("sc5 net:"), the link, the VS setup, the picks, the
+    // detail, and the game's own errors and warnings (not the graphics', which repeat by the thousand)
+    const auto isWanted = [&](const QByteArray& raw) {
         const bool sc5 = raw.contains("sc5 net:") || raw.contains("sc5 versus:") || raw.contains("autopilot: side") ||
                          ((raw.contains("[error]") || raw.contains("[warning]")) && !raw.contains("[gpu]"));
-        const bool wanted = sc5 || raw.contains("netplay:") || raw.contains("link:") ||
-                            raw.contains("autopilot: this player") || raw.contains("picked character") ||
-                            raw.contains("error:") || raw.contains("warning:");
-        if (wanted && !stats.match(QString::fromLatin1(raw)).hasMatch()) match << reportLine(raw);
+        return sc5 || isDetail(raw) || raw.contains("netplay:") || raw.contains("link:") ||
+               raw.contains("autopilot: this player") || raw.contains("autopilot: the stage") ||
+               raw.contains("picked character") || raw.contains("error:") || raw.contains("warning:");
+    };
+    enum Kind { kSetup, kStats, kOther, kCheck, kDetail, kAfter };
+    struct Line {
+        qsizetype at;
+        Kind kind;
+    };
+    QList<Line> keep;
+    qsizetype lastRollbacks = -1, lastKeeping = -1, setups = 0;
+    QList<qsizetype> others;
+    for (qsizetype i = start; i < end; ++i) {
+        const QByteArray& raw = tail[i];
+        if (isDetail(raw)) keep.append({i, kDetail});
+        else if (isStats(raw)) (raw.contains("keeping a frame top") ? lastKeeping : lastRollbacks) = i;
+        else if (isSetup(raw) && setups < 40) {
+            keep.append({i, kSetup});
+            ++setups;
+        } else if (isWanted(raw)) others.append(i);
     }
-    constexpr qsizetype kLines = 36, kFromCheck = 28;
-    qsizetype check = -1;
-    for (qsizetype i = 0; i < match.size(); ++i) {
-        if (match[i].contains(QLatin1String("DESYNC at frame"))) {
-            check = i;
-            break;
+    for (const qsizetype i : {lastRollbacks, lastKeeping})
+        if (i >= 0) keep.append({i, kStats});
+    for (qsizetype n = std::max<qsizetype>(0, others.size() - 30); n < others.size(); ++n) keep.append({others[n], kOther});
+    if (check >= 0) {
+        keep.append({check, kCheck});
+        qsizetype details = 0, after = 0;
+        for (qsizetype i = check + 1; i < tail.size(); ++i) {
+            if (isDetail(tail[i]) && details < 100) {
+                keep.append({i, kDetail});
+                ++details;
+            } else if (!isDetail(tail[i]) && !isStats(tail[i]) && isWanted(tail[i]) && after < 10) {
+                keep.append({i, kAfter});
+                ++after;
+            }
         }
     }
-    if (check >= 0 && match.size() > kLines) {
-        const QStringList from = match.mid(check, kFromCheck);
-        match = match.mid(0, std::min(check, kLines - from.size())) + from;
-    } else if (match.size() > kLines) {
-        match = match.mid(0, 22) + match.mid(match.size() - 14);
+    std::sort(keep.begin(), keep.end(), [](const Line& a, const Line& b) { return a.at < b.at; });
+    // within what one message may carry: the other lines before the check go first, the oldest first, then the lines
+    // after it, then detail lines from the last
+    // a line's share of the message: itself, its quotes and comma, and what JSON escapes in it
+    const auto cost = [](const QString& l) {
+        return l.size() + 4 + l.count(QLatin1Char('\\')) + l.count(QLatin1Char('"'));
+    };
+    QStringList text;
+    qsizetype chars = 0;
+    for (const QString& l : head) chars += cost(l);
+    for (const Line& l : keep) {
+        text << reportLine(tail[l.at]);
+        chars += cost(text.last());
     }
-    return out + match;
+    // and the server's 200 lines, the game files' and this PC's two among them
+    qsizetype count = head.size() + text.size();
+    const auto over = [&] { return chars > kDesyncChars || count > kDesyncLines; };
+    for (const Kind drop : {kOther, kAfter, kDetail}) {
+        const bool fromEnd = drop == kDetail;
+        for (qsizetype n = 0; n < keep.size() && over(); ++n) {
+            const qsizetype i = fromEnd ? keep.size() - 1 - n : n;
+            if (keep[i].kind != drop || text[i].isNull()) continue;
+            chars -= cost(text[i]);
+            --count;
+            text[i] = QString();
+        }
+    }
+    QStringList out = head;
+    for (const QString& l : std::as_const(text))
+        if (!l.isNull()) out << l;
+    return out;
 }
 
 // This PC as a desync report names it: the processor, Windows, and the level the game's code was compiled for here
@@ -692,13 +766,38 @@ void MatchController::openUdpThen(std::function<void()> next, int tries) {
         next();
         return;
     }
+    const QString match = str(found_, "match");
+    // the port held by this launcher's own game, which never left its last match (it did not take the park, which
+    // lets go of the port at once): it goes, at once, a fresh one starts for the match, and the port is tried again
+    // (before, the match declined itself: "a player declined", and both players closed their games by hand)
+    if (tries <= 20 && game_ && game_->isRunning() && !game_->betweenMatches() && !replacedForPort_ &&
+        phase_ != Phase::AtResult) {
+        replacedForPort_ = true;
+        GameProcess* old = game_;
+        const QString gameId = old->gameId();
+        const bool forLobby = lobbyGame_ == old;
+        closeGame(tr("The game still holds the game port from its last match (it says \"%1\"): closed")
+                      .arg(old->status()));
+        old->kill();
+        QString gerr;
+        if (GameProcess* g = ensureGame(gameId, &gerr)) {
+            if (forLobby) lobbyGame_ = g;
+            emit notice(tr("Your game was stuck after the last match, so the launcher closed it and is starting it "
+                           "again for this match: give it a moment."));
+        } else {
+            log(gerr);
+        }
+        QTimer::singleShot(300, this, [this, next, match] {
+            if (str(found_, "match") == match) openUdpThen(next, 30);
+        });
+        return;
+    }
     if (tries <= 0) {
         log(err);
         phase_ = Phase::Found;
         decline();
         return;
     }
-    const QString match = str(found_, "match");
     QTimer::singleShot(100, this, [this, next, tries, match] {
         if (str(found_, "match") != match) return;  // that match is gone meanwhile
         openUdpThen(next, tries - 1);
@@ -729,14 +828,23 @@ QString MatchController::opponentName() const {
 GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) {
     closeWhenIdle_ = false;  // wanted again before a lobby left could close it
     leaveQuit_ = false;
-    // one game runs at a time: while single player runs, only an accepted match (which freezes it) brings this one
-    if (solo_ && !soloFrozen_) {
-        if (error) *error = tr("Close your single-player game first.");
-        return nullptr;
-    }
+    // one game runs at a time: an accepted queue match freezes single player (standby) before it gets here; anything
+    // else that needs the online game (a lobby's Ready or match, a series' next match) closes it, saying so
+    if (solo_ && !soloFrozen_) closeSoloForMatch();
     if (phase_ == Phase::Finishing) {
         if (error) *error = tr("Your game is still playing the last match's ending: a moment.");
         return nullptr;
+    }
+    // a game left at an old match's state with nothing of this launcher's on it, parked long ago or never (it never
+    // took the park after a desync, say): the next match would wait for it in vain, so it goes and a fresh one starts
+    bool wasLobbys = false;
+    if (game_ && game_->isRunning() && game_->gameId() == gameId && !game_->betweenMatches() &&
+        (!parkClock_.isValid() || parkClock_.elapsed() > kStuckMs) &&
+        (phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching) && !gameFrozen_) {
+        wasLobbys = lobbyGame_ == game_;
+        closeGame(tr("The game never came back from its last match (it says \"%1\"): closed").arg(game_->status()));
+        emit notice(tr("Your game was stuck after the last match, so the launcher closed it. A fresh one is starting "
+                       "for the next match: give it a moment."));
     }
     if (game_ && game_->isRunning() && game_->gameId() == gameId) {  // it built its own code, if it had to
         if (gameFrozen_) {
@@ -763,6 +871,7 @@ GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) 
         return nullptr;
     }
     game_ = g;
+    if (wasLobbys) lobbyGame_ = g;
     gamePlayed_ = false;
     gamePlayedKey_.clear();
     log(tr("Game %1 starting (session %2)").arg(gameId, g->sessionDir()));
@@ -833,11 +942,11 @@ bool MatchController::findMatch(const QueueRequest& req, QString* error) {
                     {QStringLiteral("max_ping"), req.maxPing},
                     {QStringLiteral("strict"), req.strict},
                     {QStringLiteral("character"), req.character},
-                    {QStringLiteral("delay"), req.delay},
                     {QStringLiteral("relay"), cfg::hideIp()},
                     {QStringLiteral("hide_always"), cfg::hideIpAlways()},
                     {QStringLiteral("link"), server_->linkType()}};
     if (serverRttMs() >= 0) msg.insert(QStringLiteral("server_rtt"), serverRttMs());
+    cfg::putDelay(msg, req.delay);
     pingWiden_ = {};
     server_->send(msg);
     searchClock_.start();
@@ -928,10 +1037,11 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         const bool atResult = phase_ == Phase::AtResult;
         atResultTimer_.stop();
         inPlace_ = atResult && msg.value(QStringLiteral("in_place")).toBool() && game_ && game_->isRunning();
-        if (atResult && !inPlace_ && game_ && game_->isRunning()) game_->command(QStringLiteral("park"));
+        if (atResult && !inPlace_ && game_ && game_->isRunning()) parkGame();
         found_ = msg;
         go_ = {};
         resultSent_ = false;
+        replacedForPort_ = false;
         leaveQuit_ = false;
         lobbyChoice_ = false;
         pendingChoice_.clear();
@@ -1048,12 +1158,15 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         openFeed(msg);
         pendingStart_ = startLine(go_);
         const int delay = matchDelay(msg);
-        setPhase(Phase::Starting,
-                 delay > msg.value(QStringLiteral("delay")).toInt()
-                     ? tr("Starting the match against %1 (%2 ms: %3 frames of input delay for that ping)...")
-                           .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt()).arg(delay)
-                     : tr("Starting the match against %1 (%2 ms)...")
-                           .arg(opponentName()).arg(msg.value(QStringLiteral("rtt_ms")).toInt()));
+        // the delay both games play, and why: this player's own setting, Auto's for the ping, or the other's setting
+        const int rtt = msg.value(QStringLiteral("rtt_ms")).toInt(), own = cfg::inputDelay();
+        const bool autoTook = msg.value(QStringLiteral("delay_auto")).toBool() ||
+                              (!msg.contains(QStringLiteral("delay_auto")) && own == cfg::kAutoDelay);
+        const QString why = own >= 0 && own == delay                        ? tr("your setting")
+                            : autoTook && delay == cfg::autoDelayFor(rtt) ? tr("Auto for that ping")
+                                                                          : tr("%1's setting").arg(opponentName());
+        setPhase(Phase::Starting, tr("Starting the match against %1 (ping %2 ms, input delay %3: %4)...")
+                                      .arg(opponentName()).arg(rtt).arg(cfg::inputDelayText(delay), why));
         emit matchStarted(msg);
         resultFighters_.clear();
         // the game may still be coming up (SC5 boots to its hold point in about 40 s): it has that and the start's own
@@ -1296,7 +1409,7 @@ void MatchController::endWatch(const QString& text) {
     pendingStart_.clear();
     finishText_ = text;
     if (started && game_ && game_->isRunning() && !game_->isReady()) {
-        game_->command(QStringLiteral("park"));
+        parkGame();
         finishTimeout_.start(45000);
         setPhase(Phase::Finishing, text);
         return;
@@ -1526,6 +1639,16 @@ void MatchController::reportDesync(int frame) {
     QTimer::singleShot(1500, this, [this, match, gameId, dir, frame] {
         if (!server_->isLoggedIn()) return;
         QStringList said = desyncLines(dir);
+        // a server from before SCV 0.1.4 (no desync_detail in its welcome) takes 40 lines in a 16 KB message: the
+        // failed check and what follows it (28 at most), the rest of 36 from the first lines, as reports were then
+        if (!server_->serverHas(QStringLiteral("desync_detail")) && said.size() > 36) {
+            qsizetype check = said.size();
+            for (qsizetype i = 0; i < said.size() && check == said.size(); ++i)
+                if (said[i].contains(QLatin1String("DESYNC at frame"))) check = i;
+            const qsizetype at = std::min(check, said.size() - 14);
+            const QStringList from = said.mid(at, 28);
+            said = said.mid(0, std::min(at, 36 - from.size())) + from;
+        }
         said << gameFiles(gameId) << pcLine(gameId);
         QJsonArray lines;
         for (const QString& l : said) lines.append(l);
@@ -1624,10 +1747,11 @@ void MatchController::readyInPlace(QString choice) {  // by value: it is often p
     lobbyChoice_ = false;
     atResultTimer_.start(30000);  // the next match comes at once once both are ready
     QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
-                      {QStringLiteral("delay"), cfg::inputDelay()}, {QStringLiteral("relay"), cfg::hideIp()},
+                      {QStringLiteral("relay"), cfg::hideIp()},
                       {QStringLiteral("hide_always"), cfg::hideIpAlways()},
                       {QStringLiteral("link"), server_->linkType()}, {QStringLiteral("in_place"), true},
                       {QStringLiteral("choice"), choice}};
+    cfg::putDelay(ready, cfg::inputDelay());
     if (serverRttMs() >= 0) ready.insert(QStringLiteral("server_rtt"), serverRttMs());
     server_->send(ready);
     setPhase(Phase::AtResult, choice == QLatin1String("select")
@@ -1648,7 +1772,7 @@ void MatchController::finishMatch() {
     finishText_.clear();
     if (game_ && game_->isRunning() && !game_->isReady()) {
         // the game parks once its ending has played (it holds the game port until then): ready again, then idle
-        game_->command(QStringLiteral("park"));
+        parkGame();
         finishTimeout_.start(45000);
         setPhase(Phase::Finishing, tr("Match over: the game plays its ending"));
         return;
@@ -1792,6 +1916,59 @@ void MatchController::closeSolo(const QString& why) {
     emit gameStatusChanged(gameStatus());
 }
 
+void MatchController::closeSoloForMatch() {
+    if (!solo_ || soloFrozen_) return;
+    const QString what = soloPractice_ ? tr("practice") : soloVersus_ ? tr("versus") : tr("single-player");
+    closeSolo(tr("The online match needs the online game: %1 closed").arg(what));
+    emit notice(tr("Your %1 game was closed by the launcher: the online match needs its own game, which is starting "
+                   "now.").arg(what));
+    if (phase_ == Phase::Solo) {
+        phase_ = Phase::Idle;  // single player's phase is over; what wanted the game goes on from here
+        phaseText_ = tr("Single player closed for the online match");
+        emit phaseChanged(phase_, phaseText_);
+    }
+}
+
+void MatchController::parkGame() {
+    if (!game_ || !game_->isRunning()) return;
+    game_->command(QStringLiteral("park"));
+    parkClock_.start();
+    stuckTimer_.start(kStuckMs);
+}
+
+void MatchController::checkStuckGame() {
+    if (!game_ || !game_->isRunning() || game_->betweenMatches()) return;  // back at its hold point, or gone
+    // the game is in use (a match it took the start of, its result screen, a match watched): not now
+    const bool waitedFor = phase_ == Phase::Starting && !pendingStart_.isEmpty();  // the start waits for its ready
+    const bool free = phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching ||
+                      phase_ == Phase::Found || phase_ == Phase::Connecting || waitedFor;
+    if (!free || gameFrozen_ || !parkClock_.isValid() || parkClock_.elapsed() < kStuckMs - 1000) {
+        stuckTimer_.start(10000);
+        return;
+    }
+    const QString gameId = game_->gameId();
+    const bool forLobby = lobbyGame_ == game_;
+    closeGame(tr("The game did not come back to its hold point %1 s after the park (it says \"%2\"): closed")
+                  .arg(parkClock_.elapsed() / 1000).arg(game_->status()));
+    // a match on its way, or a lobby's game: up again now (the match's start goes to it once it is at its hold point)
+    const bool wanted = forLobby || phase_ == Phase::Found || phase_ == Phase::Connecting || waitedFor;
+    if (!wanted) {
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. It starts "
+                       "again by itself for your next match."));
+        return;
+    }
+    QString err;
+    if (GameProcess* g = ensureGame(gameId, &err)) {
+        if (forLobby) lobbyGame_ = g;
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it and is starting "
+                       "it again for your next match: give it a moment."));
+    } else {
+        log(err);
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. It could not "
+                       "start again: %1").arg(err));
+    }
+}
+
 // the match's game closed at once the same way; frozen behind single player (standby), it goes on to its quit hidden
 void MatchController::closeGame(const QString& why) {
     GameProcess* g = game_;
@@ -1836,7 +2013,9 @@ bool MatchController::startLocalTest(const QString& gameId, const QString& mode,
     const auto line = [&](int side, int local, int remote) {
         return QStringLiteral("start game=%1 mode=%2 side=%3 local_port=%4 remote=127.0.0.1:%5 delay=%6 seed=%7 "
                               "p1=%8 p2=%9 rounds=5 ranked=0 match=%10")
-            .arg(gameId, mode).arg(side).arg(local).arg(remote).arg(cfg::inputDelay()).arg(seed).arg(p1, p2, match);
+            .arg(gameId, mode).arg(side).arg(local).arg(remote)
+            .arg(cfg::inputDelay() < 0 ? cfg::autoDelayFor(0) : cfg::inputDelay())  // one PC: Auto's least
+            .arg(seed).arg(p1, p2, match);
     };
     localStartA_ = line(1, portA, portB);
     localStartB_ = line(2, portB, portA);
@@ -1900,6 +2079,11 @@ void MatchController::closeGameWhenIdle() {
     lobbyGame_ = nullptr;
     closeWhenIdle_ = true;
     maybeCloseIdleGame();
+}
+
+void MatchController::lobbySwitched() {
+    stopWatching();
+    if (phase_ == Phase::AtResult && !str(found_, "lobby").isEmpty()) finishMatch();
 }
 
 void MatchController::maybeCloseIdleGame() {

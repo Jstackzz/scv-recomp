@@ -14,6 +14,7 @@ SERVER_NAME = "sc5-server"
 SERVER_VERSION = __version__
 
 MAX_LINE = 16 * 1024
+MAX_DESYNC_LINE = 64 * 1024  # a desync_report alone may be this long (its lines, docs/PROTOCOL.md 1.13.1)
 MAX_DATAGRAM = 512
 MAX_RELAY_DATAGRAM = 1472  # what the relay passes on: a game packet, up to a whole Ethernet frame of UDP payload
 
@@ -39,10 +40,14 @@ LOBBY_CODE_LEN = 5
 LOBBY_NAME_MAX = 32
 CHAT_MAX = 200
 ROUNDS_ALLOWED = (1, 3, 5)
-DELAY_MAX = 4
+DELAY_MAX = 4  # a player's own input delay, frames
+DELAY_AUTO = -1  # a player's "auto" input delay: the match's from its measured round trip (auto_delay)
+AUTO_DELAY_MIN, AUTO_DELAY_MAX = 1, 6
 # what a launcher can do beyond the protocol's start, as its hello says (`features`) and the server's welcome lists:
 # "koth", King of the Hill lobbies (docs/PROTOCOL.md 1.10.2)
-FEATURES: tuple[str, ...] = ("koth",)
+# "desync_detail" (SCV 0.1.4, the server's alone): desync reports of up to 200 lines in a message of up to 64 KB
+# (docs/PROTOCOL.md 1.13.1); a launcher keeps its report to the 40 lines of 16 KB an older server takes without it
+FEATURES: tuple[str, ...] = ("koth", "desync_detail")
 RATING_MIN, RATING_MAX = 1, 10  # a King of the Hill rating of the winner, a whole number
 
 
@@ -94,6 +99,14 @@ def download_link(url: Any) -> bool:
         url.startswith("https://") or re.match(r"http://(127\.0\.0\.1|localhost)(:\d+)?/", url) is not None)
 
 
+BUILD_RE = re.compile(r"[0-9A-Za-z :._-]{1,40}")  # a package's build: its VERSION.txt stamp ("2026-11-23 22:31")
+
+
+def client_build(value: Any) -> str:
+    """A launcher's build as its hello says it ("" for none, or one this server does not take)."""
+    return value.strip() if isinstance(value, str) and BUILD_RE.fullmatch(value.strip()) else ""
+
+
 def parse_update(data: Any, page: str = "") -> dict[str, Any]:
     """The release launchers are offered (the server's update file); ValueError says what is wrong with it. `page`:
     the web page the release names when the file names none (the server's --releases-page; "": no page at all)."""
@@ -113,7 +126,13 @@ def parse_update(data: Any, page: str = "") -> dict[str, Any]:
         raise ValueError("notes must be text, 2000 characters at most")
     if "page" in data and not download_link(page):  # the server's own page was checked when it started
         raise ValueError("page must be an https:// link")
-    return {"version": version, "url": url, "sha256": sha256, "size": size, "notes": notes, "page": page}
+    out = {"version": version, "url": url, "sha256": sha256, "size": size, "notes": notes, "page": page}
+    if "build" in data:  # which build of the version: the zip's VERSION.txt stamp (a launcher's hello `build`)
+        build = data["build"]
+        if not isinstance(build, str) or not BUILD_RE.fullmatch(build):
+            raise ValueError("build must be the release's VERSION.txt stamp, as 2026-11-23 22:31")
+        out["build"] = build
+    return out
 
 
 def format_endpoint(addr: tuple[str, int] | None) -> str:
@@ -163,6 +182,28 @@ def get_int(msg: dict, key: str, *, lo: int, hi: int, default: int | None = None
     if not lo <= value <= hi:
         raise ProtocolError("bad_request", f"Field '{key}' must be between {lo} and {hi}.")
     return value
+
+
+def get_delay(msg: dict, *, default: int = 2) -> int:
+    """A player's input delay: 0..DELAY_MAX frames, or DELAY_AUTO for `"delay_auto": true` (SCV launchers from 0.1.4,
+    which send a number with it for older servers) or `"delay": "auto"` (MK9 Online's form)."""
+    if msg.get("delay") == "auto" or get_bool(msg, "delay_auto", default=False):
+        return DELAY_AUTO
+    return get_int(msg, "delay", lo=0, hi=DELAY_MAX, default=default)
+
+
+def auto_delay(rtt_ms: int) -> int:
+    """The input delay an "auto" player's match gets for its round trip: the frames of the one-way trip (60 a second,
+    16.7 ms each) rounded up, less the one rollback covers, from 1 to 6. Under 67 ms 1, then a frame more every 33 ms:
+    2 to 100 ms, 3 to 133, 4 to 166, 5 to 200, 6 above. Rollback then has at most a frame or two to correct, plus the
+    network's jitter: SCV's rollbacks are cheap (1.5 ms a frame run again) but every frame of one shows as a
+    character jumping. MK3D Online's rule (the one-way frames rounded, less one: delay 1 up to 83 ms) left a US-UK
+    pair (2026-11-20) at delay 1 and rolling back up to 5 frames; MK9 Online's (rounded up plus half a frame, 2 to 8)
+    is a frame more, for a game whose rollbacks cost 7-10 ms a frame."""
+    if rtt_ms <= 0:
+        return AUTO_DELAY_MIN
+    frames = -(-rtt_ms * 3 // 100)  # ceil(rtt_ms / 33.33): the one-way trip's frames, rounded up
+    return max(AUTO_DELAY_MIN, min(AUTO_DELAY_MAX, frames - 1))
 
 
 def get_game_mode(msg: dict) -> tuple[str, str]:

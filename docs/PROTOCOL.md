@@ -51,8 +51,8 @@ Spirit Sword 1915, Eternal Soul 2035; a new player starts at 475.
   trust on first use).
 - Framing: **newline-delimited JSON**. Every message is one JSON object encoded
   as UTF-8 on a single line terminated by `\n` (a preceding `\r` is
-  tolerated). Maximum line length 16 384 bytes; the server closes connections
-  that exceed it.
+  tolerated). Maximum line length 16 384 bytes (a `desync_report` 65 536,
+  1.13.1); the server closes connections that exceed it.
 - Every object has a `"type"` string. Unknown fields are ignored by both sides
   (forward compatibility). Unknown types get `error{code:"unknown_type"}`.
 - A request may carry `"id"` (any JSON scalar). The direct reply to that
@@ -93,14 +93,15 @@ Spirit Sword 1915, Eternal Soul 2035; a new player starts at 475.
 ### 1.3 Session start and version check
 
 ```json
-C: {"type":"hello","proto":1,"client":"sc5-launcher","version":"0.1.0","os":"windows","features":["koth"]}
+C: {"type":"hello","proto":1,"client":"sc5-launcher","version":"0.1.0","os":"windows","features":["koth"],
+    "build":"2026-11-23 22:31"}
 S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port":7778,
     "motd":"Welcome!","online":12,"min_client":"0.1.0",
     "games":{"sc5":["versus","sparring"]},
     "regions":["na","sa","eu","me","af","as","oc"],"direct_above_ms":100,
     "ranks":[{"title":"Novice","from":null},{"title":"Apprentice","from":575},
              {"title":"Squire","from":675}, ...,{"title":"Eternal Soul","from":2035}],
-    "features":["koth"]}
+    "features":["koth","desync_detail"]}
 ```
 
 - `features` (King of the Hill): what each side has beyond the protocol's
@@ -108,6 +109,9 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   the server lists what it has in `welcome`. `koth`: King of the Hill lobbies
   and their Respect Points (1.10.2). The launcher shows its King of the Hill
   box and the Leaderboard's Respect only when the server lists it.
+  `desync_detail` (SCV 0.1.4, the server's alone): desync reports of up to 200
+  lines in a message of up to 64 KB (1.13.1); a launcher whose server does not
+  list it sends the 36 lines an older server takes.
 
 - `proto` must equal the server's `PROTO`, else `error{code:"proto_mismatch"}`.
 - `ranks` (0.1.21): the ranked titles by Elo, lowest first, each held from its
@@ -154,6 +158,21 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   SHA-256 against these before it installs anything (docs/LAUNCHER.md,
   Updates). On the official server the file is `/var/lib/sc5/update.json`
   (`server/deploy/install.sh`).
+- **Builds** (SCV 0.1.4). A version number alone does not tell two packages
+  apart: a test build given out before a release took its number is that
+  number too, and was never offered the release (2026-11-20: a player on a
+  private test build of 0.1.3 was not offered 0.1.3). A player package's
+  launcher says which build it is in `hello`, `"build":"2026-11-23 22:31"`:
+  its `VERSION.txt` stamp (`SC5-Online 0.1.4, packaged 2026-11-23 22:31`; a
+  source build sends none), 1-40 characters `[0-9A-Za-z :._-]` (anything else
+  is taken as none). The update file may name the release's own stamp,
+  `"build":"2026-11-20 06:17"` (the same characters; `tools\package.ps1`
+  prints it), which then comes with every offer: a launcher of the release's
+  version whose build differs from it (both known) is offered the release as
+  an older one is, in `welcome` and pushed, and its launcher takes it although
+  the number is its own. A newer launcher (a developer's) is offered nothing;
+  without `build` in the file the version alone decides, as before. The
+  server logs a login's build with its version.
 - Regions: `na` North America, `sa` South America, `eu` Europe, `me` Middle
   East, `af` Africa, `as` Asia, `oc` Oceania.
 
@@ -247,7 +266,11 @@ S: {"type":"queue_left","reason":"left"}
 - `link` (optional, 0.1.8): the network this PC reaches the server through,
   `ethernet`, `wifi` or `other` (anything else is dropped); shown to the
   opponent with `match_found.connection`.
-- `delay` is the player's preferred input delay in frames (0-4).
+- `delay` is the player's preferred input delay in frames (0-4). Auto (SCV
+  0.1.4, the launcher's default): `"delay_auto":true` (the server also takes
+  MK9 Online's `"delay":"auto"`) with a number for an older server, which
+  ignores the flag (SCV launchers send 1): the match's delay then comes from
+  its measured round trip (1.8 `match_go`).
 - `death_traps` (optional, default `true`): MK3D Online's arenas' death traps, which the server still takes and
   passes on (`match_found`, `match_go`, `spectate`, lobbies). Soulcalibur V has nothing it would turn off: SCV
   launchers never send it, and the start line (3.3) has no key for it.
@@ -388,7 +411,17 @@ S: {"type":"queue_left","reason":"left"}
    mode, in a casual or lobby match too (someone who never played it ranked:
    the starting one; 1.3 `ranks`), for the badges the games draw beside the
    timer (3.3 `p1_rank`). `delay` = the larger of both
-   preferences, at least 1 in ranked. `seed` is
+   preferences, an Auto one's (1.7) from `rtt_ms` (the larger of the two
+   players' measured round trips, the same for both games:
+   `protocol.auto_delay`, the one-way trip's frames rounded up, less one,
+   1 to 6: 1 under 67 ms, 2 to 100, 3 to 133, 4 to 166, 5 to 200, then 6),
+   at least 1 in ranked; both players get the same, and `"delay_auto":true`
+   when an Auto one took part (SCV 0.1.4; a launcher that finds no
+   `delay_auto` in `match_go`, an older server's, raises the delay for the
+   ping itself when its player is on Auto). Before Auto every match of the
+   night of 2026-11-20 ran at delay 1 (the launcher's raise was MK3D
+   Online's, the one-way frames rounded less one: 1 up to 83 ms), a US-UK
+   pair among them, which rolled back up to 5 frames. `seed` is
    a fresh 32-bit value. `death_traps`: always `true` with SCV launchers (1.7).
    `feed`: a lobby match, whose spectators watch it from what both games write
    (1.10.1). Sides are random for queue matches; in a lobby the
@@ -585,7 +618,7 @@ C: {"type":"lobby_leave"}
 C: {"type":"lobby_chat","text":"gg"}
 C: {"type":"lobby_character","character":"Ivy"}
 C: {"type":"lobby_ready","ready":true,"delay":2,"relay":false,"hide_always":false,"link":"wifi","server_rtt":31}
-                                           (delay optional, 0-4; relay, link, server_rtt 0.1.8;
+                                           (delay optional, 0-4, delay_auto 1.7; relay, link, server_rtt 0.1.8;
                                             "in_place":true,"choice":"rematch"|"select" SCV 0.1.4: below)
 C: {"type":"lobby_start"}                       (host only: at once; launchers from 0.1.11 never send it)
 C: {"type":"lobby_settings","death_traps":false}               (host only, 0.1.8; SCV launchers never send it)
@@ -627,6 +660,12 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
 - Each member's `title`: their ranked title in the lobby's game and mode
   (someone who never played it ranked: the starting one; 1.3 `ranks`), whose
   badge the launcher shows by their name.
+- Each member's `version` and `build` (SCV 0.1.4): their launcher's, as its
+  `hello` said (`build` `null` for none, 1.3). Two players of different
+  versions run different games, which cannot play each other: the launcher
+  says so in large type before anyone readies, names who has the older one
+  and must update, and keeps its Ready off against such a player; the same
+  version in two builds (a test build) is said too, Ready left on.
 - A member whose connection drops (or is replaced by a new login of the same
   account) keeps their place for 60 s: when that account logs in again within
   it, the server puts it back in the lobby (a player's place if one is free,
@@ -635,8 +674,14 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
 - The full `lobby` state is pushed to every member after any change; `chat`
   holds the last 30 messages. Chat text: 1-200 characters, at most one
   message per 0.5 s per player (`slow_down`).
-- `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy`,
-  `no_such_lobby`, `lobby_full`, `bad_lobby_password`. `rounds` is 1, 3 or 5, the best of (the launcher names them
+- `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy` (searching,
+  or a match of this player's set up or running), `no_such_lobby`, `lobby_full`,
+  `bad_lobby_password`. A session is in one lobby at most (SCV 0.1.4): creating or
+  joining another one, once the server has checked it lets the player in, leaves the
+  one they are in, as `lobby_leave` would, and says so first with
+  `{"type":"lobby_left","lobby":"<the old one>","joined":"<the new one>"}` (until
+  then `busy`); a request turned away leaves them where they were, and joining the
+  lobby they are in replies with its state. `rounds` is 1, 3 or 5, the best of (the launcher names them
   1, 2 or 3 rounds to win, 3 by default); matchmaking's matches are best of 5, first to 3 as the console's Battle Count.
 - Two players both ready start the lobby's match by themselves (0.1.11): the
   server counts down 3 s (`starts_in`, the seconds left, in every `lobby` state
@@ -851,26 +896,59 @@ S: {"type":"desync_ack"}
 A launcher whose match went out of step (its game's `desync` status, after the
 `result` with outcome `desync`) sends what its game logged of it: from the log's
 start, Windows, the processor and the game's executable (the log's `Game:` line, `default.xex` and its
-SHA-1); from the match's start (the link's `start` line), the picks, the setup
-both games agreed on (or the lines saying it differs) and the failed check (the
-per-second stats left out; 36 lines at most); last, the game's extracted files:
-how many, how large, and a hash of their names and sizes (a modded or reduced
-copy of the disc differs there), and (SCV 0.1.2) the PC: `This PC: <processor>,
-<n> threads, Windows <kernel version>, game code for <x86-64-v3 or v2>` (what
-build-game.cmd compiled the game's code for there). SCV's game logs its
-netplay as `sc5 net:` (the failed check: `DESYNC at frame <f>: <hash> here,
-<hash> there`), its setup as `sc5 versus:`, its picks as `autopilot: side <n>
-picked`: the report takes those, and the game's own errors and warnings but the
-graphics' (which repeat by the thousand). IP addresses and user folders are taken out.
+SHA-1); from the match's start (the link's `start` or `rematch` line, and the
+`command` line the game logs before it), the lines below; last, the game's
+extracted files: how many, how large, and a hash of their names and sizes (a
+modded or reduced copy of the disc differs there), and (SCV 0.1.2) the PC:
+`This PC: <processor>, <n> threads, Windows <kernel version>, game code for
+<x86-64-v3 or v2>` (what build-game.cmd compiled the game's code for there).
+SCV's game logs its netplay as `sc5 net:` (the failed check: `DESYNC at frame
+<f>: <hash> here, <hash> there`), its setup as `sc5 versus:`, its picks as
+`autopilot: side <n> picked`; from SCV 0.1.4 it writes detail lines right after
+the failed check, each with `sc5 desync:` (up to about 80, at most 200
+characters each). Of the match's lines the report keeps (SCV 0.1.4):
+
+- every `sc5 desync:` line (100 at most);
+- the setup: the start, the picks, the stage, the meeting, the words both games
+  agreed on, the blocks of the fight (40 at most);
+- of the statistics the game logs every 10 s (`... rollbacks (...`, `keeping a
+  frame top ...`), only the last report before the failed check;
+- the last 30 other lines before the failed check (round ends, ring outs, the
+  game's own errors and warnings, not the graphics', which repeat by the
+  thousand), the failed check itself, and up to 10 lines after it;
+
+in the log's order, 200 lines and about 56,000 characters at most (past that
+the other lines go first, the oldest first, then the detail from its last).
+Until 0.1.4 it kept 36 lines, the statistics among them (MK3D Online's filter,
+`netplay: frame <n>:`, never matched SCV's `sc5 net: frame <n>: ... rollbacks`),
+so in a long match the statistics filled it and the lines just before the check
+(the round's end, a ring out) were cut. IP addresses and user folders are taken
+out.
+
 The server logs each line with the player's name (`DESYNC_REPORT <name> |
 <line>`, after a line naming the game, launcher version, match and frame), so
 both players' reports of a match stand side by side, and keeps nothing: at most
-40 lines of 200 printable characters (else `bad_request`), 10 reports a session.
+200 lines (40 until SCV 0.1.4) of 200 printable characters (else
+`bad_request`), 10 reports a session. A `desync_report` alone may be a line of
+up to 64 KB (`MAX_DESYNC_LINE`; every other message still 16 KB, 1.1, else
+`too_long` and the connection closed). Once both players' reports of a match
+are in (two accounts, the same `match`, within 10 minutes), the server logs one
+summary line, so a night's desyncs read at a glance from the journal:
+
+```
+DESYNC_PAIR 7658cd7bfcd7 Taki at frame 41730, Kilik at frame 41730; stage 17; Siegfried vs Mitsurugi (launchers 0.1.4 and 0.1.4)
+```
+
+with each report's frame (`(the frames differ)` when they do), the stage as the
+game logs it (its `sc5 versus:` line) and the two fighters (the picks, else the
+start line's `p1`/`p2`), each pair of them followed by `(they differ)` when the
+two reports disagree (`?` for what a report's lines leave out).
+
 From 0.1.24 the failed check's lines are followed by the blocks it covered as
 short hashes (`netplay: frame 3300 block 1 at 002E9704, pieces 0-29: ...`: each
 block's 64-byte pieces, 16 bits a piece, pointers left out as the check leaves
 them): the pieces that differ between the two players' reports are where the
-games parted.
+games parted (MK3D Online's game; SCV's detail is its `sc5 desync:` lines).
 
 From 1.0.2 a game checks every 30th frame once both players' real inputs before
 it are in (before, only a frame that happened to run on real inputs alone was
@@ -885,11 +963,10 @@ math follows the host's) and display, and `netplay: differs at <frame>, block <n
 <16 words>` for every piece the other game's hashes disagree with (12 at most),
 so the server's log holds both players' words side by side. The desync status
 waits for that, 2 s at most; with an older game on the other side the piece
-hashes come as before. The report keeps every line from the failed check's on
-(28 at most) and fills the rest of its 36 with the match's first lines; the
-game files' line adds `contents <hash>`, every file's bytes hashed once in the
-background (`game-files-<game>.txt` beside the launcher keeps each file's hash,
-size and time), or `contents not hashed yet`.
+hashes come as before (MK3D Online's game). The game files' line adds `contents
+<hash>`, every file's bytes hashed once in the background
+(`game-files-<game>.txt` beside the launcher keeps each file's hash, size and
+time), or `contents not hashed yet`.
 
 ### 1.13.2 F3 reports (0.1.18)
 
@@ -1222,9 +1299,9 @@ the game reads can never be lost. The launcher writes a new command only after t
 | `quit` | exit the process cleanly |
 
 `start` keys: `game` (`sc5`); `mode` (`versus`, `sparring`, `practice`); `side` (local player, 1 or 2); `local_port`
-(UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: the larger of both players' settings,
-raised for the match's ping when the player lets it: the frames of the one-way trip but one, 6 at most; each game
-tells the other its delay when they meet, and both play the larger of the two); `seed` (32 bit, identical on both
+(UDP port to bind); `remote` (peer `ip:port`); `delay` (input delay in frames: `match_go`'s, the same in both games,
+the larger of both players' settings, an Auto one's from the match's ping, 1.8; each game tells the other its delay
+when they meet, and both play the larger of the two); `seed` (32 bit, identical on both
 sides); `p1`/`p2` (roster ids from `launcher/data/sc5.json`, identical on both sides, or `-`: the player of that side
 picks on the game's own select screen, below; an id with a costume after a dot, `12.1`, is the game's own character id
 from a `result` line, which the autopilot picks in both games with that costume: a ranked set's winner keeping theirs;

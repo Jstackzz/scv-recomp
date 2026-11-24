@@ -25,7 +25,7 @@ struct QueueRequest {
     bool ranked = false;
     bool strict = false;
     int maxPing = 0;
-    int delay = 2;
+    int delay = -1;  // frames, or cfg::kAutoDelay: the match's from its measured ping (the server decides)
 };
 
 class MatchController : public QObject {
@@ -103,6 +103,9 @@ public:
     // a lobby left: its game is closed once nothing needs it any more (a lobby match it plays or watches ends first),
     // so the player need not close it; a search, a lobby's Ready or a match to watch wanting a game before then keeps it
     void closeGameWhenIdle();
+    // a lobby left for another one (the server moved the player, docs/PROTOCOL.md 1.10): its game stays for the new
+    // lobby, parked first when it waits at the last match's result screen; nothing more of the old one is watched
+    void lobbySwitched();
     void shutdown();
     // An update leaves each game built before with code for its old executable: it builds that again now, one game
     // at a time (the game's --prepare, behind its own progress window), so the next match or single player finds it
@@ -128,6 +131,9 @@ signals:
     void soloStarted();  // single player's game was started, its window (once it has one) wants the front
     void gameShown();    // standby: the match's game started for an accepted match has its window up
     void codePrepChanged(const QString& text, bool done);  // prepareStaleCode: the game it is on, or all done
+    // what the launcher did with a game by itself that the player must hear of (single player closed for an online
+    // match, a game that never came back from its match closed and started again): plain words, shown large
+    void notice(const QString& text);
 
 private:
     void setPhase(Phase p, const QString& text);
@@ -176,6 +182,17 @@ private:
     void thawSolo();
     void closeSolo(const QString& why);  // practice, once its search's match is accepted (or the search cancelled)
     void closeGame(const QString& why);  // the match's game, once nothing wants it
+    // a game this launcher started for single player, practice or versus, open when an online match (a lobby's, a
+    // series' next) needs the online game: closed, and the player told
+    void closeSoloForMatch();
+    // park the match's game (it goes back to its hold point once the match's end has played), and look at it again
+    // kStuckMs later: checkStuckGame
+    void parkGame();
+    // the match's game never came back to its hold point after its park (a desync, a park it did not take): once
+    // nothing of this launcher's is on it, it is closed, the player told, and it starts again at once when a lobby or a
+    // match on its way wants it
+    void checkStuckGame();
+    static constexpr int kStuckMs = 120000;  // a real game's park takes ~50 s at most (the match's end, then ~20 s)
     void freezeGame();
     void thawGame();
     void maybeBackToSolo();    // standby: nothing more to play online, single player again
@@ -231,6 +248,9 @@ private:
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)
     QJsonObject queued_;     // the server's reply to the last search
     QTimer parkTimer_, keepaliveTimer_, startTimeout_, finishTimeout_, watchTimeout_;
+    QTimer stuckTimer_;        // after a park: checkStuckGame
+    QElapsedTimer parkClock_;  // since the match's game was last parked
+    bool replacedForPort_ = false;  // this match found replaced a game that held the game port (openUdpThen)
     QTimer watchEndTimeout_;  // the watched match ended early: the watching game's while to be in it, else it parks
     bool watchInMatch_ = false;  // the watching game plays the watched match (it was at its meeting point)
     QString localStartA_, localStartB_, localResultA_, localResultB_;

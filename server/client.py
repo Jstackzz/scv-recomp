@@ -78,7 +78,7 @@ class Connection:
         self._keepalive: asyncio.Task | None = None
 
     async def connect(self, *, hello: bool = True, version: str = CLIENT_VERSION,
-                      features: tuple[str, ...] = P.FEATURES) -> dict[str, Any]:
+                      features: tuple[str, ...] = P.FEATURES, build: str = "") -> dict[str, Any]:
         if self.plain:
             self.reader, self.writer = await asyncio.open_connection(self.host, self.port, limit=P.MAX_LINE + 2)
         else:
@@ -96,8 +96,11 @@ class Connection:
         self._task = asyncio.create_task(self._read_loop())
         self._keepalive = asyncio.create_task(self._ping_loop())
         if hello:
-            self.welcome = await self.request({"type": "hello", "proto": P.PROTO, "client": CLIENT_NAME,
-                                               "version": version, "os": sys.platform, "features": list(features)})
+            hello_msg = {"type": "hello", "proto": P.PROTO, "client": CLIENT_NAME, "version": version,
+                         "os": sys.platform, "features": list(features)}
+            if build:  # which build of the version (a player package's VERSION.txt stamp)
+                hello_msg["build"] = build
+            self.welcome = await self.request(hello_msg)
         return self.welcome
 
     async def _read_loop(self) -> None:
