@@ -1,6 +1,7 @@
 // The game's own battle state snapshots, see battle.h.
 
 #include "sc5/battle.h"
+#include "sc5/hud.h"
 #include "sc5/rng.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
@@ -25,6 +26,7 @@ REX_EXTERN(sub_82159DF0);  // saves the battle's state into a stream (r3)
 REX_EXTERN(sub_8215A360);  // restores it from a stream (r3)
 REX_EXTERN(__imp__sub_8213DEC0);  // a task's update: the players' held and newly pressed buttons (0x82927E88)
 
+namespace sc5::dbg { void QuietWatch(bool on); }  // debug_watch.cpp: a read watch leaves our saves out
 namespace sc5::battle {
 namespace {
 
@@ -153,6 +155,10 @@ std::vector<Region> DynamicRegions() {
         out.push_back({slot, 12 + std::min(Get32(slot + 4), kSlotStride - 12)});
       }
   }
+  // the HUD's count of each side's rounds won, which its markers show (hud.cpp): a KO counted there in a frame's first
+  // run is counted again in its rerun, and one only a wrong guess had stays (a player shown with a round more)
+  if (const uint32_t hud = sc5::hud::Object(); hud && sc5::hud::KeepMarkers())
+    out.push_back({hud + sc5::hud::kMarkers, sc5::hud::kMarkersSize});
   // the battle's cameras (see kCameraDirector)
   if (const uint32_t d = Get32(kCameraDirector); valid(d)) {
     out.push_back({d, kCameraSystem});
@@ -241,11 +247,13 @@ uint32_t Save(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   ctx.lr = kMainLoopReturn;
   g_recording = stream;
   g_recorded.clear();
+  sc5::dbg::QuietWatch(true);
   sub_82159DF0(ctx, base);
   g_recording = 0;
   g_blocks[stream].swap(g_recorded);
   ctx.lr = lr;
   if (RawEnabled()) KeepRaw(ctx, base, stream);
+  sc5::dbg::QuietWatch(false);
   return Get32(stream + 4);
 }
 
@@ -263,6 +271,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   const uint64_t lr = ctx.lr;
   ctx.r3.u64 = stream;
   ctx.lr = kMainLoopReturn;
+  sc5::dbg::QuietWatch(true);
   sub_8215A360(ctx, base);
   ctx.lr = lr;
   const uint32_t read = Get32(stream + 8);
@@ -272,6 +281,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   }
   for (int i = 0; i < 2; i++) after[i] = Get32(kPlayerObjects[i] + kThrowObject);
   if (RawEnabled()) PutRawBack(stream);
+  sc5::dbg::QuietWatch(false);
   for (int i = 0; i < 2; i++)
     if (after[i] != before[i]) Put32(kPlayerObjects[i] + kThrowObject, after[i]);
   return true;
