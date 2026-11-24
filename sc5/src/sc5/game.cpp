@@ -273,11 +273,17 @@ REX_HOOK_RAW(sub_82328E70) {
 // The game's random numbers are seeded by sub_824A35A8: at boot from the date and time (sub_82163490), and again
 // as a battle is set up from a value its own online code agrees on (sub_823A0070, sub_823A22C8, the seed at
 // +0x19444). Every PC in a match, and every run of a test, must draw the same numbers.
+namespace sc5::game {
+std::atomic<bool> g_quiet_seeds{false};
+void QuietSeeds(bool quiet) { g_quiet_seeds.store(quiet, std::memory_order_relaxed); }
+}  // namespace sc5::game
+
 REX_HOOK_RAW(sub_824A35A8) {
   const int64_t over = sc5::game::SeedOverride();
-  REXLOG_INFO("sc5: random numbers seeded with {:08X}{} (from {:08X}, frame {})", ctx.r3.u32,
-              over >= 0 ? fmt::format(", made {:08X}", uint32_t(over)) : std::string(), uint32_t(ctx.lr),
-              sc5::frame::Count());
+  if (!sc5::game::g_quiet_seeds.load(std::memory_order_relaxed))
+    REXLOG_INFO("sc5: random numbers seeded with {:08X}{} (from {:08X}, frame {})", ctx.r3.u32,
+                over >= 0 ? fmt::format(", made {:08X}", uint32_t(over)) : std::string(), uint32_t(ctx.lr),
+                sc5::frame::Count());
   if (over >= 0) ctx.r3.u64 = uint32_t(over);
   sc5::game::g_last_seed.store(ctx.r3.u32, std::memory_order_relaxed);
   __imp__sub_824A35A8(ctx, base);

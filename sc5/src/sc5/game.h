@@ -55,6 +55,8 @@ void SetSeed(int64_t seed);
 // with `seed` (main thread, between frames: netplay's barrier)
 int64_t FightSeed();
 void Reseed(PPCContext& ctx, uint8_t* base, uint32_t seed);
+// the seedings from now on are not logged (netplay seeds every frame of a match: 60 lines a second otherwise)
+void QuietSeeds(bool quiet);
 
 // the main menu's (AstralHome's) object, made by its creator each time the menu comes; 0 before
 uint32_t HomeObject();

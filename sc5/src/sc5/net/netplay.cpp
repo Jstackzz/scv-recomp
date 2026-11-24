@@ -1663,9 +1663,11 @@ void SeedFrame(PPCContext& ctx, uint8_t* base, uint32_t f) {
   static const bool off = std::getenv("SC5_NET_NO_FRAME_SEED") != nullptr;
   if (off || !g_match_seed) return;
   const uint32_t seed = (g_match_seed ^ (f * 0x9E3779B9u)) + 0x7F4A7C15u;
+  game::QuietSeeds(true);
   game::SetSeed(int64_t(seed));
   game::Reseed(ctx, base, seed);
   game::SetSeed(int64_t(g_match_seed));
+  game::QuietSeeds(false);
 }
 
 // frame f's inputs: what the game's pad reads get until the next frame's top (and its count of frames shown)
@@ -2639,10 +2641,13 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
     WatchNeutral();
     ReseedAtStateChange(ctx, base);  // as the players' games do
     ReplaySkipTop();
+    // the check before the frame's seed, as the players' games keep a frame before they seed it (Keep, then
+    // SeedFrame): the seeding leaves its mark in what the check hashes, and a spectator that seeded first had the
+    // frame's own where the players had the frame before's (apart at its first check, frame 120)
+    WatchCheck(ctx, base, g_frame);
     SeedFrame(ctx, base, g_frame);
     SetFrameInputs(g_frame);
     sparring::OnFrame(g_frame);
-    WatchCheck(ctx, base, g_frame);
     frame::RunAgain(ctx, base);
     LogFrame(true);
     g_frame++;
@@ -2663,10 +2668,10 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   g_waiting = false;
   ReseedAtStateChange(ctx, base);
   ReplaySkipTop();
+  WatchCheck(ctx, base, g_frame);  // before the frame's seed (above)
   SeedFrame(ctx, base, g_frame);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);
-  WatchCheck(ctx, base, g_frame);
 }
 
 // A KO's replay cut short (RSKIP): this game's player's START or A while one plays asks the other game for a frame some
