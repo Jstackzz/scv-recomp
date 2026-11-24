@@ -3,6 +3,7 @@
 // from there to a VS fight with the match's picks, and back. See autopilot.cpp.
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct PPCContext;
 
@@ -73,6 +74,15 @@ struct ResultChoiceView {
   bool chosen = false;
 };
 ResultChoiceView ResultChoiceNow();
+// What the overlay over the select screen shows online (result_overlay.cpp): this PC's player's own created characters
+// that this game leaves out (creation.h, HeldOut), each its name and slot and why in plain words, during the select
+// screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one of them customizes
+// (or that fighter's costume panel is up). Any thread.
+struct HeldOutView {
+  bool shown = false;
+  std::vector<std::string> names, whys;
+};
+HeldOutView HeldOutNow();
 
 // what the select screen made for each side in the present match (slot and costume; -1 before)
 int PickedSlot(int side);

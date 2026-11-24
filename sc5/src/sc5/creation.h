@@ -65,6 +65,15 @@ bool UsesDlc(const Record& r);
 // empty), so they cannot be picked. SC5_TEST_CREATION_UNCHECKED keeps them (tests).
 void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager);
 
+// The player's own created characters this online game leaves out (OnHoldPoint's ImportOwn and DropRefused): the slot
+// (from 0), the character type, the name, and why in plain words for the player (the log has the check's own words).
+// The select screen's overlay shows them (autopilot.h, HeldOutNow), the status line counts them. Any thread.
+struct HeldOut {
+  int slot = -1, type = -1;
+  std::string name, why;
+};
+std::vector<HeldOut> HeldOutList();
+
 // Everything a record from another PC must pass before anything loads it (creation_check.h's CheckRecord against this
 // PC's Known): "" when it passes, else why not
 std::string Check(const Record& r);

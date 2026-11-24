@@ -51,6 +51,16 @@ uint32_t Checksum(const uint8_t* record);
 // own type and base type 5, whose table (the fighters' costumes) the game reads for Creation only (creation.cpp)
 constexpr int kOriginal = 32, kFighterBase = 5;
 
+// A model (ModelData) is the parts set type, the table index, the variation and the segment: the game loads the file
+// the first three name (sub_82298A50: the model table's row and column; 0x7F a downloadable one, its package group and
+// entry) and in each break level shows the segment the last names (sub_82147F48 in a fight, sub_821D0E28 in Creation),
+// or none when it is negative. Creation writes segment 0xFF (as its own "none", FF0000FF) for a piece it keeps worn but
+// does not show: the parts tables never list that form (seen 2026-11-20, a player's new female characters: model
+// 1B0800FF, the innerwear inner_006_f, parts set 01050006, whose four segments the table lists as 1B080000-1B080003).
+constexpr uint32_t kModelFile = 0xFFFFFF00, kNoSegment = 0xFF;
+// the most models (files, whatever their segments) break level 0 may wear: the fight's list of them has room for 20
+constexpr uint32_t kMaxModelFiles = 20;
+
 // What this PC's game has, read from its own tables (creation.cpp). An empty set refuses every id of its kind.
 struct Known {
   std::set<int> characters;                    // character types the select screen lists here (32 too)
@@ -79,5 +89,10 @@ bool ParseKnown(const std::string& text, Known& out);
 std::string CheckForm(const uint8_t* record, size_t size);
 // Everything: "" when the record passes, else why not (for the error line and the log)
 std::string CheckRecord(const uint8_t* record, size_t size, const Known& known);
+// a model a record may wear among `models` (a Known's for its character and base type): one of them, or one of their
+// files with segment 0xFF (shown nowhere; the file is one this PC has)
+bool KnownModel(const std::set<uint32_t>& models, uint32_t model);
+// why a record was refused (CheckRecord's, CheckForm's, the game's repair pass's) in plain words for the player
+std::string PlainWhy(const std::string& why);
 
 }  // namespace sc5::creation

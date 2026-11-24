@@ -1267,14 +1267,17 @@ bytes: netplay packets 12 and 13, and the spectator feed's type `11`) and its PI
 game takes exactly the record's bytes from its 12 chunks (`sc5/src/sc5/net/created_transfer.h`, anything else refuses
 it), then checks every field before anything loads it (`sc5/src/sc5/creation_check.h`): the form; the character type
 and style on this PC; the limits the game's own repair pass keeps to (attack rate, voice, the body's sizes); the
-body's rates 0-1; every parts set and every model among this PC's for it (an original character: its base type's, male
+body's rates 0-1; every parts set and every model among this PC's for it (or one of their files with segment 0xFF, a
+piece Creation keeps worn but does not show; at most 20 models in break level 0, the fight's room for them) (an original character: its base type's, male
 or female; a customized fighter: base type 5, one of that fighter's own two costumes in every break level, and the
 hair any fighter may wear); a customized fighter's voice one the game knows; parts coordinates valid or not, with
 finite values (the game checks their parts and bones itself); every sticker one of this PC's, with its own texture and
 finite placement; every colour (the character's, its stickers', the weapon's, its trail's and effect's) none or on one
 of the game's palettes; the weapon's other numbers finite; the weapon one of its style's. On top of that the game's
 own repair pass (what a console runs on a save's records) runs on a copy, and a record it refuses or would change in
-any byte is refused too. Then it places the record in slot 49 (player 1's) or 50 (player 2's), and its autopilot picks
+any byte is refused too. A player's own character left out at the select screen is said in the game, over the select
+screen (large text: which one and why, in plain words), and the `starting` status line counts them (`held_out=N`,
+3.4). Then it places the record in slot 49 (player 1's) or 50 (player 2's), and its autopilot picks
 it for that side. As on the console, the picture Creation took is not sent: the select screen draws the other player's
 card from the record itself, and on the VS screen, which shows the picture, that player's card shows SCV Online's own
 (a figure with a question mark, in navy and gold). A record refused, one of another character than the pick, or one
@@ -1320,7 +1323,7 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 |---|---|
 | `booting` | process started, loading |
 | `ready` | parked at the hold point, able to take `start` |
-| `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match` |
+| `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match`; `held_out=N` after it (and after `in_match`'s) when N of the player's own created characters cannot be picked in this online game (3.3, *Created characters*; the game's log says which and why) |
 | `in_match match=<id>` | a match (or practice: `match=practice`) is running |
 | `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
 | `sparring_over match=<id>` | Online Practice: the match in sync is over, a player pressed BACK (the launcher reports the outcome `sparring`) |

@@ -797,6 +797,32 @@ releases this PC has. sub_8245BED0 answers whether a release id is released (unl
 downloadable content, state 3, and hidden entries). A parts set's models in the record must be among its base type's
 (the body's 0x020000xx included).
 
+**A model's segment.** Of a ModelData's four bytes the game loads the file the first three name (sub_82298A50, a model loader's
+virtual function, its neighbour at 0x820C7B88 sub_82298BD0 giving the archive, 5 or 14: the model table at
+[0x82A12D78 + 80], a block per parts set type, its row the table index and its column the variation, an unknown column
+taken as 0; 0x7F a downloadable model's package group and entry); the fourth is the
+segment of that file a part shows, which the fight (sub_82147F48) and Creation (sub_821D0E28) turn on per break level,
+and a negative one they never show. The parts tables list a file's segments one by one (the innerwear inner_006_f,
+parts set 01050006: 1B080000 to 1B080003 in slots 6 to 9) and never segment 0xFF, yet Creation writes it for a piece
+it keeps worn but shows nowhere: a player's new female characters were held out online for "model 1B0800FF is not on
+this PC" (2026-11-20, 0.1.3; offline he saw and played them), every new one he made and a copy of his working one with
+only its height changed, his own PC refusing what its own Creation had made. So a model passes when the tables list
+it, or when it is one of their files with segment 0xFF (`KnownModel`: only that form, only a file this PC's tables have
+for that character and base type; another negative segment or an unknown segment stays refused). Such a character
+fights as Creation shows it: two games with a female character wearing 1B0800FF from break level 1 on, picked through
+the pad, fought in sync (2026-11-24). The same goes for downloadable parts (UsesDlc takes any segment of a downloadable
+file). The fight's list of break level 0's models (sub_82245CD0, filled by both) has room for 20, a model once however
+many of its segments are worn, with its count right after it: a record whose level 0 wears more than 20 would write
+over it, so the check refuses that too (Creation's own view would break on such a record first).
+
+**Held out, said plainly.** A player's own character that fails the check is not only a log line (`slot N (name) stays
+out online: <why>`): at the online select screen the game draws, with the result overlay's drawer (result_overlay.cpp,
+large and high-contrast), "N OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE", each one's name and slot and why in
+plain words (creation_check.h's PlainWhy: "it wears a part this PC's game does not have", "its saved data is
+damaged"...), for the screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one
+of them customizes; and the status line says how many (`starting match=<id> held_out=N`, PROTOCOL.md 3.4), which the
+launcher's footer and log show as they show every state.
+
 **A customized fighter's costumes.** A customized fighter (a regular fighter re-dressed in Creation: the fighter's own
 character type, base type 5) wears that fighter's own costumes, which the select screen does not read. Its builder
 keeps the creation data's archive ([+14868]'s object, its data at +12: a count of files, then their offsets;

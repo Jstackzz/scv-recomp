@@ -850,6 +850,39 @@ ResultChoiceView ResultChoiceNow() {
   return g_view;
 }
 
+namespace {
+HeldOutView g_held_view;  // under g_view_lock
+// the select screen's overlay of this PC's player's created characters left out online (HeldOutNow): main thread, at
+// the top of each frame
+void PublishHeldOutView() {
+  HeldOutView v;
+  const uint32_t obj = g_phase == Phase::Select && g_plan.online && g_plan.side <= 1 ? select::Object() : 0;
+  const std::vector<creation::HeldOut> held = obj ? creation::HeldOutList() : std::vector<creation::HeldOut>{};
+  if (!held.empty()) {
+    const int me = g_plan.side, step = select::Step(me);
+    // the slot the player is on: their cursor while they choose, the picked fighter on its costume panel
+    const int on = step == 0 ? select::CursorOf(me).Slot() : step == 1 ? g_picked_slot[me] : -1;
+    const int character = on == select::kCreationSlot ? creation::kOriginal : on >= 0 ? select::IdOfSlot(on) : -1;
+    bool relevant = false;
+    for (const creation::HeldOut& h : held) relevant = relevant || (character >= 0 && h.type == character);
+    if (select::Age() < 80 + 1200 || (LocalPicks(me) && step < 2 && relevant)) {
+      v.shown = true;
+      for (const creation::HeldOut& h : held) {
+        v.names.push_back(fmt::format("{} (slot {})", h.name.empty() ? "No name" : h.name, h.slot + 1));
+        v.whys.push_back(h.why);
+      }
+    }
+  }
+  std::lock_guard<std::mutex> lock(g_view_lock);
+  g_held_view = std::move(v);
+}
+}  // namespace
+
+HeldOutView HeldOutNow() {
+  std::lock_guard<std::mutex> lock(g_view_lock);
+  return g_held_view;
+}
+
 bool ResultChosen(std::string& choice) {
   if (g_choice < 0 || !g_over) return false;
   choice = g_choice ? "select" : "rematch";
@@ -1020,6 +1053,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   g_allow = 0;
   g_still = false;
   g_both = false;
+  PublishHeldOutView();
   switch (g_phase) {
     case Phase::Off:
     case Phase::Lost:

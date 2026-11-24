@@ -1,4 +1,4 @@
-// The overlay over a lobby match's result screen, see result_overlay.h.
+// The overlays over the game's own screens, see result_overlay.h.
 
 #include "sc5/result_overlay.h"
 
@@ -71,10 +71,57 @@ class ResultChoiceDialog final : public rex::ui::ImGuiDialog {
   }
 };
 
+// The select screen online: the player's own created characters this game leaves out, which and why, at the bottom of
+// the screen in the same large bold text (autopilot.h, HeldOutView)
+class HeldOutDialog final : public rex::ui::ImGuiDialog {
+ public:
+  explicit HeldOutDialog(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  bool RepaintsContinuously() const override { return false; }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const autopilot::HeldOutView v = autopilot::HeldOutNow();
+    if (!v.shown || v.names.empty() || io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) return;
+    // a little smaller than the result's choice (a 26th of the height: 42 px at 1080 lines), it sits under the grid
+    const float px = std::clamp(io.DisplaySize.y / 26.0f, 16.0f, 90.0f), scale = px / 10.0f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.98f), ImGuiCond_Always,
+                            ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(io.DisplaySize.x * 0.96f, io.DisplaySize.y * 0.6f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kBack);
+    ImGui::PushStyleColor(ImGuiCol_Border, kGold);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, std::max(2.0f, scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * scale, 4.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 1.5f * scale));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    ImGui::PushFont(framemeter::LargeFont(), px);
+    if (ImGui::Begin("##sc5_held_out", nullptr, flags)) {
+      const size_t n = v.names.size(), shown = n > 4 ? 3 : n;
+      ImGui::TextColored(kGold, n == 1 ? "1 OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE"
+                                       : "%d OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE", int(n));
+      for (size_t i = 0; i < shown; i++) {
+        ImGui::TextColored(kWhite, "%s:", v.names[i].c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(kWhite, "%s", v.whys[i].c_str());
+      }
+      if (shown < n) ImGui::TextColored(kWhite, "and %d more (the game's log names them)", int(n - shown));
+      ImGui::TextColored(kGold, "This is for online matches only");
+    }
+    ImGui::End();
+    ImGui::PopFont();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+  }
+};
+
 }  // namespace
 
 void Install(rex::ui::ImGuiDrawer* drawer) {
-  if (drawer) new ResultChoiceDialog(drawer);  // a dialog keeps itself (rex/ui/imgui_dialog.h)
+  if (!drawer) return;
+  new ResultChoiceDialog(drawer);  // a dialog keeps itself (rex/ui/imgui_dialog.h)
+  new HeldOutDialog(drawer);
 }
 
 }  // namespace sc5::overlay
