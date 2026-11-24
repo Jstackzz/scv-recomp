@@ -957,16 +957,26 @@ void MainWindow::cliLobby() {
             cliLobbyPoll_->stop();
             const bool watch = opts_.lobby == QLatin1String("watch");
             applog::write(QStringLiteral("cli: %1 lobby %2 by its code").arg(watch ? QStringLiteral("watching") : QStringLiteral("joining"), code));
-            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
-                           {QStringLiteral("lobby"), code},
-                           {QStringLiteral("password"), QString()},
-                           {QStringLiteral("character"), opts_.character},
-                           {QStringLiteral("spectate"), watch}});
+            cliJoin(code, watch);
             return;
         }
         server_->send({{QStringLiteral("type"), QStringLiteral("lobby_list")}, {QStringLiteral("game"), gameId_}});
     });
     cliLobbyPoll_->start(1000);
+}
+
+// --lobby join / watch: the lobby by its code; with --lobby-own-first the way a player's click goes (LobbyPage's join:
+// a move from the lobby the player is in, an older server's busy answered with a leave and the join again)
+void MainWindow::cliJoin(const QString& code, bool watch) {
+    if (opts_.lobbyOwnFirst) {
+        if (auto* lobby = qobject_cast<LobbyPage*>(pages_[kLobby])) lobby->joinByCode(code, watch);
+        return;
+    }
+    server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
+                   {QStringLiteral("lobby"), code},
+                   {QStringLiteral("password"), QString()},
+                   {QStringLiteral("character"), opts_.character},
+                   {QStringLiteral("spectate"), watch}});
 }
 
 void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
@@ -989,11 +999,7 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
             if (cliLobbyPoll_) cliLobbyPoll_->stop();
             const QString code = lb.value(QStringLiteral("id")).toString();
             applog::write(QStringLiteral("cli: %1 lobby %2").arg(watch ? QStringLiteral("watching") : QStringLiteral("joining"), code));
-            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_join")},
-                           {QStringLiteral("lobby"), code},
-                           {QStringLiteral("password"), QString()},
-                           {QStringLiteral("character"), opts_.character},
-                           {QStringLiteral("spectate"), watch}});
+            cliJoin(code, watch);
             break;
         }
         return;

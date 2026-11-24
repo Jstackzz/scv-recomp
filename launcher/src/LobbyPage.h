@@ -33,6 +33,8 @@ public:
     // goes back to it, so A readies up for the next one (King of the Hill: to the rating first, while it is open)
     void pressReady();
     void focusReady();
+    // join a lobby by its code as the Join code button does (development: --lobby-own-first)
+    void joinByCode(const QString& code, bool spectate) { join(code, false, spectate); }
     // the lobby's mode is lobby-only (Online Practice): its next match comes by itself, nothing to ready up for
     bool lobbyOnly() const;
 

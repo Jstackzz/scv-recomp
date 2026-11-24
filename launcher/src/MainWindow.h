@@ -104,6 +104,7 @@ private:
     void cliLogin();
     void cliQueue();
     void cliLobby();
+    void cliJoin(const QString& code, bool watch);
     void cliLobbyMessage(const QJsonObject& msg);
 
     LaunchOptions opts_;

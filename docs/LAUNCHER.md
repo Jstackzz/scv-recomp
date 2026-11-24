@@ -312,7 +312,8 @@ every `SC5_` variable it was given. `SC5_FAKE_RESULT=desync` makes it report a d
 | `--auto-accept N` | accept a found match after N seconds |
 | `--cancel-search N` | with `--queue`: cancel the search N seconds after it starts, as CANCEL SEARCH does |
 | `--rematches N`, `--rematch-choice rematch,select`, `--leave-series` | with `--queue casual`: choose a rematch after each match, N times, then leave or let it run out |
-| `--solo` | with `--queue`: start single player first and search alongside it (standby) |
+| `--solo` | with `--queue`: start single player first and search alongside it (standby); with `--lobby join`: single player open while readying (the lobby's match closes it) |
+| `--lobby-own-first` | with `--lobby join`: a lobby of one's own first, then the named one joined as a click does (the server moves the player; an older server's busy gets a leave and the join again) |
 | `--practice on\|off`, `--search-again on\|off` | the queue pages' boxes, saved |
 | `--lobby host\|join\|watch --lobby-name NAME [--lobby-code-file F] [--lobby-matches N]` | host a lobby and ready, join it and ready, or watch it as a spectator; the code through a file (Online Practice lobbies are never listed) |
 | `--koth`, `--rate N` | a King of the Hill lobby; rate each match watched, 1 to 10 |

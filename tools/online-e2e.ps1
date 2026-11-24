@@ -47,6 +47,7 @@ param(
     [switch]$SoloB,              # lobby: B has single player open when the lobby's match comes (the launcher closes it)
     [string]$DelayA = '',        # [online] input_delay of A and B: auto (default) or 0-4
     [string]$DelayB = '',
+    [string]$ServerRoot = '',    # run the server from another checkout's folder (an older release's server/)
     [switch]$Snaps,              # pictures of the launchers' windows (build\online-e2e\snaps)
     [switch]$Visible,            # the launchers' windows on the screen (default: offscreen)
     [int]$Port = 8777            # the server's TCP port (UDP Port + 1), the games' Port + 10 to + 12
@@ -128,7 +129,7 @@ $serverArgs = @('-m', 'server', '--host', '127.0.0.1', '--port', "$Port", '--udp
                 '--db', "`"$work\server\e2e.sqlite`"", '--cert', "`"$work\server\server-cert.pem`"",
                 '--key', "`"$work\server\server-key.pem`"")
 if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pairs one public IP otherwise
-$server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+$server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $(if ($ServerRoot) { $ServerRoot } else { $root }) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2
 $vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
