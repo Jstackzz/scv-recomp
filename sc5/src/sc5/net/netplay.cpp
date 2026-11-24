@@ -49,6 +49,9 @@
 //  20 AGAIN  u32 round, u32 from
 //            after a failed check: "the round again from its start" (RoundAgain): the match frame the sender's present
 //            round began at, and the frame number it would go on from; repeated until both games are through
+//  21 CALL   u32 call, u32 now
+//            after the check at a round's call failed (CallSync): the match frame the sender's present round call
+//            began at, and the frame the sender stands at; the two make the fight alike at the later of the two
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -104,7 +107,7 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
                  kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13, kChoice = 14, kSkip = 15,
-                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19, kAgain = 20 };
+                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19, kAgain = 20, kCall = 21 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -457,6 +460,19 @@ struct AgainPeer {
 };
 RoundStart g_round;
 AgainPeer g_again_peer;
+// The check at a round's call (CallSync below): the frame the present round's call began at (0: none yet, round 1's is
+// the barrier), the frame the two agreed to make the fight alike at, and what the other game said
+struct CallState {
+  uint32_t frame = 0;      // the present round call's first frame (its check's)
+  uint32_t state = 0;      // the battle's state at the last frame's top (the call's first frame: it changed to the call)
+  bool waiting = false;    // on the way to `at`
+  uint32_t at = 0;
+  uint32_t done = 0;       // the call whose sync is over (its first frame)
+  bool peer_seen = false;
+  uint32_t peer_now = 0;
+  int count = 0;           // this match
+};
+CallState g_call;
 std::atomic<int> g_rounds_again{0};
 std::atomic<uint32_t> g_again_frame{0};
 std::atomic<int64_t> g_again_notice_until{0};  // steady clock, ms: the players are told for a few seconds
@@ -948,6 +964,12 @@ void HandlePacket(const uint8_t* b, int n) {
     while (p.inputs.count(p.contiguous)) p.contiguous++;
   } else if (type == kCheck && n >= 20 && match == g_match) {
     p.checks[u32(8)] = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
+  } else if (type == kCall && n >= 16 && match == g_match) {
+    // of the round call this game is in, and not one made alike already
+    if (g_call.frame && u32(8) == g_call.frame && g_call.done != g_call.frame) {
+      g_call.peer_seen = true;
+      g_call.peer_now = std::max(g_call.peer_now, u32(12));
+    }
   } else if (type == kAgain && n >= 16 && match == g_match) {
     // of the round this game is in (a late one of a round both went back to already says nothing)
     if (g_round.kept && u32(8) == g_round.frame) g_again_peer = AgainPeer{true, u32(12)};
@@ -1236,6 +1258,9 @@ bool Open(const Settings& st) {
 void StopRolling();
 void KeepRoundStart(PPCContext& ctx, uint8_t* base);
 bool RoundAgain(PPCContext& ctx, uint8_t* base);
+bool CallSync(PPCContext& ctx, uint8_t* base);
+bool CallSyncAt(PPCContext& ctx, uint8_t* base);
+void CallCheck(PPCContext& ctx, uint8_t* base);
 void OnTop(PPCContext& ctx, uint8_t* base);
 void DumpAtTop(PPCContext& ctx, uint8_t* base, uint32_t f);
 void DumpSettled(uint32_t settled);
@@ -2100,6 +2125,7 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   g_round_trail.clear();
   g_round.kept = false;
   g_round.again = 0;
+  g_call = CallState{};
   g_again_peer = AgainPeer{};
   g_rounds_again = 0;
   std::vector<uint32_t> words;
@@ -2242,6 +2268,135 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   return true;
 }
 
+// --- the round again after a desync, and the check at a round's call ---
+
+// The fight's blocks made alike as at the barrier (MeetSync: SUMS, FIX, FIXOK), both games standing at the same frame's
+// top: player 2's game takes player 1's bytes of every block that differs. `ask` is sent along (the other game may
+// still wait for the word that brought this one here). False when the other game did not answer in 8 s.
+bool SyncFightBlocks(PPCContext& ctx, uint8_t* base, const Writer& ask) {
+  g_sync = MeetSync{g_match};
+  g_sync.mine = FightBlocks(ctx, base, g_slot == 0);
+  bool synced = false;
+  auto last_send = Clock::time_point{};
+  const auto started = Clock::now();
+  while (!synced) {
+    if (Clock::now() - last_send > std::chrono::milliseconds(50)) {
+      Send(ask);
+      if (g_slot == 1 && g_sync.got_chunks < 0) SendSums();
+      if (g_slot == 1 && g_sync.applied) Send(Header(kFixOk));
+      if (g_slot == 0 && g_sync.fix_built && !g_sync.fix_ok)
+        for (const auto& packet : g_sync.fix) SendPacket(packet);
+      last_send = Clock::now();
+    }
+    if (g_slot == 0) {
+      const bool was_built = g_sync.fix_built;
+      BuildFix();
+      if (!was_built && g_sync.fix_built)
+        for (const auto& packet : g_sync.fix) SendPacket(packet);
+      synced = g_sync.fix_ok;
+    } else {
+      const bool was_applied = g_sync.applied;
+      ApplyFix();
+      if (!was_applied && g_sync.applied) Send(Header(kFixOk));
+      synced = g_sync.applied;
+    }
+    Receive();
+    if (g_peer.left || Clock::now() - started > std::chrono::seconds(8)) {
+      REXLOG_WARN("sc5 net: the two games could not make the fight alike");
+      return false;
+    }
+    if (!synced) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (g_slot == 1)
+    for (int i = 0; i < 3; i++) Send(Header(kFixOk));
+  return true;
+}
+
+// The check at a round's call. Outside a round's fighting the two games run on neutral inputs and compare nothing, and
+// the game itself is not the same there on two PCs: after a KO a fighter's script waits on its voice (CRI's playback
+// status, the audio's own time: sound.cpp), so the winner's line and pose can start a few frames apart and leave the
+// fighter's timers otherwise as the next round begins (Algol against Yoshimitsu on stage 22, the ring out of round 2:
+// player 1's +0x2325C and +0x29D8 apart 4 frames after the KO, +0x231B8 160 against 68 at round 3's first check,
+// 2026-11-24), which the round's first check then took for a desync. So the first frame of every round's call after
+// the first is checked like a fought frame's, and when that check fails the two games make the fight alike there and
+// then, before the round is fought: CALL packets agree the frame (the later of the two games' present ones; the game
+// behind runs on to it), and at its top the blocks are made alike as at the barrier. Nothing is put back and nothing
+// is fought again; the players see a pause of a round trip or two during the round's call. Should the call be over
+// before that (a long round trip), the round's first check finds what is left and the round begins again (RoundAgain).
+void CallCheck(PPCContext& ctx, uint8_t* base) {
+  const uint32_t state = game::BattleState();
+  const bool began = state == game::kBattleRoundCall && g_call.state != game::kBattleRoundCall && g_frame > 0;
+  g_call.state = state;
+  static const bool off = std::getenv("SC5_NET_NO_CALL_CHECK") != nullptr;
+  if (!began || off || g_cfg.watch) return;
+  g_call.frame = g_frame;
+  g_call.waiting = false;
+  g_call.peer_seen = false;
+  g_call.peer_now = 0;
+  static uint32_t stream = 0;
+  if (!stream) stream = battle::NewStream();
+  if (!stream || !battle::Save(ctx, base, stream)) return;
+  g_tentative[g_frame] = battle::FightHash(stream);
+  KeepEvidence(g_frame, stream);
+}
+
+bool CallSyncAt(PPCContext& ctx, uint8_t* base) {
+  g_call.waiting = false;
+  const uint32_t call = g_call.frame;
+  if (RoundFought()) {
+    REXLOG_INFO("sc5 net: round call of frame {}: the round is fought already at frame {}, its first check will tell", call, g_frame);
+    g_call.done = call;
+    return true;
+  }
+  Writer ask = Header(kCall);
+  ask.U32(call);
+  ask.U32(g_frame);
+  const auto started = Clock::now();
+  if (!SyncFightBlocks(ctx, base, ask)) return false;
+  g_call.done = call;
+  g_call.count++;
+  g_peer.checks.clear();
+  g_my_checks.clear();
+  g_tentative.clear();
+  g_evidence.clear();
+  g_detail = Detail{};
+  REXLOG_INFO("sc5 net: match {}: the round call of frame {} made alike at frame {} (the {} time this match): {} blocks ({} "
+              "bytes); {:.0f} ms",
+              g_match, call, g_frame, g_call.count, g_sync.blocks, g_slot == 0 ? g_sync.bytes : 0, Ms(Clock::now() - started));
+  return true;
+}
+
+// the check of the present round call failed (or the other game says its did): agree the frame, then CallSyncAt
+bool CallSync(PPCContext& ctx, uint8_t* base) {
+  if (!g_call.frame || g_call.done == g_call.frame || g_cfg.watch) return false;
+  const uint32_t call = g_call.frame;
+  REXLOG_INFO("sc5 net: match {}: the round call of frame {} is not alike in the two games (now frame {})", g_match, call, g_frame);
+  Writer ask = Header(kCall);
+  ask.U32(call);
+  ask.U32(g_frame);
+  const auto started = Clock::now();
+  auto last_send = Clock::time_point{};
+  while (!g_call.peer_seen) {
+    if (Clock::now() - last_send > std::chrono::milliseconds(30)) {
+      Send(ask);
+      last_send = Clock::now();
+    }
+    Receive();
+    if (g_peer.left || Clock::now() - started > std::chrono::seconds(4)) {
+      REXLOG_WARN("sc5 net: the other game did not come along to make the round call alike");
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  g_call.at = std::max(g_frame, g_call.peer_now);
+  if (g_frame < g_call.at) {  // the other game stands further on: this one runs on to its frame
+    g_call.waiting = true;
+    for (int i = 0; i < 3; i++) Send(ask);
+    return true;
+  }
+  return CallSyncAt(ctx, base);
+}
+
 // --- the round again after a desync ---
 
 // the battle as this round's fighting begins (the frame's top), kept until the next round's
@@ -2294,41 +2449,7 @@ bool RoundAgain(PPCContext& ctx, uint8_t* base) {
     return false;
   }
   // the fight's blocks alike, as at the barrier
-  g_sync = MeetSync{g_match};
-  g_sync.mine = FightBlocks(ctx, base, g_slot == 0);
-  bool synced = false;
-  last_send = Clock::time_point{};
-  const auto sync_started = Clock::now();
-  while (!synced) {
-    if (Clock::now() - last_send > std::chrono::milliseconds(50)) {
-      Send(ask);  // the other game may still wait for this one's word
-      if (g_slot == 1 && g_sync.got_chunks < 0) SendSums();
-      if (g_slot == 1 && g_sync.applied) Send(Header(kFixOk));
-      if (g_slot == 0 && g_sync.fix_built && !g_sync.fix_ok)
-        for (const auto& packet : g_sync.fix) SendPacket(packet);
-      last_send = Clock::now();
-    }
-    if (g_slot == 0) {
-      const bool was_built = g_sync.fix_built;
-      BuildFix();
-      if (!was_built && g_sync.fix_built)
-        for (const auto& packet : g_sync.fix) SendPacket(packet);
-      synced = g_sync.fix_ok;
-    } else {
-      const bool was_applied = g_sync.applied;
-      ApplyFix();
-      if (!was_applied && g_sync.applied) Send(Header(kFixOk));
-      synced = g_sync.applied;
-    }
-    Receive();
-    if (g_peer.left || Clock::now() - sync_started > std::chrono::seconds(8)) {
-      REXLOG_WARN("sc5 net: the two games could not make the round's start alike");
-      return false;
-    }
-    if (!synced) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  if (g_slot == 1)
-    for (int i = 0; i < 3; i++) Send(Header(kFixOk));
+  if (!SyncFightBlocks(ctx, base, ask)) return false;
   // the frames go on from `from`: the round's first fought frame under a new number
   Peer& p = g_peer;
   g_shown_base = g_shown_base + round - from;  // the game's count of frames shown as it was at the round's start
@@ -2657,8 +2778,17 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
   }
   // a failed check: once the two games have said what differs (or the other game asks, its own check having failed
   // where this game's did not come to be compared), the round is played again from its start, or the match is over
-  if (g_status == Status::InSync && (DetailPump() || (g_again_peer.seen && !g_detail.active))) {
-    if (!RoundAgain(ctx, base)) g_status = Status::Desynced;
+  if (g_status == Status::InSync && !g_cfg.watch) {
+    const bool ended = DetailPump();
+    // a round call's check (CallSync): the fight made alike where the games stand, nothing fought again
+    const bool call_check = g_call.frame && g_call.done != g_call.frame && g_detail.active && g_detail.frame == g_call.frame;
+    if (g_call.waiting) {
+      if (g_frame >= g_call.at && !CallSyncAt(ctx, base)) g_status = Status::Desynced;
+    } else if ((ended && call_check) || (g_call.peer_seen && !g_detail.active && g_call.done != g_call.frame)) {
+      if (!CallSync(ctx, base)) g_status = Status::Desynced;
+    } else if ((ended && !call_check) || (g_again_peer.seen && !g_detail.active)) {
+      if (!RoundAgain(ctx, base)) g_status = Status::Desynced;
+    }
   }
   if (g_status != Status::InSync) return;
   // Online Practice: a player's BACK (or the other game's leaving) ends the match in sync for both
@@ -2717,6 +2847,19 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
       // other's (with a round trip longer than the input delay, lockstep made the intro wait at almost every frame)
       g_peer.confirmed = g_frame + 1;
       g_neutral = true;
+      CallCheck(ctx, base);  // a round's call begins: its first frame is checked (CallSync)
+      // tests: SC5_NET_CHECK_ALWAYS=<n>: a check every n frames outside a round's fighting too (the KO, its replay,
+      // between rounds, the round's call), where the two games run alike on neutral inputs but compare nothing: what
+      // parts them there shows at the next round's first check only
+      static const uint32_t always = std::getenv("SC5_NET_CHECK_ALWAYS") ? uint32_t(std::atoi(std::getenv("SC5_NET_CHECK_ALWAYS"))) : 0;
+      if (always && g_frame % always == 0) {
+        static uint32_t stream = 0;
+        if (!stream) stream = battle::NewStream();
+        if (stream && battle::Save(ctx, base, stream)) {
+          g_tentative[g_frame] = battle::FightHash(stream);
+          KeepEvidence(g_frame, stream);
+        }
+      }
       ReplaySkipAsk();  // a player's START or A in a KO's replay cuts it short for both games
       if (!ReplaySkipWait()) return Lost(Status::Disconnected);
       Pace();  // the two games kept even here too, or they start the round apart
