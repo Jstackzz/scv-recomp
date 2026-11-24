@@ -1559,10 +1559,20 @@ void MatchController::onGameStatus(const QString& line) {
             startTimeout_.stop();
             gamePlayed_ = true;
             gamePlayedKey_ = str(found_, "mode") + QLatin1Char('|') +
-                             str(found_.value(QStringLiteral("opponent")).toObject(), "name");            setPhase(Phase::Playing, tr("In match against %1").arg(opponentName()));
+                             str(found_.value(QStringLiteral("opponent")).toObject(), "name");
+            roundsAgain_ = 0;
+            setPhase(Phase::Playing, tr("In match against %1").arg(opponentName()));
             server_->send({{QStringLiteral("type"), QStringLiteral("match_state")},
                            {QStringLiteral("match"), goMatch},
                            {QStringLiteral("state"), QStringLiteral("in_match")}});
+        }
+        // the two games went out of step and played the round again (the game's `again=<times> again_frame=<check>`):
+        // the match goes on, and what the game logged of it goes to the server as a desync's does
+        const int again = keys.value(QStringLiteral("again")).toInt();
+        if (phase_ == Phase::Playing && forThisMatch && again > roundsAgain_) {
+            roundsAgain_ = again;
+            log(tr("The two games went out of step and played the round again"));
+            reportDesync(keys.value(QStringLiteral("again_frame")).toInt(), true);
         }
     } else if (st == QLatin1String("result") && inOnline && forThisMatch) {
         QJsonObject result{{QStringLiteral("winner"), keys.value(QStringLiteral("winner")).toInt()},
@@ -1633,10 +1643,10 @@ void MatchController::onGameExited() {
 
 // The match went out of step: what the game logged of it goes to the server (PROTOCOL.md 1.13.1), whose log then has
 // both players' side by side. A moment later: the game's log has the failed check's own line by then.
-void MatchController::reportDesync(int frame) {
+void MatchController::reportDesync(int frame, bool again) {
     if (!game_) return;
     const QString match = str(go_, "match"), gameId = game_->gameId(), dir = game_->sessionDir();
-    QTimer::singleShot(1500, this, [this, match, gameId, dir, frame] {
+    QTimer::singleShot(1500, this, [this, match, gameId, dir, frame, again] {
         if (!server_->isLoggedIn()) return;
         QStringList said = desyncLines(dir);
         // a server from before SCV 0.1.4 (no desync_detail in its welcome) takes 40 lines in a 16 KB message: the
@@ -1652,11 +1662,13 @@ void MatchController::reportDesync(int frame) {
         said << gameFiles(gameId) << pcLine(gameId);
         QJsonArray lines;
         for (const QString& l : said) lines.append(l);
-        server_->send({{QStringLiteral("type"), QStringLiteral("desync_report")},
-                       {QStringLiteral("game"), gameId},
-                       {QStringLiteral("match"), match.left(16)},
-                       {QStringLiteral("frame"), frame},
-                       {QStringLiteral("lines"), lines}});
+        QJsonObject report{{QStringLiteral("type"), QStringLiteral("desync_report")},
+                           {QStringLiteral("game"), gameId},
+                           {QStringLiteral("match"), match.left(16)},
+                           {QStringLiteral("frame"), frame},
+                           {QStringLiteral("lines"), lines}};
+        if (again) report.insert(QStringLiteral("again"), true);
+        server_->send(report);
         log(tr("The match went out of step at frame %1: what the game logged of it went to the server").arg(frame));
     });
 }

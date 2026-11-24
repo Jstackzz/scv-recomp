@@ -458,6 +458,7 @@ struct AgainPeer {
 RoundStart g_round;
 AgainPeer g_again_peer;
 std::atomic<int> g_rounds_again{0};
+std::atomic<uint32_t> g_again_frame{0};
 std::atomic<int64_t> g_again_notice_until{0};  // steady clock, ms: the players are told for a few seconds
 
 int OwnDelay() { return std::clamp(g_cfg.delay, 0, 8); }
@@ -2244,6 +2245,7 @@ bool RoundAgain(PPCContext& ctx, uint8_t* base) {
   if (!CanPlayAgain()) return false;
   const auto started = Clock::now();
   const uint32_t round = g_round.frame, mine = g_frame + 64;
+  const uint32_t failed = g_detail.active ? g_detail.frame : g_frame;
   REXLOG_INFO("sc5 net: match {} out of step: the round again from its start (frame {}), asked at frame {}", g_match, round,
               g_frame);
   Writer ask = Header(kAgain);
@@ -2336,6 +2338,7 @@ bool RoundAgain(PPCContext& ctx, uint8_t* base) {
   if (g_round_trail.size() < 600) g_round_trail += " again";
   StartRolling(ctx, base);
   g_round.again++;
+  g_again_frame = failed;
   g_rounds_again = g_round.again;
   KeepRoundStart(ctx, base);  // as the two games now have it alike
   FeedEnd();  // the spectators' games cannot follow this yet: their feed ends here
@@ -3025,6 +3028,7 @@ bool WaitSetup(Setup& out, int ms) {
 
 Status GetStatus() { return g_status.load(); }
 int RoundsAgain() { return g_rounds_again.load(); }
+uint32_t RoundAgainFrame() { return g_again_frame.load(); }
 bool RoundAgainNotice() {
   const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
   return g_status.load() == Status::InSync && now < g_again_notice_until.load();

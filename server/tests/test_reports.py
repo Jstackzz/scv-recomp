@@ -166,6 +166,26 @@ async def test_both_players_reports_of_a_match_make_one_pair_line(server, connec
     assert "7658cd7bfcd7" not in server.desyncs and "aaaaaaaaaaaa" in server.desyncs
 
 
+async def test_a_round_played_again_is_reported_and_the_pair_says_so(server, connect, caplog):
+    """Two games that went out of step and played the round again (SCV 0.1.5): each launcher's report has `again`,
+    the server's lines say the match went on, and a second one in the same match pairs again."""
+    a, b = await connect("Taki"), await connect("Kilik")
+    with caplog.at_level("INFO", logger="sc5.server"):
+        for frame in (930, 4020):
+            await a.request({"type": "desync_report", "game": "sc5", "match": "7658cd7bfcd7", "frame": frame,
+                             "again": True, "lines": desync_lines(1)})
+            await b.request({"type": "desync_report", "game": "sc5", "match": "7658cd7bfcd7", "frame": frame,
+                             "again": True, "lines": desync_lines(2)})
+        with pytest.raises(ServerError):
+            await a.request({"type": "desync_report", "game": "sc5", "match": "m", "frame": 1, "again": "yes",
+                             "lines": []})
+    said = [r.getMessage() for r in caplog.records]
+    assert len([m for m in said if m.startswith("DESYNC_REPORT Taki sc5") and "the round played again" in m]) == 2
+    pairs = [m for m in said if m.startswith("DESYNC_PAIR")]
+    assert len(pairs) == 2 and all(m.endswith("; the round was played again and the match went on") for m in pairs)
+    assert "at frame 930, Kilik at frame 930;" in pairs[0] and "at frame 4020, Kilik at frame 4020;" in pairs[1]
+
+
 def test_desync_setup_reads_the_stage_and_the_fighters():
     from server.app import desync_setup
     assert desync_setup(desync_lines(1, stage="1A", p1="Ivy", p2="Astaroth")) == ("1A", ("Ivy", "Astaroth"))

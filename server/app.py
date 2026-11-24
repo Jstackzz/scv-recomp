@@ -2794,22 +2794,23 @@ class Server:
         if game not in P.GAMES:
             raise P.ProtocolError("bad_request", "Unknown game.")
         match = P.get_str(msg, "match", max_len=16, default="")
-        frame, lines = msg.get("frame", 0), msg.get("lines")
-        if (not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < 2**32
+        frame, lines, again = msg.get("frame", 0), msg.get("lines"), msg.get("again", False)
+        if (not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < 2**32 or not isinstance(again, bool)
                 or not isinstance(lines, list) or len(lines) > DESYNC_LINES or not CRASH_TEXT.fullmatch(match)
                 or not all(isinstance(line, str) and len(line) <= 200 and CRASH_TEXT.fullmatch(line) for line in lines)):
             raise P.ProtocolError("bad_request", "Desync reports are a frame and plain text lines.")
         s.desync_reports += 1
         if s.desync_reports > DESYNC_REPORTS_PER_SESSION:
             return
-        log.info("DESYNC_REPORT %s %s (launcher %s) match %s at frame %d: %d lines", s.name, game,
-                 s.client_version or "?", match or "?", frame, len(lines))
+        # again: the two games played the round again from its start and the match went on (SCV 0.1.5)
+        log.info("DESYNC_REPORT %s %s (launcher %s) match %s at frame %d%s: %d lines", s.name, game,
+                 s.client_version or "?", match or "?", frame, ", the round played again" if again else "", len(lines))
         for line in lines:
             log.info("DESYNC_REPORT %s | %s", s.name, line)
-        self._pair_desync(s, match, frame, lines)
+        self._pair_desync(s, match, frame, lines, again)
         self._reply(s, msg, {"type": "desync_ack"})
 
-    def _pair_desync(self, s: Session, match: str, frame: int, lines: list[str]) -> None:
+    def _pair_desync(self, s: Session, match: str, frame: int, lines: list[str], again: bool = False) -> None:
         """Both players' reports of one match in: one DESYNC_PAIR line names the two players, the frames each game
         saw the check fail at, the stage and the two fighters (from each report's lines), so a night's desyncs read
         at a glance from the journal. A report waits for the other's DESYNC_WAIT seconds at most."""
@@ -2829,9 +2830,9 @@ class Server:
         stage = a.stage if a.stage == b.stage else f"{a.stage} / {b.stage} (they differ)"
         fighters = (" vs ".join(a.fighters) if a.fighters == b.fighters
                     else f"{' vs '.join(a.fighters)} / {' vs '.join(b.fighters)} (they differ)")
-        log.info("DESYNC_PAIR %s %s at frame %d, %s at frame %d%s; stage %s; %s (launchers %s and %s)", match,
+        log.info("DESYNC_PAIR %s %s at frame %d, %s at frame %d%s; stage %s; %s (launchers %s and %s)%s", match,
                  a.name, a.frame, b.name, b.frame, "" if a.frame == b.frame else " (the frames differ)", stage,
-                 fighters, a.version, b.version)
+                 fighters, a.version, b.version, "; the round was played again and the match went on" if again else "")
 
     def _reports_bytes(self) -> int:
         total = 0

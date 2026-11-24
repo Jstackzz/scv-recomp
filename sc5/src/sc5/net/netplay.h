@@ -59,6 +59,7 @@ Status GetStatus();
 // players are being told just now (the overlay's notice, for a few seconds after)
 int RoundsAgain();
 bool RoundAgainNotice();
+uint32_t RoundAgainFrame();  // the frame of the check that failed last (the launcher's report of it)
 const char* StatusName(Status s);
 bool InSync();
 // the other game was heard for the coming match

@@ -463,7 +463,8 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   const int again = net::RoundsAgain();
   WriteStatus((s == net::Status::InSync ? "in_match match=" : "starting match=") + g_match +
               (held ? fmt::format(" held_out={}", held) : std::string()) +
-              (again && s == net::Status::InSync ? fmt::format(" again={}", again) : std::string()));
+              (again && s == net::Status::InSync ? fmt::format(" again={} again_frame={}", again, net::RoundAgainFrame())
+                                                 : std::string()));
 }
 
 }  // namespace
