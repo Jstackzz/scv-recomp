@@ -9,6 +9,7 @@
 
 #include "sc5/autopilot.h"
 #include "sc5/framemeter.h"
+#include "sc5/net/netplay.h"
 
 namespace sc5::overlay {
 namespace {
@@ -116,12 +117,47 @@ class HeldOutDialog final : public rex::ui::ImGuiDialog {
   }
 };
 
+// A round started again after the two games went out of step (net/netplay.cpp, RoundAgain): said to both players for a
+// few seconds, in the same large bold text, over the top of the fight
+class RoundAgainDialog final : public rex::ui::ImGuiDialog {
+ public:
+  explicit RoundAgainDialog(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  bool RepaintsContinuously() const override { return false; }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    if (!net::RoundAgainNotice() || io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) return;
+    const float px = std::clamp(io.DisplaySize.y / 22.0f, 16.0f, 100.0f), scale = px / 10.0f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.30f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kBack);
+    ImGui::PushStyleColor(ImGuiCol_Border, kGold);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, std::max(2.0f, scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f * scale, 6.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 3.0f * scale));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    ImGui::PushFont(framemeter::LargeFont(), px);
+    if (ImGui::Begin("##sc5_round_again", nullptr, flags)) {
+      ImGui::TextColored(kGold, "OUT OF SYNC");
+      ImGui::TextColored(kWhite, "THIS ROUND STARTS AGAIN");
+    }
+    ImGui::End();
+    ImGui::PopFont();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+  }
+};
+
 }  // namespace
 
 void Install(rex::ui::ImGuiDrawer* drawer) {
   if (!drawer) return;
   new ResultChoiceDialog(drawer);  // a dialog keeps itself (rex/ui/imgui_dialog.h)
   new HeldOutDialog(drawer);
+  new RoundAgainDialog(drawer);
 }
 
 }  // namespace sc5::overlay

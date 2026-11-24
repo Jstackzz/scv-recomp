@@ -459,8 +459,11 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   }
   // the player's own created characters this game leaves out (the overlay at the select screen says which and why)
   const size_t held = g_plan.side <= 1 ? creation::HeldOutList().size() : 0;  // a spectator's player picks nothing
+  // ... and the rounds this match started again after a desync (net/netplay.cpp, RoundAgain): the launcher reports each
+  const int again = net::RoundsAgain();
   WriteStatus((s == net::Status::InSync ? "in_match match=" : "starting match=") + g_match +
-              (held ? fmt::format(" held_out={}", held) : std::string()));
+              (held ? fmt::format(" held_out={}", held) : std::string()) +
+              (again && s == net::Status::InSync ? fmt::format(" again={}", again) : std::string()));
 }
 
 }  // namespace

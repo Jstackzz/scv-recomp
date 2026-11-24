@@ -46,6 +46,9 @@
 //            check hashes), with a hash of the snapshot's layout (its blocks' addresses and sizes); repeated
 //  19 DBYTES u32 frame, u16 index, u16 count, u16 page, u16 len, len bytes
 //            the sender's bytes of one of the first pages that differ (count of them in all); repeated
+//  20 AGAIN  u32 round, u32 from
+//            after a failed check: "the round again from its start" (RoundAgain): the match frame the sender's present
+//            round began at, and the frame number it would go on from; repeated until both games are through
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -101,7 +104,7 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
                  kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13, kChoice = 14, kSkip = 15,
-                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19 };
+                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19, kAgain = 20 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -438,6 +441,24 @@ struct Detail {
 std::map<uint32_t, Evidence> g_evidence;
 Detail g_detail;
 std::string g_round_trail;  // the match's rounds: "+f" fought from match frame f, "-f(health a/b)" to f
+
+// The round again after a desync (RoundAgain below): the battle as the present round's fighting began, kept for the
+// round, and what the other game said of going back to it
+constexpr int kMaxRoundsAgain = 3;  // a match
+struct RoundStart {
+  uint32_t stream = 0;
+  bool kept = false;
+  uint32_t frame = 0;  // the match frame the round's fighting began at
+  int again = 0;       // times this match went back to a round's start
+};
+struct AgainPeer {
+  bool seen = false;
+  uint32_t from = 0;
+};
+RoundStart g_round;
+AgainPeer g_again_peer;
+std::atomic<int> g_rounds_again{0};
+std::atomic<int64_t> g_again_notice_until{0};  // steady clock, ms: the players are told for a few seconds
 
 int OwnDelay() { return std::clamp(g_cfg.delay, 0, 8); }
 int Delay() { return g_match_delay >= 0 ? g_match_delay : OwnDelay(); }
@@ -926,6 +947,9 @@ void HandlePacket(const uint8_t* b, int n) {
     while (p.inputs.count(p.contiguous)) p.contiguous++;
   } else if (type == kCheck && n >= 20 && match == g_match) {
     p.checks[u32(8)] = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
+  } else if (type == kAgain && n >= 16 && match == g_match) {
+    // of the round this game is in (a late one of a round both went back to already says nothing)
+    if (g_round.kept && u32(8) == g_round.frame) g_again_peer = AgainPeer{true, u32(12)};
   } else if (type == kDetailSums && n >= 32 && match == g_match) {
     Detail& d = g_detail;
     const uint32_t frame = u32(8);
@@ -1209,6 +1233,9 @@ bool Open(const Settings& st) {
 }
 
 void StopRolling();
+void KeepRoundStart(PPCContext& ctx, uint8_t* base);
+bool RoundAgain(PPCContext& ctx, uint8_t* base);
+void OnTop(PPCContext& ctx, uint8_t* base);
 void DumpAtTop(PPCContext& ctx, uint8_t* base, uint32_t f);
 void DumpSettled(uint32_t settled);
 
@@ -1263,6 +1290,10 @@ bool WaitForInputs(uint32_t f) {
     if (g_peer.contiguous > f) break;
     if (g_peer.left || Clock::now() - g_peer.last_heard > kPeerTimeout) {
       REXLOG_WARN("sc5 net: the other game stopped answering at frame {}", f);
+      g_waiting = false;
+      return false;
+    }
+    if (g_again_peer.seen) {  // it stopped its frames to go back to the round's start: OnTop goes with it
       g_waiting = false;
       return false;
     }
@@ -1488,10 +1519,11 @@ void LogDetailWords() {
     REXLOG_INFO("sc5 desync: the other game's bytes did not come in time");
 }
 
-// the exchange, a step at each frame's top; when it is over the match is (tests: SC5_NET_DESYNC_CONTINUE plays on)
-void DetailPump() {
+// the exchange, a step at each frame's top. True once, when it is over: the round is then played again from its start
+// (RoundAgain) or the match is over (tests: SC5_NET_DESYNC_CONTINUE plays on as if nothing was)
+bool DetailPump() {
   Detail& d = g_detail;
-  if (!d.active || d.ended) return;
+  if (!d.active || d.ended) return false;
   const auto now = Clock::now();
   if (!d.done) {
     if (!d.compared && d.their_chunks >= 0 && int(d.their_sums.size()) >= d.their_chunks) CompareDetail();
@@ -1515,8 +1547,9 @@ void DetailPump() {
   if (d.done && now > d.linger) {
     d.ended = true;
     static const bool keep_going = std::getenv("SC5_NET_DESYNC_CONTINUE") != nullptr;
-    if (!keep_going) g_status = Status::Desynced;
+    return !keep_going;
   }
+  return false;
 }
 
 void CompareChecks() {
@@ -1976,6 +2009,10 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   g_evidence.clear();
   g_detail = Detail{};
   g_round_trail.clear();
+  g_round.kept = false;
+  g_round.again = 0;
+  g_again_peer = AgainPeer{};
+  g_rounds_again = 0;
   std::vector<uint32_t> words;
   const std::vector<uint32_t> agreed = AgreedAddresses();
   for (uint32_t a : agreed) words.push_back(Get32(a));
@@ -2113,6 +2150,136 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   ClearComing();
   input::SetSource(&FrameInput);
   REXLOG_INFO("sc5 net: match {} in sync, seed {:08X}, input delay {}", g_match, seed, Delay());
+  return true;
+}
+
+// --- the round again after a desync ---
+
+// the battle as this round's fighting begins (the frame's top), kept until the next round's
+void KeepRoundStart(PPCContext& ctx, uint8_t* base) {
+  if (!g_round.stream) g_round.stream = battle::NewStream();
+  g_round.kept = g_round.stream && battle::Save(ctx, base, g_round.stream) != 0;
+  g_round.frame = g_frame;
+  g_again_peer = AgainPeer{};
+}
+
+bool CanPlayAgain() {
+  static const bool off = std::getenv("SC5_NET_NO_ROUND_AGAIN") != nullptr;
+  return !off && g_cfg.rollback && !g_cfg.sparring && !g_cfg.watch && g_round.kept && g_round.again < kMaxRoundsAgain;
+}
+
+// A check failed (or the other game says one did): rather than end the match, both games go back to the start of the
+// round being fought and the players fight it again. Each game puts its own snapshot of the round's first fought frame
+// back (the game's own restore, as a rollback does, only further), the two then make the fight's blocks alike as at the
+// barrier (MeetSync: player 2's game takes player 1's bytes of every block that differs, at a moment with no throw or
+// projectile under way), and the frames go on from a number neither game has used (the larger of the two games' next
+// free ones: what came for the frames left behind names lower ones and is never mistaken for the new ones). False when
+// it cannot be done (the other game did not come along, the game would not go back): the match ends as a desync.
+// Main thread, at a frame's top; it waits for the other game as the barrier does.
+bool RoundAgain(PPCContext& ctx, uint8_t* base) {
+  if (!CanPlayAgain()) return false;
+  const auto started = Clock::now();
+  const uint32_t round = g_round.frame, mine = g_frame + 64;
+  REXLOG_INFO("sc5 net: match {} out of step: the round again from its start (frame {}), asked at frame {}", g_match, round,
+              g_frame);
+  Writer ask = Header(kAgain);
+  ask.U32(round);
+  ask.U32(mine);
+  auto last_send = Clock::time_point{};
+  while (!g_again_peer.seen) {
+    if (Clock::now() - last_send > std::chrono::milliseconds(30)) {
+      Send(ask);
+      last_send = Clock::now();
+    }
+    Receive();
+    if (g_peer.left || Clock::now() - started > std::chrono::seconds(6)) {
+      REXLOG_WARN("sc5 net: the other game did not come along to play the round again");
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const uint32_t from = std::max(mine, g_again_peer.from);
+  if (!battle::Restore(ctx, base, g_round.stream) || !RoundFought()) {
+    REXLOG_WARN("sc5 net: the game would not go back to the round's start (battle {})", game::BattleStateName(game::BattleState()));
+    return false;
+  }
+  // the fight's blocks alike, as at the barrier
+  g_sync = MeetSync{g_match};
+  g_sync.mine = FightBlocks(ctx, base, g_slot == 0);
+  bool synced = false;
+  last_send = Clock::time_point{};
+  const auto sync_started = Clock::now();
+  while (!synced) {
+    if (Clock::now() - last_send > std::chrono::milliseconds(50)) {
+      Send(ask);  // the other game may still wait for this one's word
+      if (g_slot == 1 && g_sync.got_chunks < 0) SendSums();
+      if (g_slot == 1 && g_sync.applied) Send(Header(kFixOk));
+      if (g_slot == 0 && g_sync.fix_built && !g_sync.fix_ok)
+        for (const auto& packet : g_sync.fix) SendPacket(packet);
+      last_send = Clock::now();
+    }
+    if (g_slot == 0) {
+      const bool was_built = g_sync.fix_built;
+      BuildFix();
+      if (!was_built && g_sync.fix_built)
+        for (const auto& packet : g_sync.fix) SendPacket(packet);
+      synced = g_sync.fix_ok;
+    } else {
+      const bool was_applied = g_sync.applied;
+      ApplyFix();
+      if (!was_applied && g_sync.applied) Send(Header(kFixOk));
+      synced = g_sync.applied;
+    }
+    Receive();
+    if (g_peer.left || Clock::now() - sync_started > std::chrono::seconds(8)) {
+      REXLOG_WARN("sc5 net: the two games could not make the round's start alike");
+      return false;
+    }
+    if (!synced) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (g_slot == 1)
+    for (int i = 0; i < 3; i++) Send(Header(kFixOk));
+  // the frames go on from `from`: the round's first fought frame under a new number
+  Peer& p = g_peer;
+  g_shown_base = g_shown_base + round - from;  // the game's count of frames shown as it was at the round's start
+  g_frame = from;
+  g_mine.clear();
+  p.used.clear();
+  p.inputs.erase(p.inputs.begin(), p.inputs.lower_bound(from));
+  for (int f = 0; f < Delay(); f++) {
+    g_mine[from + uint32_t(f)] = Wire{};
+    p.inputs[from + uint32_t(f)] = Wire{};
+  }
+  p.contiguous = from;
+  while (p.inputs.count(p.contiguous)) p.contiguous++;
+  p.confirmed = p.ack = from;
+  p.now = p.heard = 0;
+  p.checks.clear();
+  g_my_checks.clear();
+  g_tentative.clear();
+  g_evidence.clear();
+  g_detail = Detail{};
+  g_rskip = ReplaySkip{};
+  g_waiting = false;
+  // the fight's random numbers from the match's seed and the new frame, in both games (as at a round's start)
+  const uint32_t seed = g_match_seed ^ (from * 0x9E3779B9u);
+  game::SetSeed(int64_t(seed));
+  game::Reseed(ctx, base, seed);
+  game::SetSeed(int64_t(g_match_seed));
+  g_seeded_state = SeededState();
+  rng::ResetVisual();
+  g_rolling = false;
+  if (g_round_trail.size() < 600) g_round_trail += " again";
+  StartRolling(ctx, base);
+  g_round.again++;
+  g_rounds_again = g_round.again;
+  KeepRoundStart(ctx, base);  // as the two games now have it alike
+  FeedEnd();  // the spectators' games cannot follow this yet: their feed ends here
+  g_again_notice_until = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count() + 5000;
+  REXLOG_INFO("sc5 net: match {}: the round again (the {} time this match): {} blocks ({} bytes) made alike, frames from {} "
+              "(the round's start was frame {}); {:.0f} ms",
+              g_match, g_round.again == 1 ? "first" : g_round.again == 2 ? "second" : "third", g_sync.blocks,
+              g_slot == 0 ? g_sync.bytes : 0, from, round, Ms(Clock::now() - started));
   return true;
 }
 
@@ -2356,6 +2523,13 @@ void ReplaySkipTop() {
   }
 }
 
+// the other's inputs did not come: it left, or it stopped its frames to play the round again (RoundAgain)
+void InputsFailed(PPCContext& ctx, uint8_t* base) {
+  if (!g_again_peer.seen) return Lost(Status::Disconnected);
+  if (!RoundAgain(ctx, base)) return Lost(Status::Desynced);
+  OnTop(ctx, base);  // this frame's top again, from the round's start
+}
+
 void OnTop(PPCContext& ctx, uint8_t* base) {
   ApplyPending();
   if (g_status == Status::Off) return;
@@ -2388,7 +2562,11 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     if (game::BattleState() != game::kBattleRoundCall) return;
     if (!Meet(ctx, base)) return Lost(Status::Disconnected);
   }
-  DetailPump();  // a failed check: the two games say what differs, then the match is over
+  // a failed check: once the two games have said what differs (or the other game asks, its own check having failed
+  // where this game's did not come to be compared), the round is played again from its start, or the match is over
+  if (g_status == Status::InSync && (DetailPump() || (g_again_peer.seen && !g_detail.active))) {
+    if (!RoundAgain(ctx, base)) g_status = Status::Desynced;
+  }
   if (g_status != Status::InSync) return;
   // Online Practice: a player's BACK (or the other game's leaving) ends the match in sync for both
   if (g_cfg.sparring && g_back_seen && !g_cfg.watch) {
@@ -2409,7 +2587,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
     // the round is no longer fought: lockstep again once every frame so far ran with the real inputs
     if (!RoundFought()) {
-      if (g_frame && !WaitForInputs(g_frame - 1)) return Lost(Status::Disconnected);
+      if (g_frame && !WaitForInputs(g_frame - 1)) return InputsFailed(ctx, base);
       if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
       if (!RoundFought()) {
         StopRolling();
@@ -2418,7 +2596,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
     if (g_rolling) {
       if (g_frame >= g_peer.confirmed + kMaxPredict && !WaitForInputs(g_frame - kMaxPredict))
-        return Lost(Status::Disconnected);
+        return InputsFailed(ctx, base);
       if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
       Pace();
       // a frame that runs on the other's real input (it came in time: the input delay covered the trip) is never gone
@@ -2439,6 +2617,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     if (g_cfg.rollback && RoundFought()) {
       StartRolling(ctx, base);
       Keep(ctx, base, g_frame);
+      KeepRoundStart(ctx, base);
     } else {
       // Outside a round's fighting (the intro, the round's call, a KO and its replay, between rounds) the players'
       // inputs do nothing the fight keeps: both games run these frames on neutral inputs, without waiting for the
@@ -2777,6 +2956,11 @@ bool WaitSetup(Setup& out, int ms) {
 }
 
 Status GetStatus() { return g_status.load(); }
+int RoundsAgain() { return g_rounds_again.load(); }
+bool RoundAgainNotice() {
+  const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+  return g_status.load() == Status::InSync && now < g_again_notice_until.load();
+}
 bool Active() { return g_active.load(); }
 uint32_t Frame() { return g_frame; }
 Stats GetStats() { return g_stats; }

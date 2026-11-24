@@ -55,6 +55,10 @@ void Install();
 void Configure(const Settings& st);
 void Disable();
 Status GetStatus();
+// A round was started again after a desync (netplay.cpp, RoundAgain): how many times this match, and whether the
+// players are being told just now (the overlay's notice, for a few seconds after)
+int RoundsAgain();
+bool RoundAgainNotice();
 const char* StatusName(Status s);
 bool InSync();
 // the other game was heard for the coming match
