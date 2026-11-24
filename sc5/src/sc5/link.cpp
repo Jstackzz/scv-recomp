@@ -36,6 +36,7 @@
 #include <rex/ppc/context.h>
 
 #include "sc5/autopilot.h"
+#include "sc5/creation.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/net/netplay.h"
@@ -456,7 +457,10 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
     g_reported = true;
     return;
   }
-  WriteStatus((s == net::Status::InSync ? "in_match match=" : "starting match=") + g_match);
+  // the player's own created characters this game leaves out (the overlay at the select screen says which and why)
+  const size_t held = g_plan.side <= 1 ? creation::HeldOutList().size() : 0;  // a spectator's player picks nothing
+  WriteStatus((s == net::Status::InSync ? "in_match match=" : "starting match=") + g_match +
+              (held ? fmt::format(" held_out={}", held) : std::string()));
 }
 
 }  // namespace

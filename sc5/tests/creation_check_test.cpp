@@ -293,6 +293,155 @@ int main(int argc, char** argv) {
     const std::string why = CheckRecord(r.data(), r.size(), real);
     Expect(why.empty(), "an original character with voice 254 is refused: " + why);
   }
+  // A piece Creation keeps worn but does not show: segment 0xFF (2026-11-20, a player's new female characters were
+  // held out online for "model 1B0800FF is not on this PC", the innerwear inner_006_f, parts set 01050006, whose
+  // table lists its four segments 1B080000-1B080003 in slots 6-9). The game loads the file the first three bytes name
+  // and never shows a negative segment, so the form passes for a file this PC has, and only that form.
+  {
+    // a female original character: the body (parts set 01000001, 16000000-1600000D in slots 0-13) and that innerwear,
+    // shown in break level 0 and kept unshown in the others
+    Record female = good[0];
+    female[dna::kBaseType] = 1;
+    for (uint32_t i = 0; i < dna::kPartsSetCount; i++) Put32(female, dna::kPartsSets + 4 * i, 0xFFFFFFFF);
+    Put32(female, dna::kPartsSets, 0x01000001);
+    Put32(female, dna::kPartsSets + 4, 0x01050006);
+    auto dress = [&](Record& r, uint32_t hidden_from) {
+      for (uint32_t level = 0; level < dna::kBreakLevelCount; level++) {
+        const uint32_t lv = dna::kBreakLevels + level * dna::kBreakLevelSize;
+        for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
+          Put32(r, lv + p * 8, 0xFF0000FF);  // none, as the game's own init makes it (sub_82245928)
+          r[lv + p * 8 + 4] = 0xFF;
+        }
+        for (uint32_t p = 0; p < 14; p++) Put32(r, lv + p * 8, 0x16000000 + p), r[lv + p * 8 + 4] = uint8_t(p);
+        for (uint32_t p = 0; p < 4; p++)
+          Put32(r, lv + (14 + p) * 8, level >= hidden_from ? 0x1B0800FF : 0x1B080000 + p), r[lv + (14 + p) * 8 + 4] = uint8_t(6 + p);
+      }
+    };
+    dress(female, 1);
+    Seal(female);
+    Expect(CheckRecord(female.data(), female.size(), real).empty(),
+           "a female character in innerwear kept unshown after break level 0 (1B0800FF): " +
+               CheckRecord(female.data(), female.size(), real));
+    {
+      Record r = female;
+      dress(r, 0);  // never shown
+      Seal(r);
+      Expect(CheckRecord(r.data(), r.size(), real).empty(),
+             "innerwear kept unshown in every break level: " + CheckRecord(r.data(), r.size(), real));
+    }
+    // 0.1.3's check took a model only as the tables list it, and they list the segments, not the form: it refused this
+    {
+      const auto& m = real.models.at({kOriginal, 1});
+      Expect(!m.count(0x1B0800FF) && m.count(0x1B080000) && m.count(0x1B080003),
+             "the real tables list inner_006_f's segments, not 1B0800FF");
+    }
+    const struct {
+      const char* name;
+      uint32_t model;
+      const char* why;
+    } segment_cases[] = {
+        {"another file's unshown segment", 0x1B0801FF, "model 1B0801FF"},  // no file 1B0801 here
+        {"a file no one has", 0x1BEE00FF, "model 1BEE00FF"},
+        {"another negative segment", 0x1B0800FE, "model 1B0800FE"},
+        {"a segment the file lacks", 0x1B080004, "model 1B080004"},
+        {"a male model's unshown segment on a female character", 0x070000FF, "model 070000FF"},
+        {"the body's unshown segment", 0x160000FF, ""},
+    };
+    for (const auto& c : segment_cases) {
+      Record r = female;
+      Put32(r, dna::kBreakLevels + 2 * dna::kBreakLevelSize + 15 * 8, c.model);
+      Seal(r);
+      const std::string why = CheckRecord(r.data(), r.size(), real);
+      Expect(*c.why ? why.find(c.why) != std::string::npos : why.empty(),
+             std::format("segment 0xFF, {}: \"{}\", not \"{}\"", c.name, why, *c.why ? c.why : "it passes"));
+    }
+    {
+      Record r = good[0];  // a male character in the female innerwear, unshown
+      Put32(r, dna::kBreakLevels + 20 * 8, 0x1B0800FF);
+      r[dna::kBreakLevels + 20 * 8 + 4] = 6;
+      Seal(r);
+      const std::string why = CheckRecord(r.data(), r.size(), real);
+      Expect(why.find("model 1B0800FF") != std::string::npos, "a male character in female innerwear: " + why);
+    }
+    // a customized fighter's costume kept unshown in a break level: its own file, so it passes (the costume's own
+    // segment stays in the other levels, as the check wants a costume in every level)
+    {
+      Record r = good[1];
+      Put32(r, dna::kBreakLevels + 2 * dna::kBreakLevelSize + 30 * 8, 0x003500FF);
+      r[dna::kBreakLevels + 2 * dna::kBreakLevelSize + 30 * 8 + 4] = 0x1F;
+      Seal(r);
+      Expect(CheckRecord(r.data(), r.size(), real).empty(),
+             "Patroklos with his costume's file unshown beside it: " + CheckRecord(r.data(), r.size(), real));
+      Put32(r, dna::kBreakLevels + 2 * dna::kBreakLevelSize + 30 * 8, 0x000100FF);  // Mitsurugi's costume's file
+      Seal(r);
+      Expect(CheckRecord(r.data(), r.size(), real).find("model 000100FF") != std::string::npos,
+             "Patroklos with Mitsurugi's costume unshown: " + CheckRecord(r.data(), r.size(), real));
+    }
+    Expect(KnownModel({0x7F010200}, 0x7F0102FF) && !KnownModel({0x7F010200}, 0x7F0103FF) &&
+               !KnownModel({0x7F010200}, 0x7F010201) && KnownModel({0x7F010200}, 0x7F010200) && !KnownModel({}, 0x7F0102FF),
+           "a downloadable model's unshown segment is that model's file");
+    // break level 0 wears at most 20 models (files): the fight's list of them has room for 20
+    {
+      std::vector<uint32_t> files;
+      for (const uint32_t m : real.models.at({kOriginal, 1}))
+        if ((m & 0xFF) == 0 && (files.empty() || files.back() != (m & kModelFile))) files.push_back(m);
+      Expect(files.size() > 21, "the real tables have more than 21 female models");
+      for (const size_t n : {size_t(20), size_t(21)}) {
+        Record r = female;
+        for (size_t i = 0; i < 34; i++) {
+          const uint32_t at = dna::kBreakLevels + uint32_t(i) * 8;
+          Put32(r, at, i < n ? files[i] : 0xFF0000FF);
+          r[at + 4] = i < n ? uint8_t(i % 32) : 0xFF;
+        }
+        Seal(r);
+        const std::string why = CheckRecord(r.data(), r.size(), real);
+        Expect(n == 20 ? why.empty() : why.find("more than 20 models") != std::string::npos,
+               std::format("{} models in break level 0: \"{}\"", n, why));
+      }
+      // the same model's segments count once
+      Record r = female;
+      for (uint32_t i = 0; i < 34; i++) Put32(r, dna::kBreakLevels + i * 8, 0x1B080000 + (i % 4));
+      Seal(r);
+      Expect(CheckRecord(r.data(), r.size(), real).empty(), "34 parts of one model: " + CheckRecord(r.data(), r.size(), real));
+    }
+  }
+  // the reasons in plain words for the player (the select screen's overlay)
+  {
+    const struct {
+      const char* why;
+      const char* plain;
+    } plain[] = {
+        {"model 1B0800FF is not on this PC", "it wears a part this PC's game does not have"},
+        {"parts set 00130435 is not on this PC", "it wears a part this PC's game does not have"},
+        {"sticker 00001234 is not on this PC", "it has a sticker this PC's game does not have"},
+        {"sticker 3's colour 1 has palette 9", "a setting in it is outside what Creation allows"},
+        {"weapon 99 of style 3 is not on this PC", "its weapon is not in this PC's game"},
+        {"its weapon's style 3 is not its style 4", "its weapon does not match its fighting style"},
+        {"style 40 is not one Creation offers here", "its fighting style is not in this PC's game"},
+        {"character type 27 is not on this PC", "its fighter is not in this PC's game"},
+        {"character type 13's own costumes are not on this PC", "its fighter is not in this PC's game"},
+        {"its checksum is wrong", "its saved data is damaged"},
+        {"its name has a '%'", "its name has a character the game cannot keep"},
+        {"it has no name", "it has no name"},
+        {"the game's own repair pass would change it", "the game's own check of saved characters refuses it"},
+        {"slots 49 and 50", "slots 49 and 50 are kept for the other player's character"},
+        {"a customized fighter with voice 254, which the game does not know", "its voice cannot be used for a fighter"},
+        {"its hand scale 0.5 is out of Creation's range", "a setting in it is outside what Creation allows"},
+        {"it wears more than 20 models", "it wears more pieces than the game can load"},
+        {"a customized fighter (character type 18) with base type 0", "it is not made the way Creation makes it"},
+    };
+    for (const auto& p : plain)
+      Expect(PlainWhy(p.why) == p.plain, std::format("in plain words, \"{}\" is \"{}\", not \"{}\"", p.why,
+                                                     PlainWhy(p.why), p.plain));
+    for (const Case& c : cases) {
+      Record r = good[0];
+      c.spoil(r);
+      if (std::string(c.name) != "checksum" && r.size() == dna::kSize) Seal(r);
+      const std::string why = CheckRecord(r.data(), r.size(), known);
+      Expect(PlainWhy(why) != "it does not pass the online check", std::format("{}: \"{}\" has no plain words", c.name, why));
+    }
+  }
+
   // all three garbled at random against the real tables: refused or passed, never a crash
   int real_refused = 0, real_passed = 0;
   for (int i = 0; i < 30000; i++) {

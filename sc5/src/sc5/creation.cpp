@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <set>
 
 #include <fmt/format.h>
@@ -83,6 +84,13 @@ bool g_known_read = false;
 // entries stay empty (SyncEntries)
 bool g_dropped = false;
 std::set<uint32_t> g_refused;
+// the player's own characters left out, for the player (HeldOutList)
+std::mutex g_held_lock;
+std::vector<HeldOut> g_held;
+void HoldOut(uint32_t n, const Record& r, const std::string& why) {
+  std::lock_guard<std::mutex> lock(g_held_lock);
+  g_held.push_back({int(n), r.size() > 9 ? int(r[9]) : -1, Name(r), PlainWhy(why)});
+}
 uint32_t g_dlc_fingerprint = 0;
 std::set<uint32_t> g_dlc_parts_sets, g_dlc_models;
 std::set<std::pair<int, int>> g_dlc_weapons;
@@ -452,6 +460,11 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   return true;
 }
 
+std::vector<HeldOut> HeldOutList() {
+  std::lock_guard<std::mutex> lock(g_held_lock);
+  return g_held;
+}
+
 uint32_t DlcFingerprint() { return g_known_read ? g_dlc_fingerprint : 0; }
 
 bool UsesDlc(const Record& r) {
@@ -461,7 +474,7 @@ bool UsesDlc(const Record& r) {
   for (uint32_t level = 0; level < dna::kBreakLevelCount; level++)
     for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
       const uint32_t at = dna::kBreakLevels + level * dna::kBreakLevelSize + p * 8;
-      if (!(r[at] & 0x80) && g_dlc_models.count(Be32(&r[at]))) return true;
+      if (!(r[at] & 0x80) && KnownModel(g_dlc_models, Be32(&r[at]))) return true;  // any of a file's segments
     }
   for (uint32_t k = 0; k < dna::kStickerCount + dna::kWeaponStickerCount; k++) {
     const uint32_t at = k < dna::kStickerCount
@@ -490,6 +503,7 @@ void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager) {
     PutBe32(Host(Slot(n)) + kHeaderSet2, 0);  // no screen lists it from here on
     PutBe32(Host(manager + 4 + n * kEntrySize + kEntryCount), 0);
     g_refused.insert(n);
+    HoldOut(n, r, why);
     REXLOG_WARN("sc5 creation: slot {} ({}) stays out online: {}", n + 1, Name(r), why);
   }
 }
@@ -684,8 +698,9 @@ bool PlaceRemote(int side, const Record& r) {
   return true;
 }
 
-void ClearRemote() {
+void ClearRemote(int only) {
   for (int side = 0; side < 2; side++) {
+    if (only >= 0 && side != only) continue;
     const uint32_t s = Slot(RemoteSlot(side));
     if (!s) return;
     uint8_t* slot = Host(s);
@@ -759,12 +774,14 @@ void ImportOwn(uint32_t image) {
     if (!HeaderUsed(slot)) continue;
     const Record r(slot + kRecordAt, slot + kRecordAt + kRecordSize);
     if (n >= RemoteSlot(0)) {
+      HoldOut(n, r, "slots 49 and 50");
       REXLOG_WARN("sc5 creation: slot {} ({}) stays out online: slots 49 and 50 hold the other player's", n + 1,
                   Name(r));
       continue;
     }
     // its form here; everything else at the select screen, once this PC's tables are read (DropRefused)
     if (const std::string why = CheckForm(r.data(), r.size()); !why.empty()) {
+      HoldOut(n, r, why);
       REXLOG_WARN("sc5 creation: slot {} ({}) stays out: {}", n + 1, Name(r), why);
       refused++;
       continue;

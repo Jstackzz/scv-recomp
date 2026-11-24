@@ -797,6 +797,32 @@ releases this PC has. sub_8245BED0 answers whether a release id is released (unl
 downloadable content, state 3, and hidden entries). A parts set's models in the record must be among its base type's
 (the body's 0x020000xx included).
 
+**A model's segment.** Of a ModelData's four bytes the game loads the file the first three name (sub_82298A50, a model loader's
+virtual function, its neighbour at 0x820C7B88 sub_82298BD0 giving the archive, 5 or 14: the model table at
+[0x82A12D78 + 80], a block per parts set type, its row the table index and its column the variation, an unknown column
+taken as 0; 0x7F a downloadable model's package group and entry); the fourth is the
+segment of that file a part shows, which the fight (sub_82147F48) and Creation (sub_821D0E28) turn on per break level,
+and a negative one they never show. The parts tables list a file's segments one by one (the innerwear inner_006_f,
+parts set 01050006: 1B080000 to 1B080003 in slots 6 to 9) and never segment 0xFF, yet Creation writes it for a piece
+it keeps worn but shows nowhere: a player's new female characters were held out online for "model 1B0800FF is not on
+this PC" (2026-11-20, 0.1.3; offline he saw and played them), every new one he made and a copy of his working one with
+only its height changed, his own PC refusing what its own Creation had made. So a model passes when the tables list
+it, or when it is one of their files with segment 0xFF (`KnownModel`: only that form, only a file this PC's tables have
+for that character and base type; another negative segment or an unknown segment stays refused). Such a character
+fights as Creation shows it: two games with a female character wearing 1B0800FF from break level 1 on, picked through
+the pad, fought in sync (2026-11-24). The same goes for downloadable parts (UsesDlc takes any segment of a downloadable
+file). The fight's list of break level 0's models (sub_82245CD0, filled by both) has room for 20, a model once however
+many of its segments are worn, with its count right after it: a record whose level 0 wears more than 20 would write
+over it, so the check refuses that too (Creation's own view would break on such a record first).
+
+**Held out, said plainly.** A player's own character that fails the check is not only a log line (`slot N (name) stays
+out online: <why>`): at the online select screen the game draws, with the result overlay's drawer (result_overlay.cpp,
+large and high-contrast), "N OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE", each one's name and slot and why in
+plain words (creation_check.h's PlainWhy: "it wears a part this PC's game does not have", "its saved data is
+damaged"...), for the screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one
+of them customizes; and the status line says how many (`starting match=<id> held_out=N`, PROTOCOL.md 3.4), which the
+launcher's footer and log show as they show every state.
+
 **A customized fighter's costumes.** A customized fighter (a regular fighter re-dressed in Creation: the fighter's own
 character type, base type 5) wears that fighter's own costumes, which the select screen does not read. Its builder
 keeps the creation data's archive ([+14868]'s object, its data at +12: a count of files, then their offsets;
@@ -999,9 +1025,25 @@ Devil Jin is not on it (in SCV a style for created characters only), though data
 **Picks.** A side the start line names (a roster id, or `<character id>.<costume>` from a result line) the autopilot
 picks on both PCs: the cursor one press toward the slot at a time, A, the costume panel to the costume (in a mirror
 match the second side cannot have the first side's: after three presses that change nothing it takes what the panel
-shows), A. A side named `-` its player picks on their own PC with their own controller (only moves and A get
-through; A only on a slot both games can load, so Dampierre only when both players have his package) while the
-other game follows: their cursor as it moves, then their character and costume (PICK packets, repeated).
+shows), A. A side named `-` its player picks on their own PC with their own controller (only moves, A and on the
+costume panel B get through; A only on a slot both games can load, so Dampierre only when both players have his
+package) while the other game follows: their cursor as it moves, then their character and costume (PICK packets,
+repeated). B on the costume panel takes the player back to the characters, as on the console: the other game follows
+only a whole pick, so it sees the cursor again and nothing else. Before, B was held back there too (0.1.3's report: "can't
+press back anymore" on the created characters' panel), and a player whose panel held back A on every costume (each of
+their created characters wearing downloadable parts the other PC lacks, say) could neither pick nor leave.
+**Taking a pick back** (TakeBack). The select screen takes player 1's whole pick, then player 2's, in both games, and
+the game's own B goes back one step at a time (from player 2's characters to player 1's costume panel, from a costume
+panel to the characters; on player 1's characters it would leave the screen, so the autopilot never presses it there).
+Player 2's last A ends the screen, so only player 1 has a whole pick to take back, while player 2 still picks: their B
+makes their game ask (PICK phase 3, the request's number in the costume) and wait; the other game, unless its player
+has finished, holds them back, presses B until player 1's side is at its characters, forgets the created character's
+record (net::ForgetRemoteCreated, the slot cleared) and answers with a PICK for player 1's side, phase 3, the same
+number; player 1's game then presses B to the characters too and the player picks again. Player 2 finishing first is
+the no. A spectator takes a whole pick back once the player's game shows phase 0 or 1 for it. Only when both sides
+are their players' (`-`): a side the launcher names is picked at once. Two games (2026-11-24, `SC5_SELECT_INPUT_P1/_P2`, the pad path):
+player 1 picked a created character, took it back (player 1's game: side 1 3 -> 1 -> 0; the other's: side 1 3 -> 1 ->
+0, the record forgotten), picked Alpha Patroklos instead, player 2 picked, and the match ran in sync to the result.
 `SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests. A side named `c.<checksum>` (a ranked
 winner's created character, or a lobby's rematch that starts again) its own PC's autopilot picks: the fighter, then,
 once the costume panel is there, its created costume. The A that picked the fighter is held to its end while the panel

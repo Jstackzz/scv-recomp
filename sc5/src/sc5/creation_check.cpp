@@ -80,6 +80,40 @@ bool KnownVoice(int v) {
 
 }  // namespace
 
+bool KnownModel(const std::set<uint32_t>& models, uint32_t model) {
+  if (models.count(model)) return true;
+  if ((model & 0xFF) != kNoSegment) return false;
+  // a segment the game never shows: any of this file's models here (they sort together, the file first)
+  const auto it = models.lower_bound(model & kModelFile);
+  return it != models.end() && (*it & kModelFile) == (model & kModelFile);
+}
+
+std::string PlainWhy(const std::string& why) {
+  const auto has = [&](const char* s) { return why.find(s) != std::string::npos; };
+  if (why.empty()) return {};
+  if (has("slots 49 and 50")) return "slots 49 and 50 are kept for the other player's character";
+  if (has("tables yet")) return "this PC's game has not listed its parts yet";
+  if (has("bytes, not") || has("version") || has("checksum") || has("chunk"))
+    return "its saved data is damaged";
+  if (has("repair pass")) return "the game's own check of saved characters refuses it";
+  if (has("no name")) return "it has no name";
+  if (has("name")) return "its name has a character the game cannot keep";
+  if (has("colour") || has("trail") || has("effect") || has("value") || has("rate") || has("scale") ||
+      has("breadth") || has("pitch") || has("formant") || has("flanger") || has("DLC flag") || has("validity"))
+    return "a setting in it is outside what Creation allows";
+  if (has("more than")) return "it wears more pieces than the game can load";
+  if (has("sticker")) return "it has a sticker this PC's game does not have";
+  if (has("voice")) return "its voice cannot be used for a fighter";
+  if (has("with base type")) return "it is not made the way Creation makes it";
+  if (has("weapon's style")) return "its weapon does not match its fighting style";
+  if (has("weapon")) return "its weapon is not in this PC's game";
+  if (has("style")) return "its fighting style is not in this PC's game";
+  if (has("character type") || has("own costumes")) return "its fighter is not in this PC's game";
+  if (has("model") || has("parts set") || has("base type") || has("costume"))
+    return "it wears a part this PC's game does not have";
+  return "it does not pass the online check";
+}
+
 uint32_t Checksum(const uint8_t* record) {
   // sub_82245F98: each word turned left by an amount the previous one sets, XORed together
   uint32_t acc = 0, rot = 7;
@@ -262,7 +296,21 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
       const uint32_t at = kBreakLevels + level * kBreakLevelSize + k * 8;
       const uint32_t model = U32(r, at);
       if (r[at] & 0x80) continue;  // none (the game's own test: the first byte negative)
-      if (!models->second.count(model)) return std::format("model {:08X} is not on this PC", model);
+      if (!KnownModel(models->second, model)) return std::format("model {:08X} is not on this PC", model);
+    }
+  }
+  // the fight loads break level 0's models into a list of 20 (sub_82245CD0 from sub_82147F48 and Creation's
+  // sub_821D0E28, a model once however many segments it wears): a 21st would write over the list's count
+  {
+    uint32_t files[kMaxModelFiles];
+    uint32_t n = 0;
+    for (uint32_t k = 0; k < kPartsPerLevel; k++) {
+      const uint32_t at = kBreakLevels + k * 8;
+      if (r[at] & 0x80) continue;
+      const uint32_t file = U32(r, at) & kModelFile;
+      if (std::find(files, files + n, file) != files + n) continue;
+      if (n == kMaxModelFiles) return std::format("it wears more than {} models", kMaxModelFiles);
+      files[n++] = file;
     }
   }
   // a customized fighter wears its costume (a model of parts set type 0, which only its own costumes have here) in
