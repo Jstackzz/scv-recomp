@@ -1,8 +1,10 @@
 #include "LobbyPage.h"
 
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -76,6 +78,11 @@ LobbyPage::LobbyPage(ServerClient* server, MatchController* controller, QWidget*
     bar->addWidget(code_);
     bar->addWidget(joinCode);
     left->addLayout(bar);
+    listAlert_ = ui::label(QString(), "Alert");
+    listAlert_->setWordWrap(true);
+    listAlert_->setTextFormat(Qt::PlainText);  // the server's words, never markup
+    listAlert_->hide();
+    left->addWidget(listAlert_);
     list_ = makeTable({tr("Code"), tr("Name"), tr("Host"), tr("Mode"), tr("Region"), tr("Players"), tr("Lock")});
     list_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     list_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -111,6 +118,12 @@ LobbyPage::LobbyPage(ServerClient* server, MatchController* controller, QWidget*
     lobbyInfo_->setWordWrap(true);
     pv->addWidget(lobbyTitle_);
     pv->addWidget(lobbyInfo_);
+    // two launchers of different versions cannot play each other (their games differ): said before anyone readies
+    versionAlert_ = ui::label(QString(), "Alert");
+    versionAlert_->setWordWrap(true);
+    versionAlert_->setTextFormat(Qt::PlainText);
+    versionAlert_->hide();
+    pv->addWidget(versionAlert_);
     members_ = makeTable({tr("Player"), tr("Character"), tr("Status"), tr("Connection"), tr("Respect")});
     members_->verticalHeader()->setDefaultSectionSize(kBadgeHeight + 8);  // room for the rank badges
     // the player's badge and name take what the other columns leave
@@ -178,6 +191,12 @@ LobbyPage::LobbyPage(ServerClient* server, MatchController* controller, QWidget*
     pv->addLayout(chatRow);
     right_->addWidget(panel);
 
+    // the list keeps itself current while the page shows: lobbies come and go, and fill, without Refresh
+    listTimer_ = new QTimer(this);
+    listTimer_->setInterval(4000);
+    connect(listTimer_, &QTimer::timeout, this, [this] {
+        if (isVisible() && server_->isLoggedIn()) refresh();
+    });
     connect(refreshBtn, &QPushButton::clicked, this, &LobbyPage::refresh);
     connect(create, &QPushButton::clicked, this, &LobbyPage::createLobby);
     connect(joinCode, &QPushButton::clicked, this, [this] { join(code_->text().trimmed().toUpper(), false); });
@@ -290,6 +309,17 @@ void LobbyPage::setGame(const QString& gameId) {
 void LobbyPage::showEvent(QShowEvent* event) {
     Page::showEvent(event);
     refresh();
+    listTimer_->start();
+}
+
+void LobbyPage::hideEvent(QHideEvent* event) {
+    Page::hideEvent(event);
+    listTimer_->stop();
+}
+
+void LobbyPage::showAlert(const QString& text) {
+    listAlert_->setText(text);
+    listAlert_->setVisible(!text.isEmpty());
 }
 
 void LobbyPage::refresh() {
@@ -334,6 +364,17 @@ void LobbyPage::createLobby() {
                     {QStringLiteral("link"), server_->linkType()}};
     if (dlg.kingOfTheHill()) msg.insert(QStringLiteral("koth"), true);
     if (controller_->serverRttMs() >= 0) msg.insert(QStringLiteral("server_rtt"), controller_->serverRttMs());
+    sendJoin(msg);
+}
+
+void LobbyPage::sendJoin(const QJsonObject& msg) {
+    showAlert(QString());
+    if (controller_->phase() == MatchController::Phase::Searching) {
+        controller_->cancelSearch();  // queue_leave goes first, on the same connection
+        chat_->appendPlainText(tr("-- Your match search was cancelled for the lobby."));
+    }
+    lastJoin_ = msg;
+    retriedJoin_ = false;
     server_->send(msg);
 }
 
@@ -351,7 +392,11 @@ bool LobbyPage::koth() const { return lobby_.value(QStringLiteral("koth")).toBoo
 
 void LobbyPage::join(const QString& code, bool locked, bool spectate) {
     if (code.size() != 5) {
-        listInfo_->setText(tr("Lobby codes have 5 characters."));
+        showAlert(tr("Lobby codes have 5 characters."));
+        return;
+    }
+    if (code == s(lobby_, "id")) {
+        showAlert(tr("You are in lobby %1 already: it is on the right (Play and Watch switch your place).").arg(code));
         return;
     }
     QString password;
@@ -367,7 +412,7 @@ void LobbyPage::join(const QString& code, bool locked, bool spectate) {
                     {QStringLiteral("password"), password}, {QStringLiteral("character"), savedCharacter(game, mode)},
                     {QStringLiteral("spectate"), spectate}, {QStringLiteral("link"), server_->linkType()}};
     if (controller_->serverRttMs() >= 0) msg.insert(QStringLiteral("server_rtt"), controller_->serverRttMs());
-    server_->send(msg);
+    sendJoin(msg);
 }
 
 void LobbyPage::sendChat() {
@@ -398,8 +443,22 @@ void LobbyPage::onMessage(const QJsonObject& msg) {
     const QString type = s(msg, "type");
     if (type == QLatin1String("lobbies")) {
         const QJsonArray items = msg.value(QStringLiteral("lobbies")).toArray();
+        const QString mine = s(lobby_, "id");
+        // the same lobbies as shown, the same one marked as this player's: the table (its selection, the focus a
+        // controller moves in it) stays as it is
+        if (items == lastList_ && list_->property("mine").toString() == mine && list_->rowCount() == items.size()) {
+            listInfo_->setText(items.isEmpty() ? tr("No open lobbies for this game.") : tr("%1 lobbies").arg(items.size()));
+            return;
+        }
+        lastList_ = items;
+        list_->setProperty("mine", mine);
+        const int selectedRow = list_->currentRow();
+        const QString selected = selectedRow >= 0 && list_->item(selectedRow, 0) ? list_->item(selectedRow, 0)->text()
+                                                                                 : QString();
+        const int selectedColumn = std::max(0, list_->currentColumn());
         list_->setRowCount(static_cast<int>(items.size()));
         const Game* g = GameData::instance().game(gameId_);
+        int reselect = -1;
         for (int i = 0; i < items.size(); ++i) {
             const QJsonObject lb = items.at(i).toObject();
             const GameMode* m = g ? g->mode(s(lb, "mode")) : nullptr;
@@ -411,7 +470,10 @@ void LobbyPage::onMessage(const QJsonObject& msg) {
             if (inLine > 0) who += tr(", %1 in line").arg(inLine);
             if (watching > 0) who += tr(", %1 watching").arg(watching);
             const QString modeName = m ? m->name : s(lb, "mode");
-            const QStringList cells = {s(lb, "id"), s(lb, "name"), s(lb, "host"),
+            const bool here = s(lb, "id") == mine;  // the lobby this player is in
+            if (s(lb, "id") == selected) reselect = i;
+            const QStringList cells = {s(lb, "id"), here ? tr("%1   (YOUR LOBBY)").arg(s(lb, "name")) : s(lb, "name"),
+                                       s(lb, "host"),
                                        hill ? tr("%1, King of the Hill").arg(modeName) : modeName,
                                        GameData::regionName(s(lb, "region")), who,
                                        lb.value(QStringLiteral("locked")).toBool() ? tr("locked") : QString()};
@@ -422,17 +484,39 @@ void LobbyPage::onMessage(const QJsonObject& msg) {
                 if (c == 5)
                     item->setData(Qt::UserRole,
                                   !hill && (players >= 2 || s(lb, "state") == QLatin1String("in_match")));
+                if (here) {
+                    QFont bold = item->font();
+                    bold.setBold(true);
+                    item->setFont(bold);
+                    item->setForeground(QColor(0xE2, 0xB8, 0x5A));  // the gold of titles
+                }
                 list_->setItem(i, c, item);
             }
         }
+        if (reselect >= 0) list_->setCurrentCell(reselect, selectedColumn);
         listInfo_->setText(items.isEmpty() ? tr("No open lobbies for this game.") : tr("%1 lobbies").arg(items.size()));
     } else if (type == QLatin1String("lobby")) {
-        showLobby(msg.value(QStringLiteral("lobby")).toObject());
+        const QJsonObject lb = msg.value(QStringLiteral("lobby")).toObject();
+        const bool moved = s(lb, "id") != s(lobby_, "id");
+        if (moved) {
+            showAlert(QString());
+            switching_ = false;
+        }
+        showLobby(lb);
+        if (moved) refresh();  // the list marks the lobby this player is in now
     } else if (type == QLatin1String("lobby_left")) {
-        // the player left (the server says so only then; a dropped connection keeps the place, and the game): the
+        // a lobby left that the page no longer shows (it went on to another already): nothing to do
+        if (!lobby_.isEmpty() && s(msg, "lobby") != s(lobby_, "id")) return;
+        // gone to another lobby (`joined`, or this launcher's own leave for an older server): the game stays for the
+        // new one. Left (the server says so only then; a dropped connection keeps the place, and the game): the
         // lobby's game is not needed any more
+        const bool moving = msg.contains(QStringLiteral("joined")) || switching_;
         leftLobby();
-        controller_->closeGameWhenIdle();
+        if (moving) {
+            controller_->lobbySwitched();
+        } else {
+            controller_->closeGameWhenIdle();
+        }
         refresh();
     } else if (type == QLatin1String("lobby_chat")) {
         if (s(msg, "lobby") == s(lobby_, "id"))
@@ -442,12 +526,38 @@ void LobbyPage::onMessage(const QJsonObject& msg) {
         chat_->appendPlainText(score == 1 ? tr("-- You gave %1 1 Respect Point.").arg(s(msg, "winner"))
                                           : tr("-- You gave %1 %2 Respect Points.").arg(s(msg, "winner")).arg(score));
     } else if (type == QLatin1String("error") && s(msg, "re").startsWith(QLatin1String("lobby_"))) {
-        const QString text = s(msg, "message");
-        if (lobby_.isEmpty())
-            listInfo_->setText(text);
-        else
-            chat_->appendPlainText(tr("-- %1").arg(text));
-        if (s(msg, "re") == QLatin1String("lobby_ready")) ready_->setChecked(false);
+        const QString re = s(msg, "re"), code = s(msg, "code"), text = s(msg, "message");
+        const bool joining = re == QLatin1String("lobby_join") || re == QLatin1String("lobby_create");
+        if (code == QLatin1String("not_in_lobby")) {
+            // the server has this player in no lobby (it took them out, or a leave crossed something): the page says
+            // so too rather than show a lobby the player is not in
+            if (inLobby()) {
+                leftLobby();
+                controller_->closeGameWhenIdle();
+            }
+            refresh();
+            return;
+        }
+        // an older server turns away a join from a player still in a lobby (busy), where this one moves them: this
+        // launcher leaves the lobby itself and asks again (the two go in order on the connection). Not when searching
+        // or in a match, which a newer server turns away too
+        if (joining && code == QLatin1String("busy") && inLobby() && !retriedJoin_ && !lastJoin_.isEmpty() &&
+            !controller_->inMatch() && controller_->phase() != MatchController::Phase::Searching &&
+            controller_->phase() != MatchController::Phase::Found) {
+            retriedJoin_ = true;
+            switching_ = true;
+            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_leave")}});
+            server_->send(lastJoin_);
+            return;
+        }
+        if (joining) {
+            switching_ = false;
+            showAlert(re == QLatin1String("lobby_create") ? tr("Could not create the lobby: %1").arg(text)
+                                                          : tr("Could not join the lobby: %1").arg(text));
+        }
+        if (!lobby_.isEmpty()) chat_->appendPlainText(tr("-- %1").arg(text));
+        else if (!joining) listInfo_->setText(text);
+        if (re == QLatin1String("lobby_ready")) ready_->setChecked(false);
     }
 }
 

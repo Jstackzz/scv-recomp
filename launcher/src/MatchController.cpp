@@ -1902,6 +1902,11 @@ void MatchController::closeGameWhenIdle() {
     maybeCloseIdleGame();
 }
 
+void MatchController::lobbySwitched() {
+    stopWatching();
+    if (phase_ == Phase::AtResult && !str(found_, "lobby").isEmpty()) finishMatch();
+}
+
 void MatchController::maybeCloseIdleGame() {
     if (!closeWhenIdle_) return;
     // the lobby's match under way, or the last one's ending playing: leaving the lobby leaves it now, as closing the

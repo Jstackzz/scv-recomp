@@ -103,6 +103,9 @@ public:
     // a lobby left: its game is closed once nothing needs it any more (a lobby match it plays or watches ends first),
     // so the player need not close it; a search, a lobby's Ready or a match to watch wanting a game before then keeps it
     void closeGameWhenIdle();
+    // a lobby left for another one (the server moved the player, docs/PROTOCOL.md 1.10): its game stays for the new
+    // lobby, parked first when it waits at the last match's result screen; nothing more of the old one is watched
+    void lobbySwitched();
     void shutdown();
     // An update leaves each game built before with code for its old executable: it builds that again now, one game
     // at a time (the game's --prepare, behind its own progress window), so the next match or single player finds it
