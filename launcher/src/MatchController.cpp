@@ -1639,6 +1639,16 @@ void MatchController::reportDesync(int frame) {
     QTimer::singleShot(1500, this, [this, match, gameId, dir, frame] {
         if (!server_->isLoggedIn()) return;
         QStringList said = desyncLines(dir);
+        // a server from before SCV 0.1.4 (no desync_detail in its welcome) takes 40 lines in a 16 KB message: the
+        // failed check and what follows it (28 at most), the rest of 36 from the first lines, as reports were then
+        if (!server_->serverHas(QStringLiteral("desync_detail")) && said.size() > 36) {
+            qsizetype check = said.size();
+            for (qsizetype i = 0; i < said.size() && check == said.size(); ++i)
+                if (said[i].contains(QLatin1String("DESYNC at frame"))) check = i;
+            const qsizetype at = std::min(check, said.size() - 14);
+            const QStringList from = said.mid(at, 28);
+            said = said.mid(0, std::min(at, 36 - from.size())) + from;
+        }
         said << gameFiles(gameId) << pcLine(gameId);
         QJsonArray lines;
         for (const QString& l : said) lines.append(l);

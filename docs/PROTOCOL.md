@@ -101,7 +101,7 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
     "regions":["na","sa","eu","me","af","as","oc"],"direct_above_ms":100,
     "ranks":[{"title":"Novice","from":null},{"title":"Apprentice","from":575},
              {"title":"Squire","from":675}, ...,{"title":"Eternal Soul","from":2035}],
-    "features":["koth"]}
+    "features":["koth","desync_detail"]}
 ```
 
 - `features` (King of the Hill): what each side has beyond the protocol's
@@ -109,6 +109,9 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   the server lists what it has in `welcome`. `koth`: King of the Hill lobbies
   and their Respect Points (1.10.2). The launcher shows its King of the Hill
   box and the Leaderboard's Respect only when the server lists it.
+  `desync_detail` (SCV 0.1.4, the server's alone): desync reports of up to 200
+  lines in a message of up to 64 KB (1.13.1); a launcher whose server does not
+  list it sends the 36 lines an older server takes.
 
 - `proto` must equal the server's `PROTO`, else `error{code:"proto_mismatch"}`.
 - `ranks` (0.1.21): the ranked titles by Elo, lowest first, each held from its

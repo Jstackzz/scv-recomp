@@ -45,7 +45,9 @@ DELAY_AUTO = -1  # a player's "auto" input delay: the match's from its measured 
 AUTO_DELAY_MIN, AUTO_DELAY_MAX = 1, 6
 # what a launcher can do beyond the protocol's start, as its hello says (`features`) and the server's welcome lists:
 # "koth", King of the Hill lobbies (docs/PROTOCOL.md 1.10.2)
-FEATURES: tuple[str, ...] = ("koth",)
+# "desync_detail" (SCV 0.1.4, the server's alone): desync reports of up to 200 lines in a message of up to 64 KB
+# (docs/PROTOCOL.md 1.13.1); a launcher keeps its report to the 40 lines of 16 KB an older server takes without it
+FEATURES: tuple[str, ...] = ("koth", "desync_detail")
 RATING_MIN, RATING_MAX = 1, 10  # a King of the Hill rating of the winner, a whole number
 
 
