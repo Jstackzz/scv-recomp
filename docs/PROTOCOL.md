@@ -93,7 +93,8 @@ Spirit Sword 1915, Eternal Soul 2035; a new player starts at 475.
 ### 1.3 Session start and version check
 
 ```json
-C: {"type":"hello","proto":1,"client":"sc5-launcher","version":"0.1.0","os":"windows","features":["koth"]}
+C: {"type":"hello","proto":1,"client":"sc5-launcher","version":"0.1.0","os":"windows","features":["koth"],
+    "build":"2026-11-23 22:31"}
 S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port":7778,
     "motd":"Welcome!","online":12,"min_client":"0.1.0",
     "games":{"sc5":["versus","sparring"]},
@@ -154,6 +155,21 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   SHA-256 against these before it installs anything (docs/LAUNCHER.md,
   Updates). On the official server the file is `/var/lib/sc5/update.json`
   (`server/deploy/install.sh`).
+- **Builds** (SCV 0.1.4). A version number alone does not tell two packages
+  apart: a test build given out before a release took its number is that
+  number too, and was never offered the release (2026-11-20: a player on a
+  private test build of 0.1.3 was not offered 0.1.3). A player package's
+  launcher says which build it is in `hello`, `"build":"2026-11-23 22:31"`:
+  its `VERSION.txt` stamp (`SC5-Online 0.1.4, packaged 2026-11-23 22:31`; a
+  source build sends none), 1-40 characters `[0-9A-Za-z :._-]` (anything else
+  is taken as none). The update file may name the release's own stamp,
+  `"build":"2026-11-20 06:17"` (the same characters; `tools\package.ps1`
+  prints it), which then comes with every offer: a launcher of the release's
+  version whose build differs from it (both known) is offered the release as
+  an older one is, in `welcome` and pushed, and its launcher takes it although
+  the number is its own. A newer launcher (a developer's) is offered nothing;
+  without `build` in the file the version alone decides, as before. The
+  server logs a login's build with its version.
 - Regions: `na` North America, `sa` South America, `eu` Europe, `me` Middle
   East, `af` Africa, `as` Asia, `oc` Oceania.
 
@@ -627,6 +643,12 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
 - Each member's `title`: their ranked title in the lobby's game and mode
   (someone who never played it ranked: the starting one; 1.3 `ranks`), whose
   badge the launcher shows by their name.
+- Each member's `version` and `build` (SCV 0.1.4): their launcher's, as its
+  `hello` said (`build` `null` for none, 1.3). Two players of different
+  versions run different games, which cannot play each other: the launcher
+  says so in large type before anyone readies, names who has the older one
+  and must update, and keeps its Ready off against such a player; the same
+  version in two builds (a test build) is said too, Ready left on.
 - A member whose connection drops (or is replaced by a new login of the same
   account) keeps their place for 60 s: when that account logs in again within
   it, the server puts it back in the lobby (a player's place if one is free,

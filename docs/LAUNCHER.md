@@ -113,8 +113,9 @@ The official SCV server runs that way on the Oracle Cloud machine that also runs
 and MK9 Online's (7787, 7788): SCV's is TCP 7797 and UDP 7798. Its address and certificate fingerprint go in a
 player package's `defaults.ini` beside the launcher (`[server]` `address=<host>:7797`, `fingerprint=<SHA-256>`), kept
 out of the repository because it names the machine. A release launchers should take: publish its zip, write
-`/var/lib/sc5/update.json` (version, url, sha256, size, notes, page; PROTOCOL.md 1.3), and raise `min-client` with
-the installer's second argument when every player must take it.
+`/var/lib/sc5/update.json` (version, url, sha256, size, notes, page, and build: the zip's `VERSION.txt` stamp, which
+`New-PlayerPackage` prints, so a test build of the same number is offered the release; PROTOCOL.md 1.3), and raise
+`min-client` with the installer's second argument when every player must take it.
 
 ## Launcher
 

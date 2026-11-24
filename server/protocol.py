@@ -94,6 +94,14 @@ def download_link(url: Any) -> bool:
         url.startswith("https://") or re.match(r"http://(127\.0\.0\.1|localhost)(:\d+)?/", url) is not None)
 
 
+BUILD_RE = re.compile(r"[0-9A-Za-z :._-]{1,40}")  # a package's build: its VERSION.txt stamp ("2026-11-23 22:31")
+
+
+def client_build(value: Any) -> str:
+    """A launcher's build as its hello says it ("" for none, or one this server does not take)."""
+    return value.strip() if isinstance(value, str) and BUILD_RE.fullmatch(value.strip()) else ""
+
+
 def parse_update(data: Any, page: str = "") -> dict[str, Any]:
     """The release launchers are offered (the server's update file); ValueError says what is wrong with it. `page`:
     the web page the release names when the file names none (the server's --releases-page; "": no page at all)."""
@@ -113,7 +121,13 @@ def parse_update(data: Any, page: str = "") -> dict[str, Any]:
         raise ValueError("notes must be text, 2000 characters at most")
     if "page" in data and not download_link(page):  # the server's own page was checked when it started
         raise ValueError("page must be an https:// link")
-    return {"version": version, "url": url, "sha256": sha256, "size": size, "notes": notes, "page": page}
+    out = {"version": version, "url": url, "sha256": sha256, "size": size, "notes": notes, "page": page}
+    if "build" in data:  # which build of the version: the zip's VERSION.txt stamp (a launcher's hello `build`)
+        build = data["build"]
+        if not isinstance(build, str) or not BUILD_RE.fullmatch(build):
+            raise ValueError("build must be the release's VERSION.txt stamp, as 2026-11-23 22:31")
+        out["build"] = build
+    return out
 
 
 def format_endpoint(addr: tuple[str, int] | None) -> str:

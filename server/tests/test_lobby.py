@@ -28,7 +28,8 @@ async def test_lobby_create_join_ready_start(server, connect, udp_peers):
     code = lobby["id"]
     assert len(code) == 5 and lobby["locked"] and lobby["state"] == "open"
     assert lobby["members"] == [{"name": "Goro", "character": "Scorpion", "ready": False, "host": True,
-                                 "spectator": False, "link": None, "ping": None, "title": "Novice"}]
+                                 "spectator": False, "link": None, "ping": None, "title": "Novice",
+                                 "version": "0.1.0", "build": None}]
 
     listed = await guest.request({"type": "lobby_list", "game": "sc5"})
     assert [(lb["id"], lb["players"], lb["locked"]) for lb in listed["lobbies"]] == [(code, 1, True)]
@@ -168,6 +169,17 @@ async def test_joining_another_lobby_leaves_the_one_you_are_in(server, connect):
     with pytest.raises(ServerError) as exc:
         await host.request({"type": "lobby_join", "lobby": made["id"]})
     assert exc.value.code == "busy"
+
+
+async def test_the_lobby_names_each_members_launcher_version_and_build(server, connect):
+    """Two launchers of different versions cannot play each other: the lobby state says each member's, so their
+    launchers say so before anyone readies (and a test build of the same version, by its build)."""
+    host = await connect("Taki", version="0.1.4", build="2026-11-23 22:31")
+    guest = await connect("Kilik")  # the test client's own version, no build
+    code = (await host.request(create_msg()))["lobby"]["id"]
+    joined = await guest.request({"type": "lobby_join", "lobby": code})
+    assert [(m["name"], m["version"], m["build"]) for m in joined["lobby"]["members"]] == [
+        ("Taki", "0.1.4", "2026-11-23 22:31"), ("Kilik", "0.1.0", None)]
 
 
 async def test_a_player_whose_lobby_match_is_on_cannot_go_to_another_lobby(server, connect, udp_peers):

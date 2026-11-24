@@ -49,10 +49,15 @@ async def connect(server: Server) -> AsyncIterator[Connector]:
     conns: list[Connection] = []
 
     async def factory(name: str | None = None, *, password: str = PASSWORD, register: bool = True,
-                      fingerprint: str | None = None, features: tuple[str, ...] = P.FEATURES) -> Connection:
-        """features: what the launcher says it can do in its hello (() : a launcher from before King of the Hill)."""
+                      fingerprint: str | None = None, features: tuple[str, ...] = P.FEATURES,
+                      version: str | None = None, build: str = "") -> Connection:
+        """features: what the launcher says it can do in its hello (() : a launcher from before King of the Hill);
+        version and build: its version (the test client's own by default) and package build."""
         conn = Connection("127.0.0.1", server.tcp_port, fingerprint=fingerprint or server.fingerprint)
-        await conn.connect(features=features)
+        if version is None:
+            await conn.connect(features=features, build=build)
+        else:
+            await conn.connect(features=features, version=version, build=build)
         conns.append(conn)
         if name is not None:
             if register:

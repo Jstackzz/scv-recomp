@@ -20,6 +20,7 @@
 #include "MatchController.h"
 #include "ServerClient.h"
 #include "Style.h"
+#include "Updater.h"
 #include "Widgets.h"
 #include "WinUtil.h"
 
@@ -307,7 +308,9 @@ UpdateDialog::UpdateDialog(const QJsonObject& release, bool required, const QStr
     const QString page = release.value(QStringLiteral("page")).toString();
     setWindowTitle(tr("SCV Online %1").arg(version));
     setModal(false);
-    setMinimumWidth(500);
+    setMinimumWidth(560);
+    // over the game: a game window in front (borderless over the whole screen) hid the offer behind it
+    setWindowFlag(Qt::WindowStaysOnTopHint);
     auto* v = new QVBoxLayout(this);
     v->setContentsMargins(28, 22, 28, 22);
     v->setSpacing(10);
@@ -321,10 +324,19 @@ UpdateDialog::UpdateDialog(const QJsonObject& release, bool required, const QStr
     auto* big = ui::label(tr("SCV Online %1").arg(version), "Big");
     big->setAlignment(Qt::AlignCenter);
     v->addWidget(big);
-    auto* info = ui::label(required ? tr("You have %1. The server needs this version to play online.")
-                                          .arg(QStringLiteral(SC5_LAUNCHER_VERSION))
-                                    : tr("You have %1.").arg(QStringLiteral(SC5_LAUNCHER_VERSION)),
-                           "Muted");
+    // the same number in another build: this launcher is a test build (or one made before the release), whose game
+    // differs from everyone else's
+    const bool otherBuild = Updater::sameVersionOtherBuild(release);
+    auto* info = ui::label(otherBuild ? tr("You have a test build of %1 (packaged %2). Everyone else plays the release "
+                                           "of %1 (packaged %3), whose game differs from yours: update to play with "
+                                           "them.")
+                                            .arg(QStringLiteral(SC5_LAUNCHER_VERSION), paths::packageBuild(),
+                                                 release.value(QStringLiteral("build")).toString())
+                           : required ? tr("You have %1. The server needs this version to play online.")
+                                            .arg(QStringLiteral(SC5_LAUNCHER_VERSION))
+                                      : tr("You have %1. Players on another version cannot play you: update to play "
+                                           "with everyone.").arg(QStringLiteral(SC5_LAUNCHER_VERSION)),
+                           "Rank");
     info->setAlignment(Qt::AlignCenter);
     info->setWordWrap(true);
     v->addWidget(info);

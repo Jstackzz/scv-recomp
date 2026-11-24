@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 #include "GameData.h"
@@ -74,6 +75,19 @@ QString packagedGameFolder(const QString& gameId) {
 QString toolchainDir() { return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("toolchain")); }
 
 QString displayFile() { return QDir(g_dataDir).filePath(QStringLiteral("display.txt")); }
+
+QString packageBuild() {
+    static const QString build = [] {
+        QFile f(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("VERSION.txt")));
+        if (!isPackage() || !f.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
+        const QString line = QString::fromUtf8(f.readLine()).remove(QChar(0xFEFF)).trimmed();
+        if (!line.startsWith(QStringLiteral("SC5-Online %1,").arg(QStringLiteral(SC5_LAUNCHER_VERSION)))) return QString();
+        static const QRegularExpression stamp(QStringLiteral("packaged ([0-9A-Za-z :._-]{1,40})$"));
+        const QRegularExpressionMatch m = stamp.match(line);
+        return m.hasMatch() ? m.captured(1).trimmed() : QString();
+    }();
+    return build;
+}
 
 }  // namespace paths
 

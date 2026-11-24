@@ -76,6 +76,7 @@ private:
     QJsonObject lastJoin_;  // the last lobby_join or lobby_create sent
     bool retriedJoin_ = false;  // sent again after leaving the lobby for an older server
     bool switching_ = false;    // that leave is on its way: its lobby_left is a move to another lobby
+    bool versionBlocked_ = false;  // the other player's launcher is another version: Ready stays off
     QStackedWidget* right_;
     QLabel* lobbyTitle_;
     QLabel* lobbyInfo_;

@@ -791,9 +791,14 @@ void MainWindow::offerUpdate(const QJsonValue& value, bool required) {
     const QJsonObject release = Updater::usable(value);
     if (release.isEmpty()) return;
     const QString version = release.value(QStringLiteral("version")).toString();
-    applog::write(QStringLiteral("update: %1 offered%2").arg(version, required ? QStringLiteral(", needed to play online") : QString()));
+    const bool otherBuild = Updater::sameVersionOtherBuild(release);
+    applog::write(QStringLiteral("update: %1 offered%2%3")
+                      .arg(version, required ? QStringLiteral(", needed to play online") : QString(),
+                           otherBuild ? QStringLiteral(" (the release's build %1; this one is %2)")
+                                            .arg(release.value(QStringLiteral("build")).toString(), paths::packageBuild())
+                                      : QString()));
     update_ = release;
-    updateButton_->setText(tr("UPDATE TO %1").arg(version));
+    updateButton_->setText(otherBuild ? tr("GET THE RELEASE OF %1").arg(version) : tr("UPDATE TO %1").arg(version));
     updateButton_->show();
     if (updater_->busy()) return;
     if (opts_.autoUpdate && Updater::blocker().isEmpty()) {

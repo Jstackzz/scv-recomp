@@ -684,6 +684,7 @@ void LobbyPage::showLobby(const QJsonObject& lobby) {
     rateEndsMs_ = r.isEmpty() ? 0 : now + qint64(r.value(QStringLiteral("seconds")).toDouble() * 1000.0);
     const double readyBy = lobby.value(QStringLiteral("ready_by")).toDouble(-1);
     readyByMs_ = hill && readyBy >= 0 ? now + qint64(readyBy * 1000.0) : 0;
+    updateVersionAlert();
     updateControls();
     updateStatus();
     if (newLobby) {
@@ -709,6 +710,55 @@ void LobbyPage::showLobby(const QJsonObject& lobby) {
     }
 }
 
+namespace {
+// a newer than b, part by part (0.1.10 after 0.1.9), as the updater compares them
+bool versionNewer(const QString& a, const QString& b) {
+    const QStringList x = a.split(QLatin1Char('.')), y = b.split(QLatin1Char('.'));
+    for (qsizetype i = 0; i < std::max(x.size(), y.size()); i++) {
+        const int p = i < x.size() ? x[i].toInt() : 0, q = i < y.size() ? y[i].toInt() : 0;
+        if (p != q) return p > q;
+    }
+    return false;
+}
+}  // namespace
+
+// Each member's launcher version (and build) comes with the lobby's state (docs/PROTOCOL.md 1.10, SCV 0.1.4): two of
+// different versions run different games, which cannot play each other (their matches go out of step or never meet),
+// so the lobby says so plainly before anyone readies, who must update, and keeps Ready off against the other player.
+// The same version in two builds (a test build) may play, but may go out of step: said too.
+void LobbyPage::updateVersionAlert() {
+    const QString mine = server_->accountName();
+    const QString myVersion = QStringLiteral(SC5_LAUNCHER_VERSION), myBuild = paths::packageBuild();
+    const bool meWatching = spectating();
+    QStringList cannot, builds;
+    bool blocked = false;
+    for (const auto& mv : lobby_.value(QStringLiteral("members")).toArray()) {
+        const QJsonObject mem = mv.toObject();
+        const QString name = s(mem, "name"), version = s(mem, "version"), build = s(mem, "build");
+        if (name == mine || version.isEmpty()) continue;  // an older server says nobody's
+        const bool plays = !mem.value(QStringLiteral("spectator")).toBool() || mem.value(QStringLiteral("line")).toInt() > 0;
+        if (!plays && !meWatching) continue;  // a spectator of another version only fails to watch: theirs to see
+        if (meWatching && mem.value(QStringLiteral("spectator")).toBool()) continue;  // two spectators: nothing shared
+        if (version != myVersion) {
+            const QString older = versionNewer(version, myVersion) ? tr("You have the older one: update your launcher "
+                                                                        "(it offers the update when it starts; else "
+                                                                        "download the newest release).")
+                                                                   : tr("%1 has the older one and must update.").arg(name);
+            cannot << tr("%1 has SCV Online %2 and you have %3: your games cannot play each other. %4")
+                          .arg(name, version, myVersion, older);
+            if (!mem.value(QStringLiteral("spectator")).toBool() && !meWatching) blocked = true;
+        } else if (!build.isEmpty() && !myBuild.isEmpty() && build != myBuild) {
+            builds << tr("%1 has another build of SCV Online %2 than yours (packaged %3, yours %4): one of you has a "
+                         "test build, and your matches may go out of step. Both should use the public release.")
+                          .arg(name, version, build, myBuild);
+        }
+    }
+    versionBlocked_ = blocked;
+    const QStringList all = cannot + builds;
+    versionAlert_->setText(all.join(QLatin1Char('\n')));
+    versionAlert_->setVisible(!all.isEmpty());
+}
+
 void LobbyPage::updateControls() {
     const Game* g = GameData::instance().game(s(lobby_, "game"));
     const GameMode* m = g ? g->mode(s(lobby_, "mode")) : nullptr;
@@ -724,7 +774,8 @@ void LobbyPage::updateControls() {
     ready_->setChecked(meReady);
     // the game still plays (or shows) the last match: it takes the next one once back at its hold point. Un-readying
     // stays open (Online Practice's way out between its matches)
-    ready_->setEnabled(!inMatch && (meReady || !controller_->inMatch()));
+    // un-readying stays open, readying not against a launcher of another version (their games cannot play each other)
+    ready_->setEnabled(!inMatch && (meReady || (!controller_->inMatch() && !versionBlocked_)));
     ready_->setVisible(!meWatching);
     // King of the Hill's line picks a character for its turn meanwhile; Online Practice picks in the game
     const bool picks = !meWatching || (hill && myLine > 0);
@@ -860,6 +911,8 @@ void LobbyPage::leftLobby(bool keepWatching) {
     ratedMatch_.clear();
     ratePanel_->hide();
     lobby_ = {};
+    versionBlocked_ = false;
+    versionAlert_->hide();
     right_->setCurrentIndex(0);
     character_->clear();
     chat_->clear();

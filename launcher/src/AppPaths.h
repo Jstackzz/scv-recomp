@@ -17,6 +17,10 @@ bool isPackage();                            // a player package: games\ beside 
 QString packagedGameFolder(const QString& gameId);  // games\<id> beside the launcher (a player package), or empty
 QString toolchainDir();                      // toolchain\ beside the launcher: what compiles the game's code
 QString displayFile();                       // display.txt beside the ini: the display settings for running games
+// which build of its version this launcher is: a player package's VERSION.txt stamp ("SC5-Online 0.1.4, packaged
+// 2026-11-23 22:31" gives "2026-11-23 22:31"); empty in a source build. Two packages of one version (a test build
+// and the release) differ there, which the version number alone never shows (docs/PROTOCOL.md 1.3)
+QString packageBuild();
 }  // namespace paths
 
 namespace cfg {

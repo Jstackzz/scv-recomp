@@ -171,6 +171,7 @@ class Session:
         self.ip: str = peer[0]
         self.hello = False
         self.client_version = ""
+        self.client_build = ""  # which build of its version (a package's VERSION.txt stamp), "" unknown
         self.features: set[str] = set()  # what its launcher can do beyond the protocol's start (hello, P.FEATURES)
         self.crash_reports = 0
         self.desync_reports = 0
@@ -445,7 +446,9 @@ class Lobby:
         for m in self.members:
             entry = {"name": m.session.name, "character": m.character, "ready": m.ready, "host": m.session is self.host,
                      "spectator": m.spectator, "link": m.link or None, "ping": m.server_rtt,
-                     "title": title_of(m.session) if title_of else None}
+                     "title": title_of(m.session) if title_of else None,
+                     # their launcher's version and build: two versions cannot play each other (the lobby says so)
+                     "version": m.session.client_version or None, "build": m.session.client_build or None}
             if self.koth:
                 entry["line"] = self.line.index(m) + 1 if m in self.line else None
                 entry["respect"] = respect_of(m.session) if respect_of else 0
@@ -656,7 +659,7 @@ class Server:
         )
         self._udp = transport  # type: ignore[assignment]
         self.udp_port = transport.get_extra_info("sockname")[1]
-        self._update_pushed = (self._latest_release() or {}).get("version")  # nobody connected yet to offer it to
+        self._update_pushed = self._release_key(self._latest_release())  # nobody connected yet to offer it to
         self._ticker_task = asyncio.create_task(self._ticker(), name="sc5-ticker")
         scheme = "tcp" if self.cfg.plain else "tls"
         log.info("SC5 server %s listening on %s://%s:%d, UDP rendezvous on %d, database %s",
@@ -872,8 +875,9 @@ class Server:
                     "server_proto": P.PROTO})
             s.close()
             return
-        version = str(msg.get("version", "0"))
-        update = self._update_for(version)
+        version = str(msg.get("version", "0"))[:40]
+        build = P.client_build(msg.get("build"))
+        update = self._update_for(version, build)
         if not P.version_at_least(version, self.cfg.min_client):
             # the message says where the release is (a launcher without the updater shows only it): the update
             # file's page, else the server's releases page, else no page at all
@@ -888,6 +892,7 @@ class Server:
             return
         s.hello = True
         s.client_version = version
+        s.client_build = build
         features = msg.get("features")
         if isinstance(features, list):
             s.features = {f for f in features if isinstance(f, str) and f in P.FEATURES}
@@ -927,12 +932,26 @@ class Server:
                     log.warning("update file %s ignored: %s", path, exc)
         return self._update
 
-    def _update_for(self, version: str) -> dict[str, Any] | None:
-        """The latest release when a launcher of this version is older."""
+    def _update_for(self, version: str, build: str = "") -> dict[str, Any] | None:
+        """The latest release when a launcher of this version is older, or is this version in another build than the
+        release's (the update file's `build`, the launcher's hello one, both known): a test build given out before the
+        release took its number, whose game is not the release's. A newer launcher (a developer's) is offered nothing."""
         latest = self._latest_release()
-        if latest is None or P.version_at_least(version, latest["version"]):
+        if latest is None:
             return None
-        return latest
+        if not P.version_at_least(version, latest["version"]):
+            return latest
+        same = P.version_at_least(latest["version"], version)  # and at least it (above): the same version
+        if same and build and latest.get("build") and build != latest["build"]:
+            return latest
+        return None
+
+    @staticmethod
+    def _release_key(latest: dict[str, Any] | None) -> str | None:
+        """A release as the push tells them apart: its version, and its build when the update file names one."""
+        if latest is None:
+            return None
+        return f"{latest['version']} ({latest['build']})" if latest.get("build") else latest["version"]
 
     def _push_update(self, now: float) -> None:
         """A release announced while launchers are connected: offered to the older ones at once."""
@@ -940,7 +959,7 @@ class Server:
             return
         self._update_checked = now
         latest = self._latest_release()
-        version = latest["version"] if latest else None
+        version = self._release_key(latest)
         if version == self._update_pushed:
             return
         self._update_pushed = version
@@ -948,7 +967,7 @@ class Server:
             return
         offered = 0
         for s in list(self.sessions):
-            if s.hello and not P.version_at_least(s.client_version, latest["version"]):
+            if s.hello and self._update_for(s.client_version, s.client_build) is not None:
                 s.send({"type": "update", **latest})
                 offered += 1
         log.info("release %s announced to %d connected launcher(s)", version, offered)
@@ -1055,7 +1074,8 @@ class Server:
         if series is not None and sp is not None:  # back in the middle of one
             s.send(self._series_msg(series, sp, now))
         self._mark_online()
-        log.info("login %s from %s (launcher %s)", s.name, s.ip, s.client_version)
+        log.info("login %s from %s (launcher %s%s)", s.name, s.ip, s.client_version,
+                 f", build {s.client_build}" if s.client_build else "")
         self._rejoin_lobby(s, now)
 
     def _rejoin_lobby(self, s: Session, now: float) -> None:

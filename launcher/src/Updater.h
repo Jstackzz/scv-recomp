@@ -24,8 +24,12 @@ class Updater : public QObject {
 public:
     explicit Updater(QObject* parent = nullptr);
 
-    // the release, when it is newer than this launcher and its fields are sound; {} otherwise
+    // the release, when it is newer than this launcher (or this version in another build, below) and its fields are
+    // sound; {} otherwise
     static QJsonObject usable(const QJsonValue& release);
+    // the release is this launcher's version, but another build of it (its `build`, a package's VERSION.txt stamp,
+    // differs from this package's): this one is a test build, or one from before the release was made
+    static bool sameVersionOtherBuild(const QJsonObject& release);
     // why this install cannot update itself (a source build, a folder it cannot write to), empty when it can
     static QString blocker();
     // what the update set aside, deleted once free (every start; --updated retries while the old launcher exits)
