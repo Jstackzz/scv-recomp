@@ -41,6 +41,11 @@
 //  17 GOAT   u32 frames   the next match from the result screen: this game had the launcher's `rematch` that many frames
 //            after the match's end; both games take the result screen's menu from the same frame counted from there
 //            (RematchAt); repeated while connecting
+//  18 DSUMS  u32 frame, u32 layout low, u32 layout high, u16 blocks, u32 bytes, u16 chunk, u16 chunks, u16 n, n x u32
+//            after a check of that frame failed: a hash of every 256 bytes of the sender's snapshot of it (what the
+//            check hashes), with a hash of the snapshot's layout (its blocks' addresses and sizes); repeated
+//  19 DBYTES u32 frame, u16 index, u16 count, u16 page, u16 len, len bytes
+//            the sender's bytes of one of the first pages that differ (count of them in all); repeated
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -96,7 +101,7 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
                  kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13, kChoice = 14, kSkip = 15,
-                 kReplaySkip = 16, kRematchAt = 17 };
+                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -397,6 +402,42 @@ struct MeetSync {
 };
 MeetSync g_sync;
 uint32_t g_sync_stream = 0;
+
+// What a desync says. A check is one hash of the fight, and a mismatch said only that the two fights differed. So each
+// check frame's snapshot is kept a while (Evidence), and when a check fails the two games pass each other a hash of
+// every 256 bytes of that frame's snapshot (DSUMS), then their bytes of the first pages that differ (DBYTES), and each
+// game's log names the words that differ with both games' values (lines with "sc5 desync:", which the launcher's
+// desync report carries). The `desync` status waits for that, a second and a half at most.
+constexpr uint32_t kPage = 256;
+constexpr size_t kEvidenceKept = 8;   // check frames
+constexpr size_t kDetailPages = 16;   // pages of bytes each game passes
+constexpr size_t kDetailWords = 48;   // differing words a log names
+struct Evidence {
+  std::vector<battle::Block> blocks;
+  std::vector<uint8_t> data;  // the snapshot; once Normalized, what the check leaves out is 0
+  bool normalized = false;
+};
+struct DetailPage {
+  uint32_t source, pos, len;  // the guest address of its first byte, its place in the snapshot
+};
+struct Detail {
+  bool active = false, compared = false, done = false, ended = false;
+  uint32_t frame = 0;
+  Clock::time_point deadline, last_send, linger;
+  std::vector<DetailPage> pages;     // ours of that frame
+  std::vector<uint16_t> differing;   // page numbers, once compared
+  // the other game's, as they come (kept from before this game's own check failed, should theirs fail first)
+  uint32_t their_frame = 0;
+  uint64_t their_layout = 0;
+  uint32_t their_blocks = 0, their_bytes = 0;
+  int their_chunks = -1;
+  std::map<uint16_t, std::vector<uint32_t>> their_sums;
+  int their_count = -1;                                  // pages of bytes they pass
+  std::map<uint16_t, std::vector<uint8_t>> their_pages;  // page number -> bytes
+};
+std::map<uint32_t, Evidence> g_evidence;
+Detail g_detail;
+std::string g_round_trail;  // the match's rounds: "+f" fought from match frame f, "-f(health a/b)" to f
 
 int OwnDelay() { return std::clamp(g_cfg.delay, 0, 8); }
 int Delay() { return g_match_delay >= 0 ? g_match_delay : OwnDelay(); }
@@ -885,6 +926,34 @@ void HandlePacket(const uint8_t* b, int n) {
     while (p.inputs.count(p.contiguous)) p.contiguous++;
   } else if (type == kCheck && n >= 20 && match == g_match) {
     p.checks[u32(8)] = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
+  } else if (type == kDetailSums && n >= 32 && match == g_match) {
+    Detail& d = g_detail;
+    const uint32_t frame = u32(8);
+    if (d.active ? frame != d.frame : (d.their_chunks >= 0 && frame != d.their_frame)) return;
+    uint16_t chunk, chunks, count;
+    std::memcpy(&chunk, b + 26, 2);
+    std::memcpy(&chunks, b + 28, 2);
+    std::memcpy(&count, b + 30, 2);
+    if (chunks > 64 || chunk >= chunks || 32 + int(count) * 4 > n) return;
+    d.their_frame = frame;
+    d.their_layout = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
+    std::memcpy(&d.their_blocks, b + 20, 2);
+    d.their_bytes = u32(22);
+    d.their_chunks = chunks;
+    std::vector<uint32_t>& sums = d.their_sums[chunk];
+    sums.resize(count);
+    if (count) std::memcpy(sums.data(), b + 32, size_t(count) * 4);
+  } else if (type == kDetailBytes && n >= 20 && match == g_match) {
+    Detail& d = g_detail;
+    if (!d.active || u32(8) != d.frame) return;
+    uint16_t index, count, page, len;
+    std::memcpy(&index, b + 12, 2);
+    std::memcpy(&count, b + 14, 2);
+    std::memcpy(&page, b + 16, 2);
+    std::memcpy(&len, b + 18, 2);
+    if (count > kDetailPages || index >= count || len > kPage || 20 + int(len) > n) return;
+    d.their_count = count;
+    d.their_pages[page].assign(b + 20, b + 20 + len);
   } else if (type == kBye && match == g_match) {
     p.left = true;
     if (g_cfg.sparring) g_back_seen = true;  // Online Practice: the other's leaving ends it as BACK does
@@ -1211,17 +1280,257 @@ bool WaitForInputs(uint32_t f) {
   return true;
 }
 
+// --- what a desync says (Evidence, Detail above) ---
+
+constexpr uint32_t kFighters[2] = {0x82937070, 0x82994BA0};  // the players' objects (battle.cpp)
+constexpr uint32_t kFighterSize = 0x5DB30, kFighterHealth = 0x2268C, kFighterRoundsWon = 0x75C;
+
+float FighterHealth(int s) {
+  const uint32_t v = Get32(kFighters[s] + kFighterHealth);
+  float f;
+  std::memcpy(&f, &v, 4);
+  return f;
+}
+
+// a guest address as a log names it
+std::string PlaceName(uint32_t a) {
+  for (int s = 0; s < 2; s++)
+    if (a >= kFighters[s] && a < kFighters[s] + kFighterSize) return fmt::format("P{}+0x{:X}", s + 1, a - kFighters[s]);
+  if (a >= kAgreedMachine && a < kAgreedMachine + kAgreedMachineSize) return fmt::format("machine+0x{:X}", a - kAgreedMachine);
+  if (a >= 0x82771080u && a < 0x82771080u + 0xB40u) return fmt::format("pads+0x{:X}", a - 0x82771080u);
+  return fmt::format("{:08X}", a);
+}
+
+// the check frame's snapshot kept (Keep): the newest few
+void KeepEvidence(uint32_t f, uint32_t stream) {
+  const auto* blocks = battle::Blocks(stream);
+  const uint8_t* data = battle::Data(stream);
+  if (!blocks || !data || g_detail.active) return;  // a failed check's frames stay as they are
+  Evidence& e = g_evidence[f];
+  e.blocks = *blocks;
+  e.data.assign(data, data + battle::Size(stream));
+  e.normalized = false;
+  while (g_evidence.size() > kEvidenceKept) g_evidence.erase(g_evidence.begin());
+}
+
+// what the check leaves out set to 0, as battle::FightHash leaves it out (and a float's -0.0 as +0.0)
+void Normalize(Evidence& e) {
+  if (e.normalized) return;
+  e.normalized = true;
+  for (const battle::Block& b : e.blocks) {
+    if (b.pos + b.size > e.data.size()) continue;
+    uint8_t* p = e.data.data() + b.pos;
+    for (uint32_t i = 0; i < b.size; i++) {
+      if (battle::KindOf(b.source + i) != battle::Kind::Fight) {
+        p[i] = 0;
+      } else if (p[i] == 0x80 && ((b.source + i) & 3) == 0 && i + 4 <= b.size && !p[i + 1] && !p[i + 2] && !p[i + 3]) {
+        p[i] = 0;
+      }
+    }
+  }
+}
+
+std::vector<DetailPage> PagesOf(const Evidence& e) {
+  std::vector<DetailPage> out;
+  for (const battle::Block& b : e.blocks) {
+    if (b.pos + b.size > e.data.size()) continue;
+    for (uint32_t off = 0; off < b.size; off += kPage) out.push_back({b.source + off, b.pos + off, std::min(kPage, b.size - off)});
+  }
+  return out;
+}
+
+uint64_t LayoutOf(const Evidence& e) {
+  uint64_t h = 1469598103934665603ull;
+  // (a heap object's or the stack's block by its size alone: each game has those where its own heap put them)
+  for (const battle::Block& b : e.blocks)
+    for (uint32_t v : {b.source >= 0x80000000u && b.source < 0xA0000000u ? b.source : 0u, b.size})
+      for (int i = 0; i < 4; i++) h = (h ^ ((v >> (8 * i)) & 0xFF)) * 1099511628211ull;
+  return h;
+}
+
+uint32_t PageSum(const Evidence& e, const DetailPage& p) {
+  uint32_t h = 2166136261u;
+  for (uint32_t i = 0; i < p.len; i++) h = (h ^ e.data[p.pos + i]) * 16777619u;
+  return h;
+}
+
+void SendDetailSums() {
+  Detail& d = g_detail;
+  auto it = g_evidence.find(d.frame);
+  if (it == g_evidence.end()) return;
+  const Evidence& e = it->second;
+  const uint64_t layout = LayoutOf(e);
+  constexpr size_t kPer = 300;
+  const uint16_t chunks = uint16_t(std::max<size_t>(1, (d.pages.size() + kPer - 1) / kPer));
+  for (uint16_t c = 0; c < chunks; c++) {
+    Writer w = Header(kDetailSums);
+    w.U32(d.frame);
+    w.U32(uint32_t(layout));
+    w.U32(uint32_t(layout >> 32));
+    w.U16(uint16_t(e.blocks.size()));
+    w.U32(uint32_t(e.data.size()));
+    w.U16(c);
+    w.U16(chunks);
+    const size_t from = size_t(c) * kPer, to = std::min(d.pages.size(), from + kPer);
+    w.U16(uint16_t(to > from ? to - from : 0));
+    for (size_t i = from; i < to; i++) w.U32(PageSum(e, d.pages[i]));
+    Send(w);
+  }
+}
+
+void SendDetailBytes() {
+  Detail& d = g_detail;
+  auto it = g_evidence.find(d.frame);
+  if (it == g_evidence.end() || !d.compared) return;
+  const uint16_t count = uint16_t(std::min(d.differing.size(), kDetailPages));
+  for (uint16_t i = 0; i < count; i++) {
+    const DetailPage& p = d.pages[d.differing[i]];
+    Writer w = Header(kDetailBytes);
+    w.U32(d.frame);
+    w.U16(i);
+    w.U16(count);
+    w.U16(d.differing[i]);
+    w.U16(uint16_t(p.len));
+    w.Bytes(it->second.data.data() + p.pos, int(p.len));
+    Send(w);
+  }
+}
+
+// a check of frame f failed: what this game knows of the moment into the log, and the exchange begins
+void BeginDetail(uint32_t f) {
+  Detail& d = g_detail;
+  if (d.active) return;
+  d.active = true;
+  d.frame = f;
+  d.deadline = Clock::now() + std::chrono::milliseconds(1500);
+  d.last_send = Clock::time_point{};
+  if (d.their_chunks >= 0 && d.their_frame != f) {  // theirs was of another frame: not this one's
+    d.their_chunks = -1;
+    d.their_sums.clear();
+  }
+  REXLOG_INFO("sc5 desync: match {} frame {} (now {}), battle {}, rounds won {}-{}, health {:.1f} / {:.1f}, input delay "
+              "{}, {} rollbacks (the longest {} frames)",
+              g_match, f, g_frame, game::BattleStateName(game::BattleState()), Get32(kFighters[0] + kFighterRoundsWon),
+              Get32(kFighters[1] + kFighterRoundsWon), FighterHealth(0), FighterHealth(1), Delay(), g_stats.rollbacks,
+              g_stats.max_rollback);
+  REXLOG_INFO("sc5 desync: rounds fought (+ from, - to, match frames):{}", g_round_trail.empty() ? " none" : g_round_trail);
+  auto it = g_evidence.find(f);
+  if (it == g_evidence.end()) {
+    REXLOG_INFO("sc5 desync: frame {}'s snapshot is no longer kept: nothing to compare", f);
+    d.done = true;
+    return;
+  }
+  Normalize(it->second);
+  d.pages = PagesOf(it->second);
+}
+
+// their sums are all here: which pages differ
+void CompareDetail() {
+  Detail& d = g_detail;
+  const Evidence& e = g_evidence[d.frame];
+  d.compared = true;
+  if (d.their_layout != LayoutOf(e)) {
+    REXLOG_INFO("sc5 desync: the two snapshots are laid out apart: {} blocks in {} bytes here, {} in {} there", e.blocks.size(),
+                e.data.size(), d.their_blocks, d.their_bytes);
+    d.done = true;
+    return;
+  }
+  std::vector<uint32_t> theirs;
+  for (auto& [chunk, sums] : d.their_sums) theirs.insert(theirs.end(), sums.begin(), sums.end());
+  std::vector<std::pair<uint32_t, uint32_t>> runs;  // the differing pages as stretches of memory: address, bytes
+  for (size_t i = 0; i < d.pages.size() && i < theirs.size(); i++) {
+    if (PageSum(e, d.pages[i]) == theirs[i]) continue;
+    d.differing.push_back(uint16_t(i));
+    const DetailPage& p = d.pages[i];
+    if (!runs.empty() && runs.back().first + runs.back().second == p.source)
+      runs.back().second += p.len;
+    else
+      runs.emplace_back(p.source, p.len);
+  }
+  std::string where;
+  for (size_t i = 0; i < runs.size() && i < 12; i++) where += fmt::format(" {} ({} bytes)", PlaceName(runs[i].first), runs[i].second);
+  REXLOG_INFO("sc5 desync: frame {}: {} of {} pages differ:{}{}", d.frame, d.differing.size(), d.pages.size(),
+              where.empty() ? " none (the hashes differ in what a page's hash does not tell)" : where,
+              runs.size() > 12 ? fmt::format(" and {} more places", runs.size() - 12) : "");
+  if (d.differing.empty()) d.done = true;
+}
+
+// their bytes are here (or the time is up): the words that differ, both games' values
+void LogDetailWords() {
+  Detail& d = g_detail;
+  const Evidence& e = g_evidence[d.frame];
+  size_t named = 0, more = 0;
+  for (auto& [page, bytes] : d.their_pages) {
+    if (page >= d.pages.size()) continue;
+    const DetailPage& p = d.pages[page];
+    for (uint32_t i = 0; i + 4 <= p.len && i + 4 <= bytes.size(); i += 4) {
+      uint32_t mine, theirs;
+      std::memcpy(&mine, e.data.data() + p.pos + i, 4);
+      std::memcpy(&theirs, bytes.data() + i, 4);
+      if (mine == theirs) continue;
+      if (named >= kDetailWords) {
+        more++;
+        continue;
+      }
+      named++;
+      mine = __builtin_bswap32(mine);
+      theirs = __builtin_bswap32(theirs);
+      float fm, ft;
+      std::memcpy(&fm, &mine, 4);
+      std::memcpy(&ft, &theirs, 4);
+      auto plain = [](float v) { return v == v && ((v > 1e-4f && v < 1e7f) || (v < -1e-4f && v > -1e7f) || v == 0.0f); };
+      REXLOG_INFO("sc5 desync: {}: {:08X} here, {:08X} there{}", PlaceName(p.source + i), mine, theirs,
+                  plain(fm) && plain(ft) ? fmt::format(" (as floats {:g} and {:g})", fm, ft) : "");
+    }
+  }
+  if (more) REXLOG_INFO("sc5 desync: and {} more words in the pages passed", more);
+  if (d.their_pages.empty() && !d.differing.empty())
+    REXLOG_INFO("sc5 desync: the other game's bytes did not come in time");
+}
+
+// the exchange, a step at each frame's top; when it is over the match is (tests: SC5_NET_DESYNC_CONTINUE plays on)
+void DetailPump() {
+  Detail& d = g_detail;
+  if (!d.active || d.ended) return;
+  const auto now = Clock::now();
+  if (!d.done) {
+    if (!d.compared && d.their_chunks >= 0 && int(d.their_sums.size()) >= d.their_chunks) CompareDetail();
+    const size_t want = std::min(d.differing.size(), kDetailPages);
+    if (d.compared && !d.done && d.their_count >= 0 && d.their_pages.size() >= std::min<size_t>(want, size_t(d.their_count))) {
+      LogDetailWords();
+      d.done = true;
+    }
+    if (!d.done && now > d.deadline) {
+      if (!d.compared) REXLOG_INFO("sc5 desync: the other game's hashes of frame {} did not come in time", d.frame);
+      else LogDetailWords();
+      d.done = true;
+    }
+    if (d.done) d.linger = now + std::chrono::milliseconds(300);  // the other game may still want this one's
+  }
+  if (now - d.last_send > std::chrono::milliseconds(60)) {
+    d.last_send = now;
+    SendDetailSums();
+    SendDetailBytes();
+  }
+  if (d.done && now > d.linger) {
+    d.ended = true;
+    static const bool keep_going = std::getenv("SC5_NET_DESYNC_CONTINUE") != nullptr;
+    if (!keep_going) g_status = Status::Desynced;
+  }
+}
+
 void CompareChecks() {
+  static const bool keep_going = std::getenv("SC5_NET_DESYNC_CONTINUE") != nullptr;
   for (auto it = g_peer.checks.begin(); it != g_peer.checks.end();) {
     auto mine = g_my_checks.find(it->first);
     if (mine == g_my_checks.end()) {
       ++it;
       continue;
     }
-    if (mine->second != it->second && g_status != Status::Desynced) {
+    // the first check apart ends the match once the two games have said what differs (DetailPump)
+    if (mine->second != it->second && g_status != Status::Desynced && (keep_going || !g_detail.active)) {
       REXLOG_ERROR("sc5 net: DESYNC at frame {}: {:016X} here, {:016X} there", it->first, mine->second, it->second);
-      static const bool keep_going = std::getenv("SC5_NET_DESYNC_CONTINUE") != nullptr;
-      if (!keep_going) g_status = Status::Desynced;
+      BeginDetail(it->first);
     }
     it = g_peer.checks.erase(it);
   }
@@ -1268,6 +1577,15 @@ void ReseedAtStateChange(PPCContext& ctx, uint8_t* base) {
 // frame f's inputs: what the game's pad reads get until the next frame's top (and its count of frames shown)
 void SetFrameInputs(uint32_t f) {
   Put32(kFramesShown, g_shown_base + f);
+  // tests: SC5_TEST_DESYNC_AT=<match frame>: this game's player 1 loses a point of health there, in every run of that
+  // frame (a desync made to order: what the check, the detail exchange and the launcher do with one)
+  static const uint32_t desync_at = std::getenv("SC5_TEST_DESYNC_AT") ? uint32_t(std::atoi(std::getenv("SC5_TEST_DESYNC_AT"))) : 0;
+  if (desync_at && f == desync_at && !g_cfg.watch) {
+    const float hp = FighterHealth(0) - 1.0f;
+    uint32_t v;
+    std::memcpy(&v, &hp, 4);
+    Put32(kFighters[0] + kFighterHealth, v);
+  }
   if (g_cfg.watch) {  // a spectator: both players' own, from the feed (neutral where theirs were)
     Watched& w = g_watched[g_match];
     for (int s = 0; s < 2; s++) {
@@ -1298,6 +1616,7 @@ void Keep(PPCContext& ctx, uint8_t* base, uint32_t f) {
   input::KeepKeys(frame::Count());
   if (f % kCheckEvery == 0) {
     g_tentative[f] = battle::FightHash(g_ring[slot]);
+    KeepEvidence(f, g_ring[slot]);
     // tests: SC5_NET_DUMP_DIR, the first checks' snapshots and their blocks (what came from where), to compare games
     static int dumped = 0;
     static const int dump_count = std::getenv("SC5_NET_DUMP_COUNT") ? std::atoi(std::getenv("SC5_NET_DUMP_COUNT")) : 3;
@@ -1346,6 +1665,7 @@ void StartRolling(PPCContext& ctx, uint8_t* base) {
   g_pace = Pacing{};
   g_peer.confirmed = g_frame;
   REXLOG_INFO("sc5 net: rollback from frame {} of match {}", g_frame, g_match);
+  if (g_round_trail.size() < 600) g_round_trail += fmt::format(" +{}", g_frame);
   (void)ctx;
   (void)base;
 }
@@ -1353,6 +1673,9 @@ void StartRolling(PPCContext& ctx, uint8_t* base) {
 void StopRolling() {
   if (!g_rolling) return;
   g_rolling = false;
+  // the round's end with both players' health (a ring out: neither at 0)
+  if (g_round_trail.size() < 600)
+    g_round_trail += fmt::format(" -{}(health {:.0f}/{:.0f})", g_frame, FighterHealth(0), FighterHealth(1));
   REXLOG_INFO("sc5 net: lockstep from frame {} of match {} ({} rollbacks so far, {} frames run again, the longest {} "
               "frames, {:.1f} ms; {} frames held back)",
               g_frame, g_match, g_stats.rollbacks, g_stats.rerun, g_stats.max_rollback, g_stats.longest_rollback_ms,
@@ -1647,6 +1970,9 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
   g_mine.clear();
   g_my_checks.clear();
   g_tentative.clear();
+  g_evidence.clear();
+  g_detail = Detail{};
+  g_round_trail.clear();
   std::vector<uint32_t> words;
   const std::vector<uint32_t> agreed = AgreedAddresses();
   for (uint32_t a : agreed) words.push_back(Get32(a));
@@ -2059,6 +2385,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     if (game::BattleState() != game::kBattleRoundCall) return;
     if (!Meet(ctx, base)) return Lost(Status::Disconnected);
   }
+  DetailPump();  // a failed check: the two games say what differs, then the match is over
   if (g_status != Status::InSync) return;
   // Online Practice: a player's BACK (or the other game's leaving) ends the match in sync for both
   if (g_cfg.sparring && g_back_seen && !g_cfg.watch) {
