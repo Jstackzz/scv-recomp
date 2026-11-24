@@ -112,6 +112,12 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
                                                                          : QStringLiteral("not brought to the front")));
     });
     connect(controller_, &MatchController::soloStarted, this, &MainWindow::frontSoloWhenUp);
+    // what the launcher did with a game by itself (single player closed for an online match, a stuck game started
+    // again): said in the banner, which the player sees over every page
+    connect(controller_, &MatchController::notice, this, [this](const QString& text) {
+        applog::write(QStringLiteral("notice: ") + text);
+        showNotice(text, true);
+    });
     // the launcher with a controller: LB / RB the pages, START finds a match on a queue page
     pad_ = new GamepadNav(this);
     pad_->onPage = [this](int step) {
@@ -858,8 +864,11 @@ void MainWindow::installUpdateWhenFree() {
 
 void MainWindow::showNotice(const QString& text, bool warn) {
     notice_->setText(text);
-    notice_->setStyleSheet(warn ? QStringLiteral("background:#6B3A0A; color:#FFFFFF; padding:8px 24px; font-weight:600;")
-                                : QStringLiteral("background:#101829; color:#EDE6D6; padding:8px 24px; border-bottom:1px solid #B8923A;"));
+    // large and plain: what the launcher has to tell the player (12 pt; a warning bold, white on dark orange)
+    notice_->setStyleSheet(warn ? QStringLiteral("background:#6B3A0A; color:#FFFFFF; padding:10px 24px; font-size:12pt; "
+                                                 "font-weight:700;")
+                                : QStringLiteral("background:#101829; color:#EDE6D6; padding:10px 24px; font-size:12pt; "
+                                                 "border-bottom:1px solid #B8923A;"));
     notice_->show();
     noticeTimer_.start(20000);
 }
@@ -918,6 +927,19 @@ void MainWindow::cliLobby() {
         server_->send(create);
         return;
     }
+    // --solo: single player open while this player readies in the lobby (the lobby's match closes it)
+    if (opts_.solo && !controller_->soloRunning()) {
+        QString err;
+        if (!controller_->startSolo(gameId_, &err)) applog::write(QStringLiteral("cli: single player: %1").arg(err));
+    }
+    // --lobby-own-first: in a lobby of one's own when the one to join turns up (the join moves the player there)
+    if (opts_.lobbyOwnFirst && opts_.lobby == QLatin1String("join")) {
+        applog::write(QStringLiteral("cli: creating a lobby of my own first"));
+        server_->send({{QStringLiteral("type"), QStringLiteral("lobby_create")}, {QStringLiteral("name"), QString()},
+                       {QStringLiteral("game"), gameId_}, {QStringLiteral("mode"), mode},
+                       {QStringLiteral("password"), QString()}, {QStringLiteral("rounds"), 5},
+                       {QStringLiteral("region"), cfg::region()}, {QStringLiteral("character"), opts_.character}});
+    }
     applog::write(QStringLiteral("cli: looking for lobby \"%1\"").arg(name));
     cliLobbyPoll_ = new QTimer(this);
     connect(cliLobbyPoll_, &QTimer::timeout, this, [this] {
@@ -925,7 +947,7 @@ void MainWindow::cliLobby() {
         if (!opts_.lobbyCodeFile.isEmpty()) {
             QFile f(opts_.lobbyCodeFile);
             const QString code = f.open(QIODevice::ReadOnly) ? QString::fromLatin1(f.readAll()).trimmed() : QString();
-            if (code.isEmpty() || cliLobbyJoined_) return;
+            if (code.isEmpty() || cliLobbyJoined_ || (opts_.lobbyOwnFirst && !cliOwnLobbyIn_)) return;
             cliLobbyJoined_ = true;
             cliLobbyPoll_->stop();
             const bool watch = opts_.lobby == QLatin1String("watch");
@@ -946,7 +968,11 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
     const QString type = msg.value(QStringLiteral("type")).toString();
     const QString name = opts_.lobbyName.isEmpty() ? QStringLiteral("e2e lobby") : opts_.lobbyName;
     const bool watch = opts_.lobby == QLatin1String("watch");
-    if (type == QLatin1String("lobbies") && (opts_.lobby == QLatin1String("join") || watch) && !cliLobbyJoined_) {
+    // --lobby-own-first: in the lobby of one's own before joining (its state comes back first)
+    if (type == QLatin1String("lobby") && opts_.lobbyOwnFirst && !cliLobbyJoined_) cliOwnLobbyIn_ = true;
+    const bool mayJoin = cliLobbyBegun_ && (!opts_.lobbyOwnFirst || cliOwnLobbyIn_);
+    if (type == QLatin1String("lobbies") && (opts_.lobby == QLatin1String("join") || watch) && !cliLobbyJoined_ &&
+        mayJoin) {
         for (const auto& v : msg.value(QStringLiteral("lobbies")).toArray()) {
             const QJsonObject lb = v.toObject();
             // King of the Hill: a lobby whose places are taken has a line to wait in
@@ -968,8 +994,10 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
         return;
     }
     if (type != QLatin1String("lobby")) return;
-    cliLastLobby_ = msg;
     const QJsonObject lobby = msg.value(QStringLiteral("lobby")).toObject();
+    // --lobby-own-first: the lobby of one's own is only where the player waits for the one to join
+    if (opts_.lobbyOwnFirst && opts_.lobby == QLatin1String("join") && !cliLobbyJoined_) return;
+    cliLastLobby_ = msg;
     if (opts_.lobby == QLatin1String("host") && !opts_.lobbyCodeFile.isEmpty() && !cliLobbyCodeWritten_) {
         cliLobbyCodeWritten_ = true;
         QFile f(opts_.lobbyCodeFile);
@@ -1025,7 +1053,9 @@ void MainWindow::cliLobbyMessage(const QJsonObject& msg) {
         return;
     }
     if (members.size() < 2 || !mePlaying || cliLobbyDone_ >= opts_.lobbyMatches) return;
-    if (controller_->phase() != MatchController::Phase::Idle) return;  // the game still plays the last match's end
+    // the game still plays the last match's end (single player open, --solo, readies: the match closes it)
+    if (controller_->phase() != MatchController::Phase::Idle && controller_->phase() != MatchController::Phase::Solo)
+        return;
     bool all_ready = true, me_ready = false;
     for (const auto& v : members) {
         const QJsonObject m = v.toObject();

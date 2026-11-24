@@ -51,7 +51,9 @@ struct LaunchOptions {
     int rematches = 0;       // --queue casual: rematches to choose after the first match
     QStringList rematchChoices;  // what each of them chooses, "rematch" or "select" (the last one repeats)
     bool leaveSeries = false;    // once those are chosen, leave the series at once instead of letting it run out
-    bool solo = false;           // --queue: single player first, the search running alongside it (standby)
+    bool solo = false;           // --queue: single player first, the search running alongside it (standby); --lobby
+                                 // join: single player first, open when the lobby's match comes
+    bool lobbyOwnFirst = false;  // --lobby join: a lobby of one's own first, left by joining the named one
     QString practice;            // "on" / "off": practice while a search waits, saved (cfg::practiceWhileWaiting)
     QString searchAgain;         // "on" / "off": search again once a set or series is over, saved (cfg::searchAgain)
     bool upnpProbe = false;  // find the router and its public address, open nothing
@@ -146,6 +148,7 @@ private:
     bool cliQueued_ = false;
     int cliRematches_ = 0;  // rematches chosen
     bool cliLobbyBegun_ = false, cliLobbyJoined_ = false, cliLobbyInMatch_ = false, cliLobbyLeft_ = false;
+    bool cliOwnLobbyIn_ = false;  // --lobby-own-first: the lobby of one's own is there
     bool cliLobbyCodeWritten_ = false;  // --lobby host --lobby-code-file: written
     int cliLobbyDone_ = 0, cliLobbyReadyFor_ = -1, cliLobbyStarts_ = 0;  // matches over, ready sent for, starts sent
     QTimer* cliLobbyPoll_ = nullptr;

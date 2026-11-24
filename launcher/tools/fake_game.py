@@ -27,10 +27,12 @@ A result names the fighters as the real game does, by the game's own character i
 the seed, alike in both games.
 
 Other knobs: SC5_FAKE_BOOT (seconds before "ready", default 1.5), SC5_FAKE_RESULT=desync to report
-"desync frame=600" instead of a result (its game.log, beside status.txt, then has a match's lines as a real game
-writes them, for the launcher's desync report), SC5_FAKE_RESULT=draw for a drawn match (winner=0, a double KO in the
-last round). The game's log starts with every SC5_ variable it was given (the launcher's side of docs/PROTOCOL.md 3.1,
-for tests to check).
+"desync frame=600" instead of a result (its game.log, beside status.txt, then has a match's lines as SCV's game
+writes them: the start, the picks, the stage, the meeting, the agreed words, the per-10-s statistics, round ends, the
+DESYNC line and SC5_FAKE_DETAIL (default 60) `sc5 desync:` detail lines after it, for the launcher's desync report),
+SC5_FAKE_RESULT=draw for a drawn match (winner=0, a double KO in the last round), SC5_FAKE_STUCK=1 for a game that
+never takes `park` once a match is over (it stays at that match's last status; `quit` still ends it). The game's log
+starts with every SC5_ variable it was given (the launcher's side of docs/PROTOCOL.md 3.1, for tests to check).
 """
 
 from __future__ import annotations
@@ -73,6 +75,48 @@ def fighter(pick: str, seed: int, side: int, ids: dict[str, int]) -> str:
         return f"{ids[pick]}.0"
     pool = sorted(set(ids.values())) or [0]
     return f"{pool[(seed >> (4 * side)) % len(pool)]}.{(seed >> (8 + side)) % 2}"
+
+
+def desync_log(start: dict[str, str], match: str, side: int) -> list[str]:
+    """What SCV's game logs of a match that went out of step (sc5/src/sc5: link, autopilot, versus, net/netplay), its
+    levels as the log has them: the setup, a statistics report every 10 s, round ends, the failed check and the
+    detail lines after it (`sc5 desync:`, the game's own since 0.1.4)."""
+    seed = int(start.get("seed", "0"))
+    names = {"Siegfried": 8, "Mitsurugi": 16, "Ivy": 12}
+    p1, p2 = (start.get(k, "-") for k in ("p1", "p2"))
+    p1, p2 = (p if p in names else "Astaroth" if i == 0 else "Kilik" for i, p in enumerate((p1, p2)))
+    i = "[info] [core] [t1] "
+    out = [f"{i}sc5 link: start versus as player {side}, match {match}, seed {seed}, best of {start.get('rounds', '5')}, "
+           f"the other at 127.0.0.1:{start.get('remote', ':0').rpartition(':')[2]}",
+           f"{i}sc5 net: player {side} on port {start.get('local_port', '0')}, the other at "
+           f"{start.get('remote', '127.0.0.1:0')}, rollback with input delay {start.get('delay', '1')}",
+           f"{i}sc5 autopilot: side 1 picked {p1} (slot {names.get(p1, 3)}) at frame 3039",
+           f"{i}sc5 autopilot: side 1 costume 1 at frame 3053",
+           f"{i}sc5 autopilot: side 2 picked {p2} (slot {names.get(p2, 5)}) at frame 3182",
+           f"{i}sc5 autopilot: side 2 costume 2 at frame 3196",
+           f"{i}sc5 versus: VS settings at 402E1B5C: sides 1/1 and 2/2, rounds to win 3 and 3, round time 60, stage 17 "
+           "(frame 3830)",
+           f"{i}sc5 versus: stage 17, round time 60, 3 rounds to win, sent to player 2's game",
+           f"{i}sc5 net: meeting for match 1 at frame 4958 (this player's buttons in a fight: the game's own)",
+           f"{i}sc5 net: match 1: 2 blocks of the fight (384 bytes) differ in player 2's game, sent",
+           f"{i}sc5 net: match 1: 3 agreed words changed: 82771B48:000013CA>000013CB 82771B4C:00000698>00000699",
+           f"{i}sc5 net: match 1 in sync, seed {seed & 0xFFFFFFFF:08X}, input delay {start.get('delay', '1')}"]
+    for n in range(1, 61):  # a long match: a statistics report every 600 frames, a round's end now and then
+        f = 4958 + 600 * n
+        out += [f"{i}sc5 net: frame {f}: {n * 3} rollbacks ({n * 7} frames run again, the longest 4 frames and 6.1 ms, "
+                "1.52 ms a frame run again), 0 waits",
+                f"{i}sc5 net: keeping a frame top 0.12 ms ({n * 590} kept, {n * 10} needed none); a rollback: 0.46 ms "
+                "putting the battle back"]
+        if n % 12 == 0:
+            out.append(f"{i}sc5 versus: round {n // 12} over at frame {f + 30} (ring out by player {1 + n % 2})")
+    out += [f"{i}sc5 autopilot: a round's end at frame 41500",
+            f"{i}sc5 versus: ring out at frame 41712",
+            f"[error] [core] [t1] sc5 net: DESYNC at frame 41730: 1234ABCD5678EF00 here, 0FEDCBA987654321 there"]
+    for n in range(int(os.environ.get("SC5_FAKE_DETAIL", "60"))):
+        out.append(f"{i}sc5 desync: frame {41700 + n % 30}: player {1 + n % 2} state {n:04X} pos 1.25 -0.50 3.75 "
+                   f"inputs 00{n:02X} differs at block {n % 4} +{n * 64:04X}")
+    out.append(f"[warning] [core] [t1] sc5 net: match 1 over: desync")
+    return out
 
 
 def log(text: str) -> None:
@@ -265,7 +309,9 @@ class FakeGame:
         if verb == "quit":
             self.close_socket()
             return False
-        if verb == "park":
+        if verb == "park" and os.environ.get("SC5_FAKE_STUCK") == "1" and self.state == "over":
+            log("park not taken (SC5_FAKE_STUCK)")  # a game stuck at the match's end
+        elif verb == "park":
             self.close_socket()
             self.state = "ready"
             self.status("ready")
@@ -316,12 +362,7 @@ class FakeGame:
         if self.start.get("mode") == "sparring":
             self.status(f"sparring_over match={self.match}")
         elif os.environ.get("SC5_FAKE_RESULT") == "desync":
-            self.game_log(f"link: start {self.start.get('mode', 'versus')} ( vs ), match {self.match}, online",
-                          f"netplay: UDP {self.start.get('local_port', '0')}, side {self.side}, rollback",
-                          "netplay: stage 4, costumes 1 and 0",
-                          "netplay: match 1 in sync with rollback, 2 frames of delay",
-                          "error: netplay: DESYNC at frame 600 (ours 1234ABCD/00000001, theirs "
-                          "5678EF00/00000001)")
+            self.game_log(*desync_log(self.start, self.match, self.side))
             self.status(f"desync frame=600 match={self.match}")
         else:
             self.status(self.result_line())

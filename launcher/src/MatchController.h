@@ -131,6 +131,9 @@ signals:
     void soloStarted();  // single player's game was started, its window (once it has one) wants the front
     void gameShown();    // standby: the match's game started for an accepted match has its window up
     void codePrepChanged(const QString& text, bool done);  // prepareStaleCode: the game it is on, or all done
+    // what the launcher did with a game by itself that the player must hear of (single player closed for an online
+    // match, a game that never came back from its match closed and started again): plain words, shown large
+    void notice(const QString& text);
 
 private:
     void setPhase(Phase p, const QString& text);
@@ -179,6 +182,12 @@ private:
     void thawSolo();
     void closeSolo(const QString& why);  // practice, once its search's match is accepted (or the search cancelled)
     void closeGame(const QString& why);  // the match's game, once nothing wants it
+    // a game this launcher started for single player, practice or versus, open when an online match (a lobby's, a
+    // series' next) needs the online game: closed, and the player told
+    void closeSoloForMatch();
+    // the match's game never came back to its hold point after its match (a desync, a park it did not take) and was
+    // closed: the player is told, and it starts again at once when it was a lobby's
+    void restartStuckGame(const QString& gameId, bool forLobby);
     void freezeGame();
     void thawGame();
     void maybeBackToSolo();    // standby: nothing more to play online, single player again

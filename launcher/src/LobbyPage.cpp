@@ -225,6 +225,14 @@ LobbyPage::LobbyPage(ServerClient* server, MatchController* controller, QWidget*
         server_->send({{QStringLiteral("type"), QStringLiteral("lobby_role")}, {QStringLiteral("role"), roleAction_}});
     });
     connect(tick_, &QTimer::timeout, this, &LobbyPage::updateStatus);
+    // single player started while ready in a lobby: its game took the place of the lobby's, so this player is not
+    // ready any more (the match would find no game); Ready again closes single player for it
+    connect(controller_, &MatchController::soloStarted, this, [this] {
+        if (!inLobby() || spectating() || !me().value(QStringLiteral("ready")).toBool()) return;
+        server_->send({{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), false}});
+        chat_->appendPlainText(tr("-- You are not ready any more: your single-player game is open. Press Ready when you "
+                                  "want to play; the launcher closes single player for the match."));
+    });
     connect(ready_, &QPushButton::clicked, this, [this](bool on) {
         if (on) {
             QString err;

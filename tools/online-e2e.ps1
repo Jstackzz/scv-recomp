@@ -41,6 +41,12 @@ param(
     [int]$MatchSeconds = 6,      # how long the stand-in's matches last (SC5_FAKE_SECONDS)
     [switch]$Watch,              # lobby: C watches it (a spectator)
     [switch]$Draw,               # every match a draw (SC5_FAKE_RESULT=draw): nobody's win, a set's score stays
+    [switch]$Desync,             # every match goes out of step (SC5_FAKE_RESULT=desync): both launchers report it
+    [switch]$Stuck,              # the games never take park after a match (SC5_FAKE_STUCK=1): the launchers replace them
+    [switch]$OwnLobbyFirst,      # lobby: B is in a lobby of its own when it joins A's (the server moves it)
+    [switch]$SoloB,              # lobby: B has single player open when the lobby's match comes (the launcher closes it)
+    [string]$DelayA = '',        # [online] input_delay of A and B: auto (default) or 0-4
+    [string]$DelayB = '',
     [switch]$Snaps,              # pictures of the launchers' windows (build\online-e2e\snaps)
     [switch]$Visible,            # the launchers' windows on the screen (default: offscreen)
     [int]$Port = 8777            # the server's TCP port (UDP Port + 1), the games' Port + 10 to + 12
@@ -93,7 +99,7 @@ python=$($py -replace '\\', '/')
 [online]
 region=eu
 max_ping=0
-delay=1
+input_delay=$(if ($who -eq 'a' -and $DelayA) { $DelayA } elseif ($who -eq 'b' -and $DelayB) { $DelayB } else { 'auto' })
 game_port=$($Port + 10 + $i)
 pick_in_game=$(if ($PickInGame) { 'true' } else { 'false' })
 practice_while_waiting=false
@@ -125,10 +131,12 @@ if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pa
 $server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $root -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2
-$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
+$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
 $env:SC5_DEV_PASSWORD = 'e2e-password-123'  # throwaway accounts on a throwaway server
 $env:SC5_FAKE_SECONDS = "$MatchSeconds"
 if ($Draw) { $env:SC5_FAKE_RESULT = 'draw' }
+if ($Desync) { $env:SC5_FAKE_RESULT = 'desync' }
+if ($Stuck) { $env:SC5_FAKE_STUCK = '1' }
 if (-not $Visible) {
     # the launchers nowhere on the screen: Qt's offscreen platform, which windeployqt leaves out
     $plugin = Join-Path (Split-Path -Parent $Launcher) 'platforms\qoffscreen.dll'
@@ -153,7 +161,10 @@ if ($Queue -eq 'lobby') {
                '--mode', $Mode)
     $la = Start-Launcher 'a' (@('--lobby', 'host', '--character', $CharA) + $lobby)
     Start-Sleep -Seconds 3
-    $lb = Start-Launcher 'b' (@('--lobby', 'join', '--character', $CharB) + $lobby)
+    $extraB = @()
+    if ($OwnLobbyFirst) { $extraB += '--lobby-own-first' }
+    if ($SoloB) { $extraB += '--solo' }
+    $lb = Start-Launcher 'b' (@('--lobby', 'join', '--character', $CharB) + $lobby + $extraB)
 } else {
     $search = @('--queue', $Queue, '--mode', $Mode, '--rematches', "$Rematches")
     $la = Start-Launcher 'a' ($search + @('--character', $CharA, '--auto-accept', '2'))
@@ -186,13 +197,13 @@ while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
         }
     }
     $serverLog = @(Get-Content "$work\server\err.txt", "$work\server\out.txt" -ErrorAction SilentlyContinue)
-    foreach ($ln in $serverLog | Select-String -Pattern 'RESULT|DRAW|SET |series|DISPUTE|ABANDONED|Traceback') {
+    foreach ($ln in $serverLog | Select-String -Pattern 'RESULT|DRAW|NO_CONTEST|SET |series|DISPUTE|ABANDONED|DESYNC_PAIR|Traceback') {
         if (-not $seen[$ln.Line]) { $seen[$ln.Line] = 1; "{0,6:N1}s server: {1}" -f ((Get-Date) - $t0).TotalSeconds, ($ln.Line -replace '^\S+ \S+ \S+\s+', '') }
     }
     # the spectator's games' ends (each game logs every status line it wrote: a short one can fall between two polls)
     $watched = @(Get-ChildItem -Path "$work\c\sessions" -Filter game.log -Recurse -ErrorAction SilentlyContinue |
                  Select-String -Pattern 'link: status (result|sparring_over)').Count
-    $done = @($serverLog | Select-String -Pattern '(RESULT|DRAW) match=').Count
+    $done = @($serverLog | Select-String -Pattern '(RESULT|DRAW|NO_CONTEST) match=').Count
     # a ranked set ends at its winner's third match won; draws never end one: -Draw counts its matches
     $finished = if ($Queue -eq 'ranked' -and -not $Draw) { @($serverLog | Select-String -Pattern 'SET \S+ over').Count -ge 1 } else { $done -ge $Matches }
     if ($Mode -eq 'sparring') {
@@ -210,7 +221,7 @@ $who = @('a', 'b') + $(if ($Watch) { @('c') } else { @() })
 "--- what the launchers did (search, match found, accept, match, result, rematch, set, lobby, watch)"
 foreach ($s in $who) {
     Get-Content "$work\$s\sc5-launcher.log" -ErrorAction SilentlyContinue |
-        Select-String -Pattern 'cli:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error' |
+        Select-String -Pattern 'cli:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error|lobby|notice' |
         Select-Object -Last 40 | ForEach-Object { "[$s] $($_.Line)" }
 }
 "--- the games' start lines and the variables they were given"
@@ -226,7 +237,7 @@ foreach ($s in $who) {
 }
 "--- server log (matches and results)"
 Get-Content "$work\server\err.txt", "$work\server\out.txt" -ErrorAction SilentlyContinue |
-    Select-String -Pattern ' go: |RESULT|DRAW|elo|set |series|lobby|spectat|feed' | Select-Object -Last 30 | ForEach-Object { $_.Line -replace '^\S+ \S+ \S+\s+', '' }
+    Select-String -Pattern ' go: |RESULT|DRAW|NO_CONTEST|DESYNC_REPORT .* lines|DESYNC_PAIR|elo|set |series|lobby|spectat|feed' | Select-Object -Last 40 | ForEach-Object { $_.Line -replace '^\S+ \S+ \S+\s+', '' }
 # close only what this run started: the launchers and the games they started, then the server
 $games = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -in @($ls | ForEach-Object { $_.Id }) } | ForEach-Object { $_.ProcessId })
 foreach ($p in $ls) { if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null } }

@@ -140,7 +140,17 @@ MatchController::MatchController(ServerClient* server, QObject* parent)
         if (phase_ != Phase::Finishing) return;
         closeFeed();
         closeWatchFeed();
-        setPhase(Phase::Idle, finishText_.isEmpty() ? tr("Match over") : finishText_);
+        // parked and not back at its hold point in all that time: a game stuck at the match's end (after a desync,
+        // say) would hold the next match up for minutes, so it goes, and comes again for a lobby that wants it
+        const bool stuck = game_ && game_->isRunning() && !game_->isReady();
+        const QString text = finishText_.isEmpty() ? tr("Match over") : finishText_;
+        const QString gameId = stuck ? game_->gameId() : QString();
+        const bool lobby = stuck && lobbyGame_ == game_;
+        if (stuck)
+            closeGame(tr("The game did not come back to its hold point after the match (it says \"%1\"): closed")
+                          .arg(game_->status()));
+        setPhase(Phase::Idle, text);
+        if (stuck) restartStuckGame(gameId, lobby);
     });
     // a watched match whose game never got into it (the players' feed never came): parked after this
     watchTimeout_.setSingleShot(true);
@@ -729,14 +739,22 @@ QString MatchController::opponentName() const {
 GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) {
     closeWhenIdle_ = false;  // wanted again before a lobby left could close it
     leaveQuit_ = false;
-    // one game runs at a time: while single player runs, only an accepted match (which freezes it) brings this one
-    if (solo_ && !soloFrozen_) {
-        if (error) *error = tr("Close your single-player game first.");
-        return nullptr;
-    }
+    // one game runs at a time: an accepted queue match freezes single player (standby) before it gets here; anything
+    // else that needs the online game (a lobby's Ready or match, a series' next match) closes it, saying so
+    if (solo_ && !soloFrozen_) closeSoloForMatch();
     if (phase_ == Phase::Finishing) {
         if (error) *error = tr("Your game is still playing the last match's ending: a moment.");
         return nullptr;
+    }
+    // a game left at an old match's state with nothing of this launcher's on it (it never took the park after a
+    // desync, say): the next match would wait for it in vain, so it goes and a fresh one starts
+    bool wasLobbys = false;
+    if (game_ && game_->isRunning() && game_->gameId() == gameId && !game_->betweenMatches() &&
+        (phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching) && !gameFrozen_) {
+        wasLobbys = lobbyGame_ == game_;
+        closeGame(tr("The game never came back from its last match (it says \"%1\"): closed").arg(game_->status()));
+        emit notice(tr("Your game was stuck after the last match, so the launcher closed it. A fresh one is starting "
+                       "for the next match: give it a moment."));
     }
     if (game_ && game_->isRunning() && game_->gameId() == gameId) {  // it built its own code, if it had to
         if (gameFrozen_) {
@@ -763,6 +781,7 @@ GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) 
         return nullptr;
     }
     game_ = g;
+    if (wasLobbys) lobbyGame_ = g;
     gamePlayed_ = false;
     gamePlayedKey_.clear();
     log(tr("Game %1 starting (session %2)").arg(gameId, g->sessionDir()));
@@ -1790,6 +1809,38 @@ void MatchController::closeSolo(const QString& why) {
     QTimer::singleShot(6000, g, &QObject::deleteLater);
     log(why);
     emit gameStatusChanged(gameStatus());
+}
+
+void MatchController::closeSoloForMatch() {
+    if (!solo_ || soloFrozen_) return;
+    const QString what = soloPractice_ ? tr("practice") : soloVersus_ ? tr("versus") : tr("single-player");
+    closeSolo(tr("The online match needs the online game: %1 closed").arg(what));
+    emit notice(tr("Your %1 game was closed by the launcher: the online match needs its own game, which is starting "
+                   "now.").arg(what));
+    if (phase_ == Phase::Solo) {
+        phase_ = Phase::Idle;  // single player's phase is over; what wanted the game goes on from here
+        phaseText_ = tr("Single player closed for the online match");
+        emit phaseChanged(phase_, phaseText_);
+    }
+}
+
+void MatchController::restartStuckGame(const QString& gameId, bool forLobby) {
+    if (!forLobby || (game_ && game_->isRunning())) {
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. It starts "
+                       "again by itself for your next match."));
+        return;
+    }
+    // a lobby's: up again now, so the next Ready finds it at its hold point
+    QString err;
+    if (GameProcess* g = ensureGame(gameId, &err)) {
+        lobbyGame_ = g;
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it and is starting "
+                       "it again for the lobby's next match: give it a moment."));
+    } else {
+        log(err);
+        emit notice(tr("Your game did not come back after the last match, so the launcher closed it. Press Ready to "
+                       "start it again."));
+    }
 }
 
 // the match's game closed at once the same way; frozen behind single player (standby), it goes on to its quit hidden
