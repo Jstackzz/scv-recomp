@@ -412,6 +412,15 @@ Kind KindOf(uint32_t source) {
   // Edge Master as their next styles loaded, 1468 against 1477, 1383 against 1577, 1553 against 1387, the fights alike
   // in all else to the match's end and the next round on the same frame (40 ms each way, 2026-11-18)
   if (source >= 0x829F55D0u && source < 0x829F55D8u) return Kind::Pointer;
+  // ... and the number each of five effect slots is made with (the pool at 0x829F3330: 176 bytes a slot, taken in turn,
+  // +880; sub_82184A58 from a move's script hands sub_821845F0 a word of its fighter's, which that keeps at the slot's
+  // +16): 1 in one game and 2 in the other from frame 355 to the match's end, Algol against Yoshimitsu on stage 1C with
+  // 60 ms each way, the fights alike in all else to the same result; and 2 in both in the next run of the same match.
+  // Nothing reads it in the second after but the snapshot's own save and restore (SC5_DBG_WATCH_READS, 2026-11-24).
+  if (source >= 0x829F3330u && source < 0x829F3330u + 5 * 176) {
+    const uint32_t in_slot = (source - 0x829F3330u) % 176;
+    if (in_slot >= 16 && in_slot < 20) return Kind::Pointer;
+  }
   if (source >= 0x70000000u && source < 0x80000000u) return Kind::Stack;
   if (source >= 0x40000000u && source < 0x70000000u) return Kind::Heap;
   if (source >= 0xA0000000u) return Kind::Heap;  // physical memory: a battle object there stamps a frame counter

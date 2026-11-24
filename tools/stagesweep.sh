@@ -19,7 +19,7 @@ for place in "$@"; do
   bash tools/stagehunt.sh "$name" "$P1" "$P2" "$place" "$place" "$LAG" "$FRAMES" --port-base "$PORT" \
     --env "SC5_DBG_DRAWS=$D\\${name}_draws{i}.txt" "${extra[@]}" > "$RUNS/$name.sum" 2>&1
   {
-    echo "$(grep -E '^===' "$RUNS/$name.sum" | cut -c1-110) | $(grep -oE 'result winner=[0-9] p1_rounds=[0-9] p2_rounds=[0-9]' "$RUNS/$name.sum" | head -1) | $(grep -E 'game 1: [0-9]+ checks apart' "$RUNS/$name.sum" | sed 's/^ *game 1: //' | cut -c1-90) | ends $(grep -E 'game 1 ends:' "$RUNS/$name.sum" | sed 's/^ *game 1 ends: //' | cut -c1-120) | draws: $(python -I tools/py/drawscmp.py "$RUNS/${name}_draws1.txt" "$RUNS/${name}_draws2.txt" 1 2>&1 | tail -1 | cut -c1-90)"
+    echo "$(grep -E '^===' "$RUNS/$name.sum" | cut -c1-110) | $(grep -oE 'result winner=[0-9] p1_rounds=[0-9] p2_rounds=[0-9]' "$RUNS/$name.sum" | head -1) | $(grep -E 'game 1: [0-9]+ checks apart' "$RUNS/$name.sum" | sed 's/^ *game 1: //' | cut -c1-130) | ends $(grep -E 'game 1 ends:' "$RUNS/$name.sum" | sed 's/^ *game 1 ends: //' | cut -c1-120) | draws: $(python -I tools/py/drawscmp.py "$RUNS/${name}_draws1.txt" "$RUNS/${name}_draws2.txt" 1 2>&1 | tail -1 | cut -c1-90)"
     grep -E 'desync:|other|pointer|error|exited' "$RUNS/$name.sum" | head -8 | cut -c1-200
   } >> "$OUT"
   rm -f "$RUNS/${name}"_draws*.txt "$RUNS/${name}"_*net-*.log "$RUNS/${name}"_*stats-*.json "$RUNS/$name.out"
