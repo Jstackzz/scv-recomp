@@ -25,6 +25,7 @@ REX_EXTERN(sub_82159DF0);  // saves the battle's state into a stream (r3)
 REX_EXTERN(sub_8215A360);  // restores it from a stream (r3)
 REX_EXTERN(__imp__sub_8213DEC0);  // a task's update: the players' held and newly pressed buttons (0x82927E88)
 
+namespace sc5::dbg { void QuietWatch(bool on); }  // debug_watch.cpp: a read watch leaves our saves out
 namespace sc5::battle {
 namespace {
 
@@ -241,11 +242,13 @@ uint32_t Save(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   ctx.lr = kMainLoopReturn;
   g_recording = stream;
   g_recorded.clear();
+  sc5::dbg::QuietWatch(true);
   sub_82159DF0(ctx, base);
   g_recording = 0;
   g_blocks[stream].swap(g_recorded);
   ctx.lr = lr;
   if (RawEnabled()) KeepRaw(ctx, base, stream);
+  sc5::dbg::QuietWatch(false);
   return Get32(stream + 4);
 }
 
@@ -263,6 +266,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   const uint64_t lr = ctx.lr;
   ctx.r3.u64 = stream;
   ctx.lr = kMainLoopReturn;
+  sc5::dbg::QuietWatch(true);
   sub_8215A360(ctx, base);
   ctx.lr = lr;
   const uint32_t read = Get32(stream + 8);
@@ -272,6 +276,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   }
   for (int i = 0; i < 2; i++) after[i] = Get32(kPlayerObjects[i] + kThrowObject);
   if (RawEnabled()) PutRawBack(stream);
+  sc5::dbg::QuietWatch(false);
   for (int i = 0; i < 2; i++)
     if (after[i] != before[i]) Put32(kPlayerObjects[i] + kThrowObject, after[i]);
   return true;

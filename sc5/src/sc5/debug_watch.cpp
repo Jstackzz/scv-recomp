@@ -73,11 +73,20 @@ std::string GuestOf(uintptr_t host) {
   return fmt::format("{:08X}+{:X}", it->second, host - it->first);
 }
 
+// a read watch leaves out the battle's snapshots that the netplay keeps and puts back (they read every word: battle.cpp)
+bool g_quiet = false;
 LONG CALLBACK OnException(EXCEPTION_POINTERS* e) {
   if (e->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
   CONTEXT* c = e->ContextRecord;
   const DWORD64 dr6 = c->Dr6;
   if (!(dr6 & 0xF)) return EXCEPTION_CONTINUE_SEARCH;
+  // the handler's own reads of the watched words (Rd below) come here again: let them through
+  static thread_local bool inside = false;
+  if ((g_quiet && g_watch_read) || inside) {
+    c->Dr6 = 0;
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+  inside = true;
   if (g_hits++ < 600) {
     std::string chain;
     CONTEXT walk = *c;
@@ -105,6 +114,7 @@ LONG CALLBACK OnException(EXCEPTION_POINTERS* e) {
     }
   }
   c->Dr6 = 0;
+  inside = false;
   return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -186,6 +196,7 @@ bool WatchInit() {
 }  // namespace
 
 namespace sc5::dbg {
+void QuietWatch(bool on) { g_quiet = on; }
 // --- wide diff (SC5_DBG_WIDEDIFF=<fight frame>[,<fight frame>...], SC5_DBG_WIDEDIFF_OUT=<file>): at the top of that
 // fight frame, guest memory (0x40000000-0xC0000000, committed) before the synctest's rollback and after it ran the
 // frame again; what differs is written to the file.
@@ -405,8 +416,78 @@ void Dumps() {
   }
 }
 
+// SC5_DBG_CHEAT=<a>:<b>:<c>:<d> (fight frames, ends of frames' first runs): words and bytes of guest memory
+// that went 0 -> 1 from a to b, then were 1 at c and 2 at d (a counter of rounds, say)
+void Cheat() {
+  static const std::vector<int64_t> at = [] {
+    std::vector<int64_t> out;
+    if (const char* v = std::getenv("SC5_DBG_CHEAT"))
+      for (const char* p = v; *p;) {
+        out.push_back(std::strtoll(p, const_cast<char**>(&p), 10));
+        while (*p == ':') p++;
+      }
+    return out;
+  }();
+  if (at.size() != 4 || sc5::frame::Replaying()) return;
+  struct Cand { uint32_t a; int w; uint32_t c; };
+  static std::vector<Cand> cands;
+  static int64_t last = -1;
+  const int64_t ff = sc5::game::FightFrame();
+  if (ff == last) return;
+  last = ff;
+  uint8_t* mb = REX_KERNEL_STATE()->memory()->virtual_membase();
+  auto val = [&](uint32_t a, int w) -> uint32_t {
+    if (w == 1) return mb[a];
+    if (w == 2) return (uint32_t(mb[a]) << 8) | mb[a + 1];
+    return (uint32_t(mb[a]) << 24) | (uint32_t(mb[a + 1]) << 16) | (uint32_t(mb[a + 2]) << 8) | mb[a + 3];
+  };
+  auto num = [](uint32_t v, int w) -> int {  // 0, 1, 2 as an integer or a float (w 5: float)
+    if (w == 5) { float f; std::memcpy(&f, &v, 4); return f == 0.f ? 0 : f == 1.f ? 1 : f == 2.f ? 2 : -1; }
+    return v <= 2 ? int(v) : -1;
+  };
+  if (ff == at[0]) { WideBefore(0); REXLOG_INFO("sc5 dbg: cheat kept at {}", ff); }
+  if (ff == at[1]) {
+    size_t o = 0;
+    for (const Span& sp : g_spans) {
+      const uint8_t* old = g_before.data() + o;
+      for (uint32_t i = 0; i + 4 <= sp.size; i++) {
+        const uint32_t g = sp.guest + i;
+        const uint8_t* n = mb + g;
+        if (old[i] == 0 && n[0] == 1) cands.push_back({g, 1, 0});
+        if ((i & 1) == 0 && old[i] == 0 && old[i + 1] == 0 && n[0] == 0 && n[1] == 1) cands.push_back({g, 2, 0});
+        if ((i & 3) == 0) {
+          const uint32_t ov = (uint32_t(old[i]) << 24) | (uint32_t(old[i + 1]) << 16) | (uint32_t(old[i + 2]) << 8) | old[i + 3];
+          const uint32_t nv = val(g, 4);
+          if (ov == 0 && nv == 1) cands.push_back({g, 4, 0});
+          if (ov == 0 && nv == 0x3F800000u) cands.push_back({g, 5, 0});
+        }
+      }
+      o += sp.size;
+    }
+    g_before.clear();
+    g_before.shrink_to_fit();
+    REXLOG_INFO("sc5 dbg: cheat at {}: {} candidates went 0 -> 1", ff, cands.size());
+  }
+  if (ff == at[2]) {
+    size_t k = 0;
+    for (Cand& c : cands) { c.c = val(c.a, c.w == 5 ? 4 : c.w); if (num(c.c, c.w) == 1) cands[k++] = c; }
+    cands.resize(k);
+    REXLOG_INFO("sc5 dbg: cheat at {}: {} still 1", ff, cands.size());
+  }
+  if (ff == at[3]) {
+    int shown = 0;
+    for (const Cand& c : cands) {
+      const uint32_t v = val(c.a, c.w == 5 ? 4 : c.w);
+      if (num(v, c.w) == 2 && shown++ < 400) REXLOG_INFO("sc5 dbg: cheat {:08X} w{} 1 -> 2", c.a, c.w);
+    }
+    REXLOG_INFO("sc5 dbg: cheat at {}: {} went 1 -> 2", ff, shown);
+    cands.clear();
+  }
+}
+
 // end of each frame, main thread: arms the watch for the next frame when it is in the window
 void OnFrameEnd() {
+  Cheat();
   Peek();
   Dumps();
   if (!WatchInit()) return;
