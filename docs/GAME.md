@@ -63,7 +63,7 @@ main menu (`ready`) in 41 s.
 | `rng.cpp` | the game's random number generators; the visual systems' draws kept apart from the fight's (below) |
 | `net/netplay.cpp` | online play for two games over UDP with rollback (below, "Netplay") |
 | `sound.cpp` | a rollback's sounds reconciled with the first run's: none started twice, a wrong guess's stopped (below, "Netplay"); the launcher's music, effects and voices levels (below, "Sound levels") |
-| `dlc.cpp` | the player's own downloadable content where the SDK finds it (below, "Unlocks and downloadable content") |
+| `dlc.cpp` | the player's own downloadable content where the SDK finds it; costume packs' parts in fights (below, "Unlocks and downloadable content") |
 | `link.cpp` | the launcher's side of docs\PROTOCOL.md 3: cmd.txt, status.txt (below, "The launcher's game") |
 | `autopilot.cpp` | the menus from boot to the hold point, to a VS fight with the match's picks or to Training, and back; the plain games' way to their select screen |
 | `sparring.cpp` | Online Practice: the round's clock held, health back up, at the top of every frame in sync (below) |
@@ -122,26 +122,41 @@ main menu (`ready`) in 41 s.
 
 **The player's own packages** (dlc.cpp, 2026-11-17). Build game, or `python tools/py/x360.py dlc-install <package>
 game/dlc`, lays a package out as `game\dlc\<package>\` with its files and `game\dlc\<package>.header` (its header).
-At startup the game copies each into the saves where the SDK's content manager finds marketplace content
+At startup the game puts each into the saves where the SDK's content manager finds marketplace content
 (`<saves>\0000000000000000\4E4D083D\00000002\<package>\`) and writes the SDK's record for it beside
 (`...\Headers\00000002\<package>.header`: the content record, 0x148 bytes, the package's own display name, then a
-license mask of every bit), and takes out what is not in `game\dlc` any more. Dampierre's package (LIVE,
-"DLC01:DAMPIERRE", one 53-byte file, `index_01_X360.dat`) puts him on the select screen. Nothing else unlocks paid
-content.
+license mask of every bit), and takes out what is not in `game\dlc` any more. A package's files go there as hard
+links to the ones in `game\dlc` (2026-11-20: a costume pack's data is up to 120 MB, and every online game starts from
+fresh saves in its session folder, the launcher keeping 30 of those), copies only when the saves are on another
+drive (the log says so); a file already there stays when it is that file or a copy of it as it is (size and time),
+and one the package no longer has goes. Dampierre's package (LIVE, "DLC01:DAMPIERRE", one 53-byte file,
+`index_01_X360.dat`) puts him on the select screen. Nothing else unlocks paid content.
 
-**A 360 DLC package is a key.** Everything it grants is on the disc; the package holds one index file,
-`index_NN_X360.dat`, read by `sub_82388990` (header) and `sub_82388760` (entries), all big-endian:
+**A 360 DLC package is a key, and data.** The package holds one index file, `index_NN_X360.dat`, read by
+`sub_82388990` (header) and `sub_82388760` (entries), all big-endian:
 
-    u32 version (1, never 0)   u32 ids (all entries')   u32 strings size, the strings (360: one zero byte)
+    u32 version (1, never 0)   u32 ids (all entries')   u32 strings size, the strings (a zero byte first)
     u16 slots   u16 entries    each entry: u16 group, u16 slot (< slots), u8, u16 n1 + n1 u16 (a set: its items'
-    slots), u16 FFFF, u16 0 (or a kind and number for an unlock that is not a release id), u16 n2 + n2 u16 (release
-    ids), u32 a string offset (0), u8 flag, u64 offer (0), u32 license bits (1: bit 0 of the package's license mask)
+    slots), u16 archive, u16 file (FFFF, 0: none; else a file of the disc that the entry's file replaces), u16 n2 +
+    n2 u16 (release ids), u32 the offset of the name of the entry's file in the package (0: none), u8 flag, u64 offer
+    (0), u32 license bits (1: bit 0 of the package's license mask)
 
-The DLC manager (table 0x8276F430: state at +8, at +40 an array of 30 package objects of 344 bytes, their count at
-+44) names its objects DLC00 to DLC29 and takes an installed package into the object whose name its display name
-contains (`wcsstr`): "DLC01:DAMPIERRE" is DLC01. An entry is granted when its license bits meet the package's license
-mask (the object's +340; bits 0: always), and `sub_82385F48` (once the table's state is 7 to 11) finds a release id
-among the granted entries' n2 ids.
+The DLC manager (table 0x8276F430, vtable 0x820D2394: state at +8, at +40 an array of 30 package objects of 344 bytes,
+their count at +44) names its objects DLC00 to DLC29 and takes an installed package into the object whose name its
+display name contains (`wcsstr`): "DLC01:DAMPIERRE" is DLC01. It mounts the first package of each object as `DLCnn:`
+(any other of the same group only for its license mask, as `licence_drive`), reads `DLCnn:index_nn_X360.dat`, and for
+each entry with a file name takes the size of `DLCnn:<name>` (sub_82355D78) into the entry (+0x14, 48-byte entries
+from the object's +0x1C, by slot) and marks it (+0xD bit 0x80); an empty name gives the harmless `NtCreateFile FAILED:
+path='DLCnn:\'` lines of the log. An entry is granted (bit 0x40) when its license bits meet the package's license mask
+(the object's +340; bits 0: always), and `sub_82385F48` (once the table's state is 7 to 11) finds a release id among
+the granted entries' n2 ids. The files: a granted entry with an archive below 15 replaces that file of that archive
+(`sub_823864C8`, slot 9: a std::map per archive at the table's +0x70; a unique insert, objects in order, so **the
+lowest group's** copy of a file wins); every file request of the game goes through `sub_823546D8`, which sends a
+replaced one to archive 14 with the entry's handle (group << 16 | slot), whose size (`sub_82386180`) and path
+(`sub_82386080`, slot 10 `sub_82387328`: `DLCnn:<name>`) come from the entry; the file is read whole, as it is (no
+CRI compression). A created character's downloadable models, ModelData 0x7Fggss00, load the same way: group gg's
+entry ss. The archives: 0 cpudata, 1 cdata, 2 stage, 3 motion, 4 weapon, 5 creation, 6 human, 7 voice, 8 dna, 9
+text, 10 demo, 11 patch (title update 1's `patch.cpk`), 14 the DLC (the table at 0x82743438, 24 bytes each).
 
 **The player's PS3 DLC** (`tools\py\ps3dlc.py`, 2026-11-17). The PS3 game's packs are the same keys: a group's index
 (`USRDIR/DLCnn/index_nn_PS3.edat`) has the same entries, with a PS3 tail (the content id's and the license file's
@@ -162,6 +177,61 @@ published 0.1.1 takes them with the owner's 360 Dampierre package as it takes th
 12 packages installed, the same index files as before, the game at its main menu in 41 s with all 12 listed). Only DLC equipment for
 created characters, music and Dampierre: nothing a versus pick on the select screen changes but Dampierre, whom an
 online match allows only when both players have him.
+
+**The costume packs' data** (2026-11-20). DLC02 to DLC04's parts are on the 360 disc; DLC06 to DLC13's (some 28
+packs: Active Wear, Ancient Armor, Bridal, Classic Costumes, Dark Warrior, Hairstyles, Headgears, Maid, Modern, School
+Uniforms, Sexy, Skeleton, Tekken, Valkyrie...) are not. On PS3 they come in the group's free catalog pack ("Soul
+Calibur 5 - Cepheus Compatibility Pack 1" to 8, `EP0700-BLES01250_00-DLCSC5CATALOG001` to 008) as
+`USRDIR/DLCnn/dat.cpk` (12 to 67 MB): an ID-only CRI archive (an ITOC), CRILAYLA-compressed files, **file id = index
+slot**: slot 0 a small table, slot 1 the group's icons, each costume part (a bundle: NMD model, NTP3 textures, NDP3
+meshes), and 13 entries that replace files of the disc, the same in every group: creation 1 (the parts tables,
+whose "scrambled text" lists every parts set), cdata 381 to 384 (the parts' icon atlases), patch 8 to 15 (their names,
+8 languages). Each group's tables list its own parts and every lower group's (DLC13's are the biggest), and the game
+keeps the lowest group's: with every package carrying them, only DLC06's parts showed (105 models); with them in
+DLC13's alone, all eight groups' (644 models, 323 downloadable parts sets). So the tool now also reads the catalog
+packs' `dat.cpk`, adds to each costume group's package the group's own entries without a license (slots 0 and 1) and,
+in the highest group it writes, the 13 replacing ones; converts each chosen entry's file to the 360's formats
+(below), names it in the index (`NNN.dat`, the slot) and puts it in the package. Packages up to 120 MB need STFS
+hash tables of more than one level (the tool writes up to three, the file table over several blocks, the hashes as a
+console's); the launcher and `x360.py` read them (a test package of 150 MB and 71 files read back byte for byte). The
+CRILAYLA decompression is plain Python (about 10 MB/s): with the owner's packs, 590 MB in 68 s. **Not done: the
+names** of the parts the DLC adds (Creation shows them with an empty name row). They are in the replacing patch 8 to
+15 (a text file per language, as patch 0 to 7 and text 96 to 103 are: English first; the PS3 disc has no patch
+archive, so there only the DLC has them), which this game never reads: a trace of every file request from boot into
+Creation's equipment found text 424 and patch 0 at boot (frame 6, 12, before the DLC manager's file map is there),
+text 192 and 40 for the menus, text 96 at Creation (its names), the DLC's tables and icons (read from the package),
+and no patch 8 to 15 by id or by path. The text files are scrambled with the same scheme on both platforms (text 16
+and 17 identical, text 290 two bytes apart where the wording is). How the 360's own compatibility packs named the
+parts is not known yet.
+
+**PS3 data on the 360.** The PS3 and 360 discs have the same files by id (CREATION.CPK and creation.cpk: 1850), so each
+rule was read off the pairs and checked on all of them (creation, cdata, text, weapon): the PS3 file converted must be
+the 360's byte for byte. A bundle (u32 count, count + 1 offsets) converts part by part, sizes unchanged. **Textures**
+(Namco NUT, NTP3 -> NTXR): the magic; per texture the pixel format, 0, 1, 2 (DXT1, 3, 5) kept with every 16-bit word
+of the data swapped, 14 -> 19 and 17 -> 20 (32-bit, cube maps too) with the data as it is; headers and tails the same;
+no tiling. **Meshes** (Namco NUD, NDP3 -> NDXR): the magic; each material's alpha test (+0x0E, GL's 0x0200 + n -> n)
+and cull mode (+0x12: GL_BACK 0x0405 -> 2, GL_FRONT 0x0404 -> 6); each material texture's sampler (+0x0C, +0x0D wrap
+1 -> 0, 2 -> 1, 3 -> 2; +0x0E 3 -> 2; +0x0F magnification 1 -> 0, 2 -> 1; +0x10 GCM minification with its mip mode ->
+the 360's minification and mip filter, 1 -> 0 2, 2 -> 1 2, 4 -> 1 0, 6 -> 1 1; +0x14 LOD bias 00001F00 -> -1.0f); u8
+vertex colours byte-reversed (skinned: at the vertex clump's start; else after the position and normals, 20 or 36);
+the rest the same. **Models** (NMD, both versions: the 360 disc itself has 1354 `NMD\x03`), tables and text: the same.
+Creation: 1830 of 1850 files byte for byte; 16 models of two old material types (0x00, 0x08) differ only in sampler
+byte +0x0E (4 on the 360 where the rule gives 2, which the PS3 file does not tell); 4 (579, 611, 1242, 1287) are other
+revisions on the 360 (material values retuned, vertices exported again, a texture replaced, the model's stamp). The
+DLC uses textures 0, 1, 2, 17, materials 0x28 and 0x24, vertex formats the discs have, and the tool refuses anything
+else rather than guess. cdata and text also differ by platform (the UI's tables and shaders, "PlayStation" wording),
+none of which the DLC replaces but the icon atlases, which convert byte for byte.
+
+**Downloadable parts in a fight.** Creation marks a record whose parts sets use a 0x7F model (record byte 15,
+`isDLCModelUsedFlag`, `sub_822306E8`); `sub_82220B50` copies the mark into the creation manager's entry (+0x34D8),
+and a fight's setup of the character (`sub_82147C70`, 28 callers) then swaps it for a template of its style in plain
+clothes (`sub_822958C8` mode 1: the style, body, colours, names and weapon kept). The game does that for every such
+character, the data installed or not, offline and online (seen: the costume on the select screen's card, plain
+clothes in the fight). A midasm hook (`Sc5DlcFighterModels`, dlc.cpp) takes the mark as clear when every 0x7F model
+the record wears at any break level has its file on this PC (the manager's entry, bit 0x80): the character fights as
+created. Online both games decide alike, since such a character is only picked when the two games' downloadable parts
+are the same (creation.cpp's fingerprint): a created character in Dark Warrior and Skeleton parts fought in sync in
+two games, its costume on both screens (2026-11-20).
 
 The game keeps a release state for each of 7426 unlockable things (characters, stages, music, creation parts,
 titles) in a table of 4 bits each at `[[0x8273EF10]] + 0x22C248` (just past the 2.2 MB save image in the save object),

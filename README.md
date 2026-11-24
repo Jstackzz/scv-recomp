@@ -17,7 +17,10 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 - **Title update 1**: the Xbox Live package `TU_174Q21T_0000008000000.0000000000082` (from your console).
 - **Your own DLC**, if you have it: your Xbox 360 DLC packages. Paid DLC is only ever yours: nothing here unlocks it
   for anyone else. If you bought the DLC on PS3, `tools/py/ps3dlc.py` turns your own packs and licenses into Xbox 360
-  packages, which you add on Build game with any 360 ones (docs/GAME.md, "Unlocks and downloadable content").
+  packages, which you add on Build game with any 360 ones (docs/GAME.md, "Unlocks and downloadable content"). For the
+  costume packs (Active Wear, Bridal, Dark Warrior, Maid, Skeleton, Tekken and the rest) it also needs their free
+  "Compatibility Pack" downloads, whose models and textures it converts to the Xbox 360's formats on your PC (about a
+  minute; the packages then take up to 120 MB each).
 - Windows 10 or 11, 64-bit.
 
 [docs/TARGET.md](docs/TARGET.md) lists every hash the launcher checks.
@@ -67,7 +70,8 @@ again by itself before you play.
   select screen online: original characters under the Creation slot, customized fighters (a regular fighter re-dressed
   in Creation) among their fighter's costumes. The other player's game gets the character's record and checks every
   part of it against its own game (parts, models, stickers, colours, weapon, limits) before anything loads it; one
-  with downloadable parts only plays when both players have the same ones. A ranked winner keeps theirs.
+  with downloadable parts only plays when both players have the same ones, and then fights wearing them. A ranked
+  winner keeps theirs.
 - **The launcher**: accounts, MATCH FOUND with the opponent's connection, ranked sets with 16 Soulcalibur rank
   titles, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and F3 (picture)
   reports to the server. Players who cannot reach each other play through the server's relay.

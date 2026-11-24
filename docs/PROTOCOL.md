@@ -1246,7 +1246,8 @@ it for that side. As on the console, the picture Creation took is not sent: the 
 card from the record itself. A record refused, one of another character than the pick, or one that does not come
 within 20 s ends the match there: `error player N's created character from the other PC was refused: <why>`. A created
 character with downloadable parts can be picked only when the other game's downloadable parts are the same as this
-one's (a fingerprint in the PICK packet); else A on it is held back, as for Dampierre. Every match sends the records
+one's (a fingerprint in the PICK packet); else A on it is held back, as for Dampierre. Picked, it fights wearing them in
+both games (GAME.md, "Downloadable parts in a fight"). Every match sends the records
 again; the result line names a created character `c.<checksum>` (the same in both games), which a rematch and a ranked
 set's winner pick again by that checksum. Tests: `SC5_TEST_CREATION_SLOT=<slot file>[,...]` puts whole slots (29,832
 bytes) into the first slots at the hold point, `SC5_TEST_CREATION_RECORD=<record file>` places a record as the other
@@ -1368,7 +1369,7 @@ build) it writes:
 | `disc\` | the disc's files, the dashboard update (`$SystemUpdate`) left out; a file already there with the right size is kept (a stopped extraction goes on) |
 | `disc\default.xexp` | the title update's patch, beside `default.xex` |
 | `update\patch.cpk` | the title update's other file |
-| `dlc\<package>\` | each DLC package's files, as its file table has them (`<package>`: the package's file name) |
+| `dlc\<package>\` | each DLC package's files, as its file table has them (`<package>`: the package's file name): its index, and a costume pack's data files (those `tools/py/ps3dlc.py` converts from a player's PS3 packs: up to 120 MB a package). The game links them into its saves at startup (GAME.md) |
 | `dlc\<package>.header` | the package's header (its first `header_size` bytes: the content type, title, names and license the console lists it by) |
 
 Then one more step compiles the game's code for this PC (`BuildPage::compileGame`): it runs the game folder's

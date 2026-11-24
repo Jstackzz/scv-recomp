@@ -8,4 +8,9 @@ namespace sc5::dlc {
 // (SC5_USER_DIR), with their records, and takes out what is not among them; at startup
 void Install(const std::filesystem::path& dlc_dir, const std::filesystem::path& saves);
 
+// whether every downloadable model (ModelData 0x7Fggss..: package group gg, entry ss) that the created character's
+// record at guest address `record` wears, at any break level, has its data installed (the game's DLC manager: the
+// package's entry has a file); false while the manager has not read the packages yet
+bool ModelsInstalled(uint32_t record);
+
 }  // namespace sc5::dlc
