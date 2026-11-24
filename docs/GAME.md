@@ -491,7 +491,8 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
 Adapted from MK9 Online's netplay (mk9/net/netplay.cpp), with the battle snapshots of battle.cpp in place of MK9's
 copy-on-write memory. Packets (UDP, "SC5N"): HELLO, READY (seed, words, delay), INPUT (ack, now, seen, 24 frames of
 inputs), CHECK (a frame's hash), BYE, and since 0.1.4 RSKIP (a KO's replay cut short, below), DSUMS and DBYTES (what a
-failed check says, below) and AGAIN (the round again after one, below). Tests set it from the
+failed check says, below), AGAIN (the round again after one, below) and CALL (a round's call made alike, below). Tests
+set it from the
 environment (`SC5_NET_BIND`, `SC5_NET_PEER`, `SC5_NET_SIDE`, `SC5_NET_DELAY`, `SC5_NET_LOCKSTEP`, `SC5_NET_LOG`, a
 simulated network `SC5_NET_LAG` / `_JITTER` /
 `_LOSS`); the launcher's matches from its start line (below, "The launcher's game"). Before the barrier the games
@@ -621,7 +622,9 @@ the next match (CHOICE).
   stage's data is not in yet: how far the loading had got; two games with -40.0 and -5.5 there stayed alike in all
   else), nor the two words at 0x829F55D0 that sub_8220F370 sets between rounds to a flag and a number that differs
   from game to game and run to run in the same way (Elysium against Edge Master as their next styles loaded: 1468
-  against 1477; the fights alike in all else and the next round on the same frame). Test dumps: `SC5_NET_DUMP_AT=<frames>` with `SC5_NET_DUMP_DIR` writes the snapshot
+  against 1477; the fights alike in all else and the next round on the same frame), nor (0.1.4, below, "Every
+  stage") the same two words of that list's other 15 entries, the two heap addresses at 0x829F46A8 and the word at +16
+  of each of the five effect slots at 0x829F3330. Test dumps: `SC5_NET_DUMP_AT=<frames>` with `SC5_NET_DUMP_DIR` writes the snapshot
   and its blocks at the top of those match frames as the two games end up with them (net<side>_m<match>at<frame>,
   and the raw memory kept beside it as `.raw.bin` / `.raw.blocks`): each run of such a frame keeps its top, and it is
   written once that frame's input and every one before it are known, so a wrong guess shows in neither game's files.
@@ -684,11 +687,42 @@ the next match (CHOICE).
     depends on nothing an earlier frame drew, in either game: a system of that kind nobody has met yet can no longer
     part two games for the rest of a match (within a frame the fight's draws must still not come after such a
     system's). `SC5_NET_NO_FRAME_SEED` (tests) seeds as before, where the battle's state changes only.
-  With both, stage 21's match: every one of 148 checks alike and all 6,688 frames' draws alike in the two games;
-  then every stage place (`tools/stagesweep.sh`, the results in its commit). `SC5_NET_CHECK_RESTORE=1` (tests)
-  saves the battle again right after a rollback put a frame back and logs every word of the fight the game's restore
-  left otherwise (none on stage 21: the game's restore sets that timer up anew, sub_82148C48, and the raw memory put
-  back after it has the kept value).
+  With both, stage 21's match: every one of 148 checks alike and all 6,688 frames' draws alike in the two games.
+  `SC5_NET_CHECK_RESTORE=1` (tests) saves the battle again right after a rollback put a frame back and logs every
+  word of the fight the game's restore left otherwise (none on stage 21: the game's restore sets that timer up anew,
+  sub_82148C48, and the raw memory put back after it has the kept value).
+  The same match on all 27 stage places with those two changes (`tools/stagesweep.sh`): 20 in step to the same
+  result with every check alike and every frame's draws alike; the other 7 showed four more things, none of them the
+  random numbers:
+  - **Two heap addresses in the check** (stage 2A from frame 8,550 with the rounds at 3-1, stage 18 from 6,510 at
+    2-0): the words at 0x829F46A8 and 0x829F46AC, which the stage sets late in a match, 0x41483010 in one game and
+    0x41683010 in the game whose heap lies 2 MB higher, to the match's end. Two PCs never have the same there, so any
+    match that came so far on those stages failed its next check with no rollback at all: stage 2A lost three of the
+    11 matches of 2026-11-20. Left out of the check, as the other raw pointers are (battle.cpp `KindOf`).
+  - **The stage's list** (stages 27 and 11): the 16 entries of 64 bytes at 0x829F55D0 (sub_8220F370 adds one a kind
+    of thing the stage does) each begin with a flag and a number that differ from game to game and run to run; the
+    first entry's were left out of the check on 2026-11-18, and a fight with more of the stage's doings fills the
+    next (829 against 944 from frame 810). All 16 entries' first 8 bytes are left out now.
+  - **An effect slot's number** (stages 1C and 26): five slots of 176 bytes at 0x829F3330, taken in turn; a move's
+    script makes one with a word of its fighter's (sub_82184A58, sub_821845F0), kept at the slot's +16: 1 in one game
+    and 2 in the other from frame 355 to the match's end, and 2 in both in the next run of the same match. Nothing
+    reads it in the second after but the snapshot's own save and restore (`SC5_DBG_WATCH_READS`). Left out.
+  - **A round's call not alike** (stage 22, round 3): below, "The check at a round's call".
+- **The check at a round's call** (netplay.cpp `CallCheck`, `CallSync`; 0.1.4). Outside a round's fighting the two
+  games run on neutral inputs and compare nothing, and the game itself is not the same there on two PCs: after a KO
+  a fighter's script waits on its voice (CRI's playback status, the audio's own time: sound.cpp), so the winner's line
+  and pose can start a few frames apart. Stage 22, the ring out of round 2 with rollbacks at the KO: player 1's
+  +0x2325C and +0x29D8 apart 4 frames after the KO (`SC5_NET_CHECK_ALWAYS=<n>`, tests: a check every n frames there
+  too), and at round 3's first check its timers at +0x231B8 160 against 68 and its place a hair apart; with a
+  hardware watch slowing both games it did not happen. Until now the round's first check took that for a desync. So
+  the first frame of every round's call after the first is checked like a fought frame's, and when that check fails
+  the two games say what differs (as above), agree a frame (CALL packets: the later of the two games' present ones,
+  the game behind runs on to it) and make the fight's blocks alike at its top as at the barrier, before the round is
+  fought. Nothing is put back, nothing is fought again and the players are told nothing: a pause of a round trip or
+  two during the round's call. Stage 22's match then: the call of frame 5,512 apart, 5 blocks (24 KB) made alike at
+  frame 5,561 in 0.2 s, round 3 fought from 5,631 with every check alike, 3-0 in both games. Should the call be over
+  first (a long round trip), the round's first check finds what is left and the round begins again.
+  `SC5_NET_NO_CALL_CHECK` (tests): no check there.
 - **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
   that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
   is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that
