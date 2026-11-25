@@ -7,7 +7,8 @@
 #   games\sc5\build-game.cmd      codegen + compile on the player's PC; build.ninja is the compile
 #   games\sc5\host\sc5.exe        everything but the game's code (tools\build-player-host.cmd -> dist\host)
 #   games\sc5\project\            what codegen reads: the manifest (pointing at project\xex, where build-game.cmd puts
-#                                 the player's default.xex and default.xexp), the config, the game's VERSION, and this
+#                                 the player's default.xex and default.xexp), the config, the game's VERSION, the title
+#                                 update it is built on (title-update.txt, from launcher\data\sc5.json), and this
 #                                 release's split of the functions into files (generated\default\codegen.partition.json,
 #                                 so every PC's codegen writes the files build.ninja names; sources.cmake, their list)
 #   games\sc5\player\             the headers and import libraries the game's code compiles and links with
@@ -59,6 +60,11 @@ function New-PlayerPackage {
     # the game's project: what codegen reads. The manifest reads the executable from project\xex, where build-game.cmd
     # copies the player's default.xex and default.xexp from wherever the launcher extracted them (SC5_GAME_DIR)
     Copy-Item -Force (Join-Path $root "sc5\VERSION") $proj  # the game's release, not the launcher's (sc5\CMakeLists.txt)
+    # the title update the game is built on, as the launcher's sc5.json names it: build-game.cmd refuses another one
+    # ("<default.xexp's SHA-1> <the update's number>")
+    $tu = (Get-Content -Raw (Join-Path $root "launcher\data\sc5.json") | ConvertFrom-Json).title_update
+    if ($tu.xexp_sha1 -notmatch '^[0-9a-fA-F]{40}$' -or -not $tu.number) { throw "no title_update xexp_sha1 and number in launcher\data\sc5.json" }
+    [System.IO.File]::WriteAllText((Join-Path $proj "title-update.txt"), "$($tu.xexp_sha1) $($tu.number)`r`n", [System.Text.Encoding]::ASCII)
     robocopy (Join-Path $root "sc5\config") (Join-Path $proj "config") /MIR /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed for the config" }
     $manifest = Get-Content -Raw (Join-Path $root "sc5\sc5_manifest.toml")

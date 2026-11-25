@@ -30,14 +30,16 @@ struct GameMode {
     bool picksInGame() const { return characterSelect == QLatin1String("in_game"); }
 };
 
-// the title update the build is made with: a LIVE package of the title's whose default.xexp turns the disc's
-// default.xex (fromVersion) into toVersion; its other files go to the update folder
+// a title update of the game: a LIVE package of the title's whose default.xexp turns the disc's default.xex
+// (fromVersion) into toVersion; its other files go to the update folder
 struct TitleUpdate {
-    QString name;          // "Title Update 1"
+    int number = 0;        // 3: title update 3, as the console's list of the game's updates counts them
     QString package;       // the file name Xbox Live gave it (TU_...), shown to the player
+    QString packageNote;   // how to read that name ("it ends in the capital letter O and the number 2"), or empty
     QString xexpSha1;
     QString fromVersion, toVersion;
     QHash<QString, QString> files;  // the package's files the build needs (name -> SHA-1, empty: any)
+    QString name() const;           // "title update 3", for the middle of a sentence
 };
 
 struct Game {
@@ -52,7 +54,8 @@ struct Game {
     QString xexVersion;  // its version, "0.0.0.2"
     QString discName;    // what the disc image is called (Redump), for the player
     QString discSha1;    // the whole image's SHA-1 (Redump), not checked (8 GB), named in the help
-    TitleUpdate update;
+    TitleUpdate update;               // the one the build takes (both players of a match must have the same)
+    QList<TitleUpdate> olderUpdates;  // those it took before (title update 1 until 0.1.5), named when a player has one
     QString notes;
     QList<GameMode> modes;
     QHash<QString, QList<Character>> rosters;
@@ -70,6 +73,14 @@ struct Game {
     // region, version or a modified copy, none of which the build takes (both players of a match must run the same
     // code). For the player.
     QString otherRelease(const QByteArray& xex) const;
+    // which title update a default.xexp is, by its SHA-1: the one the build takes, an older one, or null
+    const TitleUpdate* knownUpdate(const QString& xexpSha1) const;
+    // what to tell a player whose title update is not the one the build takes, in plain words: `what` says what they
+    // have ("The file you chose, TU_..., is"), then which update it is (known by `xexpSha1`, else by the version
+    // `toVersion` it makes the game), that SCV Online needs the other one, its file's name and where to choose it
+    QString otherUpdate(const QString& what, const QString& xexpSha1, const QString& toVersion) const;
+    // the end of that: SCV Online needs this update, what its file is called, where a player has it
+    QString updateNeeded() const;
 };
 
 class GameData {

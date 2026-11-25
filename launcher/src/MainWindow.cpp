@@ -9,6 +9,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -187,15 +188,29 @@ MainWindow::MainWindow(const LaunchOptions& opts, QWidget* parent)
         for (int s : {2, 5, 10, 20}) QTimer::singleShot(s * 1000, this, [] { Updater::cleanUp(); });
     // an update that changed the game (sc5.exe, or the game's code): it is built again on Build game before anything
     // starts it (as MK9 Online's launcher)
+    // A game built on another title update than this release's (title update 1 until 0.1.5, title update 3 since) is
+    // not built again from it: Build game asks for the new one (BuildPage::compileGame), and nothing starts the
+    // old game meanwhile (GameProcess::start).
     QTimer::singleShot(1500, this, [this] {
-        if (!paths::isPackage() || !GameProcess::needsRebuild(gameId_)) return;
-        applog::write(QStringLiteral("build %1: built from another release than this one's: building again").arg(gameId_));
-        showNotice(tr("This update changed the game itself: it is being put together again on Build game (once, a "
-                      "few minutes at most)."),
-                   false);
+        if (!paths::isPackage() || !QFileInfo::exists(cfg::gameExe(gameId_))) return;
+        const bool rebuild = GameProcess::needsRebuild(gameId_);
+        const QString problem = GameProcess::updateProblem(gameId_);
+        if (!rebuild && problem.isEmpty()) return;
         for (int i = 0; i < pages_.size(); i++)
             if (pages_[i] == build_) selectPage(i);
-        build_->rebuild();
+        if (!problem.isEmpty()) {
+            applog::write(QStringLiteral("build %1: the title update in place is not this release's: asking for it").arg(gameId_));
+            const Game* g = GameData::instance().game(gameId_);
+            showNotice(tr("SCV Online now needs %1. Choose it on Build game, step 2: the game is then built again.")
+                           .arg(g ? g->update.name() : tr("another title update")),
+                       true);
+        } else {
+            applog::write(QStringLiteral("build %1: built from another release than this one's: building again").arg(gameId_));
+            showNotice(tr("This update changed the game itself: it is being put together again on Build game (once, a "
+                          "few minutes at most)."),
+                       false);
+        }
+        build_->rebuild();  // with the wrong title update in place: the window that asks for the right one
     });
     connect(server_, &ServerClient::message, this, &MainWindow::onServerMessage);
     connect(server_, &ServerClient::connectionError, this, [this](const QString& text) {

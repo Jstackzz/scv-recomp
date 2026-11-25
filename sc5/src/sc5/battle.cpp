@@ -62,8 +62,10 @@ constexpr uint32_t kThrowObject = 0x5BE90;  // in each player's object: a throw'
 const Region kRaw[] = {
     {0x8294AC10, 0x5DB30}, {0x829A8740, 0x5DB30}, {0x8277B808, 0x200}, {0x82784A80, 0x100},
     {0x82784B80, 0xB40},   {0x828C75C0, 0x6A8},   {0x82910CB0, 0x3E0}, {0x82938574, 0x98},
-    {0x828FC310, 4},       {0x835C79B4, 4},       {0x82A29520, 0x3760},
+    {0x828FC310, 4},       {0x835C79B4, 4},       {0x82A29520, 0x3770},
 };
+// (Title update 3 put 16 bytes more into the AI's region, between what title update 1 had at 0x82A186C0 and at
+// 0x82A187A0: it is 0x3770 bytes now, to where the allocator's control block begins, as before.)
 // (Not the three counters of the game's frames on the GPU, though they too start at boot: 0x8282CE1C, the low word of
 // the frame sync's count of frames presented (0x8282CD80 + 152, sub_82552A28), 0x82821A14 (sub_82560AD8) and
 // 0x8282D49C (sub_82553960). Only the present (sub_824A3988, never in a frame run again) moves them, so each rollback
@@ -251,6 +253,25 @@ uint32_t Save(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   sub_8215A298(ctx, base);
   g_recording = 0;
   g_blocks[stream].swap(g_recorded);
+  // SC5_DBG_SNAP_BLOCKS=<least size>: the static blocks of that size or more that a save wrote (where each player's
+  // pose buffers are, which the game puts on round addresses), the first 12 times the list differs from the last
+  static const uint32_t least = [] {
+    const char* v = std::getenv("SC5_DBG_SNAP_BLOCKS");
+    return v && *v ? uint32_t(std::strtoul(v, nullptr, 0)) : 0u;
+  }();
+  if (least) {
+    static std::string last;
+    static int shown = 0;
+    std::string list;
+    for (const Block& b : g_blocks[stream])
+      if (b.size >= least && b.source >= 0x82000000u && b.source < 0x84000000u)
+        list += fmt::format(" {:08X}+{:X}", b.source, b.size);
+    if (list != last && shown < 12) {
+      shown++;
+      last = list;
+      REXLOG_INFO("sc5 dbg: snapshot blocks (frame {}):{}", sc5::frame::Count(), list);
+    }
+  }
   ctx.lr = lr;
   if (RawEnabled()) KeepRaw(ctx, base, stream);
   sc5::dbg::QuietWatch(false);
@@ -386,17 +407,26 @@ bool InKoReplay() {
 constexpr uint32_t kPlayerPointers[] = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04,
                                         0x5CEB4, 0x5D2B4, 0x5D30C, 0x5D364, 0x5D3BC, 0x5DACC, 0x5DAD0};
 
-// Each player's pose buffers by their own addresses: the game puts them on round addresses (the pose's three on a
-// multiple of 0x100, the drawing's three on one of 0x80), so they lie at +0x3190 and +0x1B310 of player 1's object but
-// at +0x3160 and +0x1B360 of player 2's. Until 0.1.4 player 1's offsets were used for both: the first 0x30 bytes of
-// player 2's pose (whichever of the three was current) and the last 0x50 of its third buffer for the drawing were
+// Each player's pose buffers by their own addresses: the game puts them on round addresses, the next multiple of 0x80
+// from +0x3160 of the player's object (the pose's three, 0x8000 apart) and from +0x1B310 (the drawing's three, 0x800
+// apart). Under title update 1 that was +0x3190 and +0x1B310 of player 1's object but +0x3160 and +0x1B360 of player
+// 2's; under title update 3, where the objects lie elsewhere, +0x3170 and +0x1B370 of player 1's and +0x31C0 and
+// +0x1B340 of player 2's (SC5_DBG_SNAP_BLOCKS: the blocks a save writes). Until 0.1.4 player 1's offsets were used
+// for both: the first 0x30 bytes of player 2's pose (whichever of the three was current) and the last 0x50 of its third buffer for the drawing were
 // hashed as the fight, and its block of that buffer was the one block in the barrier's sync that only one game had.
 // Two games on one PC had those bytes alike; two PCs did not for a second or so after an intro or a winner's pose
 // (cloth, secondary bones), so the first checks of a round failed: every match of the first two pairs of players on
 // 0.1.4 went back to its round's start at frame 120, some three times and then ended (2026-11-24: 170 reports, each
 // with the snapshots "laid out apart" and "1 blocks (2048 bytes)" differing at the sync).
-constexpr uint32_t kPoseBuffers[2] = {0x8294DDA0, 0x829AB8A0};   // + k * 0x8000, 6208 bytes each
-constexpr uint32_t kDrawnBuffers[2] = {0x82965F20, 0x829C3AA0};  // + k * 0x800, 0x800 bytes each
+constexpr uint32_t Round80(uint32_t a) { return (a + 0x7Fu) & ~0x7Fu; }
+// + k * 0x8000, 6208 bytes each
+constexpr uint32_t kPoseBuffers[2] = {Round80(kPlayerObjects[0] + 0x3160), Round80(kPlayerObjects[1] + 0x3160)};
+// + k * 0x800, 0x800 bytes each
+constexpr uint32_t kDrawnBuffers[2] = {Round80(kPlayerObjects[0] + 0x1B310), Round80(kPlayerObjects[1] + 0x1B310)};
+static_assert(kPoseBuffers[0] == 0x8294DD80 && kPoseBuffers[1] == 0x829AB900, "as a save's blocks showed them");
+static_assert(kDrawnBuffers[0] == 0x82965F80 && kDrawnBuffers[1] == 0x829C3A80, "as a save's blocks showed them");
+
+uint32_t DrawnBuffer(int player, uint32_t k) { return kDrawnBuffers[player & 1] + (k % 3) * 0x800; }
 
 Kind KindOf(uint32_t source) {
   for (int p = 0; p < 2; p++) {

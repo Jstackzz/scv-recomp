@@ -63,6 +63,12 @@ public:
     // a game built from another release than the package's (games\sc5\built.txt, which build-game.cmd copies from
     // project\VERSION, differs from project\VERSION): an update changed the game, and it must be built again
     static bool needsRebuild(const QString& gameId);
+    // what is wrong with the title update in the game folder (disc\default.xexp, update\patch.cpk) for this release,
+    // for the player: title update 1 where SCV Online now needs title update 3, say. Empty when it is the right one,
+    // and when there is no default.xexp at all (nothing extracted yet: the game's files are simply not there)
+    static QString updateProblem(const QString& gameId);
+    // what the player does about it: "Open Build game, choose title update 3 in step 2 ..."
+    static QString updateFix(const QString& gameId);
 
 signals:
     void statusChanged(const QString& line);

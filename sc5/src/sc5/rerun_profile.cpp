@@ -1,6 +1,6 @@
 // The game's tasks timed one by one in frames run again (SC5_TEST_RERUN_PROFILE=1, tests).
 //
-// The step (sub_824A25C0) walks the game's task tree (the manager at [0x835A3850]; its first task at +12; a task's
+// The step (sub_824A25C0) walks the game's task tree (the manager at [0x835B73D0], formed as 0x835B73C0 + 0x10; its first task at +12; a task's
 // parent at +16, its links at +8 and +12) and calls each task's methods through its vtable (slots +0, +8, +12, +16,
 // +24), which the recompiled code dispatches through the SDK's function table. Every method of the classes found in
 // the tree has its table entry replaced with a wrapper of its own (a pool of template instances, one per method),
@@ -170,7 +170,7 @@ void Scan() {
     todo.pop_back();
     if (!Pointer(n) || !Pointer(n + 16) || !seen.insert(n).second) continue;
     const uint32_t vt = Rd(n);
-    if (vt < 0x82000000u || vt >= 0x82A13BA8u || !Pointer(vt) || !fd->GetFunction(Rd(vt + 12))) continue;
+    if (vt < 0x82000000u || vt >= 0x82A00000u || !Pointer(vt) || !fd->GetFunction(Rd(vt + 12))) continue;
     tasks++;
     if (g_vtables.insert(vt).second) {
       for (uint32_t slot : kSlots) {

@@ -1692,7 +1692,7 @@ void SetFrameInputs(uint32_t f) {
   // moment, at every check. The fights stay alike, and so must the checks.
   static const int pose_noise = std::getenv("SC5_TEST_POSE_NOISE") ? std::atoi(std::getenv("SC5_TEST_POSE_NOISE")) : 0;
   if (pose_noise && pose_noise == g_slot + 1 && !g_cfg.watch)
-    for (uint32_t k = 0; k < 3; k++) Put32(0x829C3AA0u + k * 0x800 + 0x7F0, 0xC0000000u | f);
+    for (uint32_t k = 0; k < 3; k++) Put32(battle::DrawnBuffer(1, k) + 0x7F0, 0xC0000000u | f);
   if (desync_at && f == desync_at && !g_cfg.watch && (!desync_side || desync_side == g_slot + 1)) {
     const float hp = FighterHealth(0) - 1.0f;
     uint32_t v;

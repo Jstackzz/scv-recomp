@@ -1,9 +1,10 @@
 # SCV on PC: the game side
 
-Soulcalibur V (Xbox 360, title 4E4D083D, `default.xex` 0.0.0.2 with title update 1, docs\TARGET.md) recompiled
+Soulcalibur V (Xbox 360, title 4E4D083D, `default.xex` 0.0.0.2 with title update 3, docs\TARGET.md) recompiled
 to native x64 code with the ReXGlue SDK (docs\SDK.md). This page covers what the game executable (`sc5\`) adds on
-top of the recompiled code, and what the game itself does that matters for it. Every address is for the TU1 image
-(`orig\analysis\default_tu1.bin`, written by `tools\imagedump`).
+top of the recompiled code, and what the game itself does that matters for it. Every address is for the title update 3
+image (`orig\analysis\default_tu3.bin`, written by `tools\imagedump`). Until 0.1.5 the game was built on title update
+1: "From title update 1 to title update 3" at the end says what moved and how the addresses were carried over.
 
 ## Build and run
 
@@ -93,7 +94,8 @@ main menu (`ready`) in 41 s.
   offline (flag 2) XUIDs; the SDK returned the same XUID for both, so a local profile looked like it had changed and
   the countdown restarted for ever. The SDK now returns no online XUID for a profile not signed in to LIVE.
 - **The first START asks to create save data** (a system message box, "No save data found ... [Create Save Data]
-  [Select Storage Device]", raised by `sub_8249FA48(task, 2, 14, 18)` from 0x824911C4 in the save task): answered
+  [Select Storage Device]", raised by `sub_8249FA48(task, 2, 14, 18)` from 0x824A0550 in the save task
+  `sub_824A0390`; title update 1 had it at 0x824911C4): answered
   with Create Save Data (system_ui.cpp, by the call site, so in every language). The save lives in
   `<user>\B13EBABEBABEBABE\4E4D083D\00000001\SC5SaveData`.
 - **Quit with a bad disc screen at the main menu**: the game looks up XamMediaVerification* by ordinal and checks
@@ -348,8 +350,9 @@ whose slot 1 is its update. The ids and creators:
 The Title sequence (vtable 0x820CF930, update sub_8233C920) keeps its state at +0xD4: 4 waits for START, 5 waits
 for the user manager to settle, 6-7 open the save, then AstralHome. It returns to Attract after 1800 frames idle.
 
-Menu paths with a fresh save (the autopilot will follow them): Title, START; AstralHome opens on Story with a
-first-visit window (A closes it); Offline Play is two up; in it VS Battle is one down from Quick Battle; then the
+Menu paths with a fresh save (the autopilot follows them): Title, START; AstralHome shows title update 3's notice of
+its changes, then the first-visit window (A closes each), then opens on Story; Offline Play is two up; in it VS Battle
+is one down from Quick Battle; then the
 character select (each player picks with A, then a costume), the stage select (A on Random) and the fight.
 
 ## The battle (what rollback will build on)
@@ -521,8 +524,8 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
 - n = 1 and n = 4: every battle event on the same frame as without rollback (the round's KO at 9935), and no
   difference in the fight: the players' state, the battle's, the random numbers. What differs is cosmetic, from heap
   objects rollback cannot put back:
-  - **Two leaf bones of each pose** (bytes +3923 to +4083 of 6208; the pose is in three buffers taken in turn, each
-    player's +0x3190, +0xB190, +0x13190, and the snapshot keeps the current one), moved by the forces on cloth and
+  - **Two leaf bones of each pose** (bytes +3923 to +4083 of 6208; the pose is in three buffers taken in turn,
+    0x8000 apart from about +0x3160 of each player's object, and the snapshot keeps the current one), moved by the forces on cloth and
     hair: sub_82193EB0 sums, for each player, a manager's list of forces (heap: the manager 336 bytes, sub_82193DF0;
     an animated wind and a force by the floor under the player, 400 bytes each, sub_821942C0; gusts, 576 bytes,
     sub_821949F8 at random intervals) into the player's +0x1CE30, which the pose's second stage (sub_822CA898) takes
@@ -832,11 +835,14 @@ the next match (CHOICE).
   first check (frame 120), often again at 210 and 300, some three times and then ended; rounds' calls were made alike
   at almost every round; one match failed in the middle of a round. Health was the same in both games every time, and
   the barrier's sync kept finding "1 blocks (2048 bytes)" apart. The game puts each player's pose buffers on round
-  addresses (the pose's three, 6,208 bytes, on a multiple of 0x100; the three the pose fills for the drawing, 0x800
-  bytes, on one of 0x80), so they lie at +0x3190 and +0x1B310 of player 1's object and at +0x3160 and +0x1B360 of
-  player 2's (the snapshot keeps the current one of each: 0x8294DDA0 / 0x82955DA0 / 0x8295DDA0 and 0x82965F20 /
-  0x82966720 / 0x82966F20 for player 1, 0x829AB8A0 / 0x829B38A0 / 0x829BB8A0 and 0x829C3AA0 / 0x829C42A0 /
-  0x829C4AA0 for player 2, `SC5_NET_DUMP_AT` of six frames running). The check left out player 1's offsets in both
+  addresses: the pose's three (6,208 bytes, 0x8000 apart) from the next multiple of 0x80 after +0x3160 of the
+  player's object, the three the pose fills for the drawing (0x800 bytes each) from the next after +0x1B310. Under
+  title update 1 (the objects at 0x82937070 and 0x82994BA0) that was +0x3190 and +0x1B310 of player 1's object and
+  +0x3160 and +0x1B360 of player 2's (`SC5_NET_DUMP_AT` of six frames running; the snapshot keeps the current one of
+  each). Under title update 3 it is +0x3170 and +0x1B370 of player 1's and +0x31C0 and +0x1B340 of player 2's:
+  0x8294DD80 / 0x82955D80 / 0x8295DD80 and 0x82965F80 / 0x82966780 / 0x82966F80 for player 1, 0x829AB900 /
+  0x829B3900 / 0x829BB900 and 0x829C3A80 / 0x829C4280 / 0x829C4A80 for player 2 (`SC5_DBG_SNAP_BLOCKS`), and
+  battle.cpp works them out by that rule. The 0.1.4 check left out player 1's offsets in both
   objects: the first 0x30 bytes of player 2's pose and the last 0x50 of its third buffer for the drawing were hashed
   as the fight. Two games on one PC have those bytes alike, which is why every sweep here passed; two PCs do not for a
   second or so after an intro, a winner's pose or a hitch (cloth and secondary bones, worked out by worker threads),
@@ -913,7 +919,7 @@ the next match (CHOICE).
   a fighter) 1.16 ms, of which their pose (sub_822C9B38) 1.09 ms. Most of the pose's main-thread time is handing its
   bones to worker threads, about 54 jobs a fighter (sub_822CBA00: a 16-slot queue behind a lock and two events); the
   cloth and hair (sub_822CA898) are 0.04 ms. Left out of every frame run again (frame.cpp), the fight stayed byte for
-  byte the same but for the poses and a second buffer the pose fills for the drawing (each player's +0x1B310, three of
+  byte the same but for the poses and a second buffer the pose fills for the drawing (from about each player's +0x1B310, three of
   0x800 bytes taken in turn; now counted as pose, not in the checks' hash), and the KO came on the same frame: a frame
   run again 0.64 ms, a 4-frame rollback 3.1 ms on average (7.4 before). The next tasks (sub_82123400, a fighter's,
   0.15 ms; sub_8213B858, 0.12 ms) change the fight when left out: they stay. That held for Siegfried against
@@ -1187,7 +1193,17 @@ and `error` go to status.txt. `SC5_LOG` names the game's log, `SC5_CACHE_DIR` th
 without `SC5_NET`, `SC5_TRAINING=1` and `SC5_VERSUS=1` make a plain game for practice or the offline versus (below).
 
 **The menus** (an empty save, as every online session has): Title, START (the logos and the opening movie skip on
-START too); AstralHome opens with a first-visit window that A closes (15 s in), the cursor on Story: the hold point.
+START too); AstralHome shows two windows that A closes, title update 3's notice of its changes ("The following changes
+and additions have been made with the title update: Added Cepheus Store ... Character balance ...") and then the
+first-visit window, and opens its menu with the cursor on Story: the hold point. Each window takes A only some seconds
+after it comes (the notice once its text has scrolled and "Close" shows: an A 2 s after it came was not taken, one at
+6 s was), so the autopilot goes by the main menu's own state, not by time: AstralHome's update (sub_82333088, slot 1
+of its vtable 0x820CF990) switches on the object's +0x438. A fresh save goes 2, 3, 4 as it comes in, 21 (the notice
+made), 22 (the notice up, until A), 23 (the notice's flag set in the save; without the first visit's flag, 18), 18
+(the first-visit window made), 19 (up, until A), 20, then 6, the menu itself; a save that has seen both goes from 4
+to 6, and a save from title update 1 days shows the notice alone. The autopilot presses A on 22 and 19 once they
+have been up 2 s and every 2 s after until they go, and takes the menu once 6 has lasted a second (with a fresh save
+about 10 s after AstralHome came, 2026-11-25). Title update 1 had no 21 to 23 (its 21 to 29 are 24 to 32 now).
 AstralHome's creator (sub_82335A68) makes a 1088-byte object; its menu (at +8, vtable 0x820BF47C) keeps the depth at
 +0x88 (0 the top level, 1 Offline Play's submenu), the top level's cursor at +0x94 (Offline Play 0, Story 2) and the
 submenu's at +0x98 (Quick Battle 2, VS Battle 3); UP lowers them. Back from VS Battle the game opens the submenu again,
@@ -1308,6 +1324,12 @@ to the result, also with 60 ms each way (rollbacks of at most 2 frames, 4.5 ms o
 over 20 ms); Rematch in sync; park from the result back to `ready` in 20 s, from a fight in 7 s; a second match after
 a park; quit. Elysium against Dampierre, and Xiba against Voldo with 60 ms each way and picks on the select screen: the first
 match, a rematch and the next match after a park all in sync.
+With title update 3 (2026-11-25): boot to `ready` in 32 s (the main menu's two windows closed by its state);
+picks on the select screen (`-`, the tests' players picking Siegfried in costume 2 and Mitsurugi), a lobby's choices
+(REMATCH: the game's own Rematch on the same stage; then CHARACTER SELECT: both pick again, the loser picks the stage)
+and park; Xiba against Voldo in costume 2, best of 3 (a drawn round, then between rounds), a rematch through Character
+Select, park and a second match; Online Practice (the clock held at 60, the health refilled) to its BACK; and
+`mode=practice` twice to Training's fight and back through its pause menu: all to their end, every match in sync.
 
 **The second player.** The VS menus ignore the second pad: the select (sub_82164BB8, at P1's first pick) makes the
 other side the CPU (VS settings: type 2 at +88/+92 of the select's record; the battle's player then has input mode 2,
@@ -1333,9 +1355,9 @@ player leaving for the main menu in the game is the hold point again (`ready`).
 screen and `SC5_VERSUS=1` to VS Battle's with "Player VS Player", and the autopilot stops there: the players pick.
 VS Battle's Player setting (Player VS CPU, CPU VS Player, CPU VS CPU, Player VS Player: RIGHT three times) offers
 Player VS Player only with a second user signed in, which users.cpp then signs in (a local profile, user 1); the
-select screen asks the second player to press START on their controller. With the player's own save (its
-`SC5SaveData\savedata.bin` there at start) the autopilot sets off at once; with a fresh one it waits for the main
-menu's first-visit window and closes it first. Should it get lost on the way, it stops and the game is the player's.
+select screen asks the second player to press START on their controller. Whatever the save, the autopilot closes the
+main menu's windows as they come (above, "The menus": none with the player's own save once it has seen them) and sets
+off once its menu is up. Should it get lost on the way, it stops and the game is the player's.
 
 **Online Practice** (`mode=sparring`, sparring.cpp): VS Battle has no endless clock (Round Time 30, 45 or 60), so at
 the top of every frame of the match in sync, reruns included, the round's clock (0x82949D3C: +0 the round's time, +0xC

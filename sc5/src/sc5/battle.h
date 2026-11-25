@@ -35,14 +35,16 @@ struct Block {
 // (net/netplay.cpp DumpAt writes it beside the snapshot)
 std::vector<uint8_t> RawBytes(uint32_t stream, uint32_t offset, std::vector<Block>& blocks);
 const std::vector<Block>* Blocks(uint32_t stream);
-// what a block's guest address holds: a player's pose (each player's three buffers of 6208 bytes at +0x3190, +0xB190,
-// +0x13190: cloth and secondary bones that the stage's wind moves, which rollback cannot keep exact), a heap object
+// what a block's guest address holds: a player's pose (each player's three buffers of 6208 bytes, 0x8000 apart from
+// about +0x3160: cloth and secondary bones that the stage's wind moves, which rollback cannot keep exact), a heap object
 // (effects such as the weapon's trail), the stack (values the save works out), or the fight (the players' objects
 // but their poses, the battle's state machine, the rest of the image)
 // A pointer is one of the 12 words in each player's object that the snapshot carries raw: pointers into what the game
 // loaded, the same in every run of a frame on one PC but not from one PC (or one process) to another (found by shifting
 // one game's heap: SC5_TEST_HEAP_SHIFT).
 enum class Kind { Pose, Heap, Stack, Pointer, Fight };
+// one of the three buffers of 0x800 bytes a player's pose fills for the drawing (tests write into them)
+uint32_t DrawnBuffer(int player, uint32_t k);
 Kind KindOf(uint32_t source);
 // A hash of the fight in the last save into a stream: the blocks of the fight (Kind::Fight) and nothing that differs
 // from one PC to the other or one run of a frame to its rerun. What two players' games compare (netplay's checks)

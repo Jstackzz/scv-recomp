@@ -13,7 +13,7 @@ Nothing from the game is in this repository, ever: no code, no data, no generate
 |---|---|
 | Disc | Soulcalibur V (World), Xbox 360, Redump SHA-1 `43dbb40b9ef4e5a651623ada40ed4eb2066017d5` |
 | Title | `4E4D083D`, media `165FAD4F`, disc `default.xex` version 0.0.0.2, SHA-1 `dfe4d5e1e9198bc9df6db46ddf2bdf2a5cbf3f80` |
-| Title update | TU1: LIVE package `TU_174Q21T_0000008000000.0000000000082`, `default.xexp` (delta 0.0.0.2 -> 0.0.1.2, SHA-1 `47a09662fd3fe376d283208fcd8a31eee819c736`) and `patch.cpk` |
+| Title update | Title update 3, the last one: LIVE package `TU_174Q21T_0000008000000.00000000000O2`, `default.xexp` (delta 0.0.0.2 -> 0.0.3.2, SHA-1 `e8f8eb269aed296aec32549a79b689e31cde14dc`) and `patch.cpk` (title update 1, `...0000000000082`, 0.0.1.2, until 0.1.5) |
 
 Details and how they were checked: [TARGET.md](TARGET.md).
 
@@ -22,7 +22,7 @@ Details and how they were checked: [TARGET.md](TARGET.md).
 The ReXGlue runtime loads `game:\default.xex` and, if a sibling `default.xexp` exists, applies it
 (`src/system/user_module.cpp`, as Xenia does). Codegen loads the executable through the same runtime
 (`src/codegen/codegen_context.cpp`), so with `default.xexp` beside `default.xex` the generated code *and* the
-data the game runs on are both the updated 0.0.1.2 image. The update's other file, `patch.cpk`, goes in the
+data the game runs on are both the updated 0.0.3.2 image. The update's other file, `patch.cpk`, goes in the
 folder mounted as `update:`. The builder checks the disc and the update by hash before it starts and refuses
 anything else (another region, print or update), as the Tekken Tag 2 installer does.
 

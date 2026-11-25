@@ -21,7 +21,7 @@
 
 namespace x360 {
 
-// "0.0.1.2" from a packed version (major 4 bits, minor 4, build 16, qfe 8)
+// "0.0.3.2" from a packed version (major 4 bits, minor 4, build 16, qfe 8)
 QString versionText(quint32 v);
 
 // --- disc images ------------------------------------------------------------------------------------------------
