@@ -4,7 +4,7 @@
 
 namespace sc5::hud {
 
-// The HUD's object while a fight shows one (0x829F2F98: +0 the current HUD's id, +4 the object, current while its +48
+// The HUD's object while a fight shows one (0x82A06B38: +0 the current HUD's id, +4 the object, current while its +48
 // is that id), else 0
 uint32_t Object();
 // The HUD's own count of each side's rounds won (+0x94 player 1, +0x98 player 2), which its markers show: kept and put

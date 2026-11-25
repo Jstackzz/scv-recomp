@@ -70,7 +70,7 @@ const char* PhaseName(Phase p) {
   return "?";
 }
 
-constexpr uint32_t kPlayer[2] = {0x82937070, 0x82994BA0};
+constexpr uint32_t kPlayer[2] = {0x8294AC10, 0x829A8740};
 // In each player's object, as the match's last round leaves them once the match is over (its KO going on to neither its
 // replay nor "between rounds"): +0x75C the rounds that side won, +0x764 the drawn ones (a round that runs out of time
 // even, or a double KO); +0x760 counts the lost ones. The game gives a drawn round's point to both players and ends the
@@ -217,7 +217,7 @@ bool PushScript(const char* text) {
   return true;
 }
 
-// The main menu's state: its object's menu (at +8, vtable 0x820BF434) keeps the depth at +0x88 (0 the top level, 1
+// The main menu's state: its object's menu (at +8, vtable 0x820BF47C) keeps the depth at +0x88 (0 the top level, 1
 // Offline Play's submenu), the top level's cursor at +0x94 (Offline Play 0, Story 2) and the submenu's at +0x98 (Quick
 // Battle 2, VS Battle 3); UP lowers a cursor, DOWN raises it. Back from VS Battle the game opens the submenu again on
 // VS Battle.
@@ -229,7 +229,7 @@ Home ReadHome() {
   Home h;
   const uint32_t home = game::HomeObject();
   const uint32_t menu = home ? game::ReadU32(home + 8) : 0;
-  if (!menu || game::ReadU32(menu) != 0x820BF434u) return h;
+  if (!menu || game::ReadU32(menu) != 0x820BF47Cu) return h;
   h.ok = true;
   h.depth = int(game::ReadU32(menu + 0x88));
   h.top = int(game::ReadU32(menu + 0x94));

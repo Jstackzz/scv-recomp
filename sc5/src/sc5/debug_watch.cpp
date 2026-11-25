@@ -508,7 +508,7 @@ void OnSnapWrite(uint32_t stream, uint32_t pos, uint32_t size, uint32_t source);
 void Sc5DbgSnapWrite(PPCRegister& r1, PPCRegister& r3, PPCRegister& r4, PPCRegister& r5) {
   sc5::battle::OnSnapWrite(r3.u32, Rd(r3.u32 + 4), r5.u32, r4.u32);
   static const std::vector<uint32_t> want = Positions();
-  if (want.empty() || Rd(r3.u32) != 0x820BA8B8) return;
+  if (want.empty() || Rd(r3.u32) != 0x820BA908) return;
   const uint32_t pos = Rd(r3.u32 + 4), size = r5.u32;
   for (uint32_t w : want) {
     if (w < pos || w >= pos + size) continue;
@@ -523,10 +523,10 @@ void Sc5DbgSnapWrite(PPCRegister& r1, PPCRegister& r3, PPCRegister& r4, PPCRegis
   }
 }
 
-// SC5_DBG_DLC=1: the DLC manager's package table (sub_82387868: this+8 -> +40 an array of 344-byte package objects,
+// SC5_DBG_DLC=1: the DLC manager's package table (sub_82396BC8: this+8 -> +40 an array of 344-byte package objects,
 // +44 their count; an installed package is taken by the object whose wide name at +40 its display name contains),
-// each package whose index was read (sub_82388990), and SC5_DBG_DLC_IDS=<hex>,..: the DLC check of those release ids
-// (sub_82385F48) the first times it is asked.
+// each package whose index was read (sub_82398158), and SC5_DBG_DLC_IDS=<hex>,..: the DLC check of those release ids
+// (sub_82394D40) the first times it is asked.
 namespace {
 bool DlcDebug() {
   static const bool on = [] { const char* v = std::getenv("SC5_DBG_DLC"); return v && v[0] == '1'; }();
@@ -553,18 +553,18 @@ std::vector<uint32_t> DlcIds() {
 }
 }  // namespace
 
-REX_EXTERN(__imp__sub_82385F48);
-REX_EXTERN(__imp__sub_82387868);
-REX_HOOK_RAW(sub_82387868) {
+REX_EXTERN(__imp__sub_82394D40);
+REX_EXTERN(__imp__sub_82396BC8);
+REX_HOOK_RAW(sub_82396BC8) {
   if (!DlcDebug()) {
-    __imp__sub_82387868(ctx, base);
+    __imp__sub_82396BC8(ctx, base);
     return;
   }
   const uint32_t t = Rd(ctx.r3.u32 + 8);
   REXLOG_INFO("sc5 dbg dlc: manager {:08X}, table {:08X}: state {}, {} packages at {:08X}", ctx.r3.u32, t, Rd(t + 8),
               Rd(t + 44), Rd(t + 40));
-  __imp__sub_82387868(ctx, base);
-  // the packages taken (the ids are checked once the game first asks: the manager is ready then, sub_82385F48 below)
+  __imp__sub_82396BC8(ctx, base);
+  // the packages taken (the ids are checked once the game first asks: the manager is ready then, sub_82394D40 below)
   const uint32_t n = Rd(t + 44), arr = Rd(t + 40);
   for (uint32_t i = 0; i < n && i < 64; i++) {
     const uint32_t o = arr + i * 344;
@@ -572,25 +572,25 @@ REX_HOOK_RAW(sub_82387868) {
   }
 }
 
-REX_EXTERN(__imp__sub_82388990);
-REX_HOOK_RAW(sub_82388990) {
+REX_EXTERN(__imp__sub_82398158);
+REX_HOOK_RAW(sub_82398158) {
   const uint32_t obj = ctx.r3.u32;
-  __imp__sub_82388990(ctx, base);
+  __imp__sub_82398158(ctx, base);
   if (DlcDebug())
     REXLOG_INFO("sc5 dbg dlc: index of '{}' read: {} (mask {:08X})", Wide(obj + 40), ctx.r3.u32, Rd(obj + 340));
 }
 
-REX_EXTERN(sub_8245BED0);  // the release state of an id (unlocks.cpp's hook first)
+REX_EXTERN(sub_8246B318);  // the release state of an id (unlocks.cpp's hook first)
 
 // SC5_DBG_RELEASE_OUT=<file>: once the DLC manager is ready and the save is in, every release id's raw state in the
-// release table ([[0x8273EF10]] + 0x22C248, 4 bits each), the DLC check's answer and what sub_8245BED0 answers (the
+// release table ([[0x8274EF10]] + 0x22C248, 4 bits each), the DLC check's answer and what sub_8246B318 answers (the
 // hook of unlocks.cpp included): "id raw granted answer", one id a line
 namespace {
 void DumpRelease(PPCContext& keep, uint8_t* base) {
   static bool done = false;
   const char* path = std::getenv("SC5_DBG_RELEASE_OUT");
   if (done || !path || !*path) return;
-  const uint32_t save = Rd(0x8273EF10);
+  const uint32_t save = Rd(0x8274EF10);
   if (!save || Rd(save + 0x48) != 0x00010000) return;
   done = true;
   const uint32_t table = save + 0x22C248;
@@ -602,12 +602,12 @@ void DumpRelease(PPCContext& keep, uint8_t* base) {
     const uint32_t raw = (id & 1) ? byte >> 4 : byte & 0xF;
     PPCContext c = keep;
     c.r4.u64 = id;
-    __imp__sub_82385F48(c, base);
+    __imp__sub_82394D40(c, base);
     const uint32_t granted = c.r3.u32;
     c = keep;
     c.r3.u64 = table;
     c.r4.u64 = id;
-    sub_8245BED0(c, base);
+    sub_8246B318(c, base);
     std::fprintf(f, "%04X %X %u %X\n", id, raw, granted, c.r3.u32);
   }
   std::fclose(f);
@@ -615,14 +615,14 @@ void DumpRelease(PPCContext& keep, uint8_t* base) {
 }
 }  // namespace
 
-REX_HOOK_RAW(sub_82385F48) {
+REX_HOOK_RAW(sub_82394D40) {
   if (!DlcDebug()) {
-    __imp__sub_82385F48(ctx, base);
+    __imp__sub_82394D40(ctx, base);
     return;
   }
   const uint32_t id = ctx.r4.u32 & 0xFFFF, table = ctx.r3.u32;
   PPCContext keep = ctx;
-  __imp__sub_82385F48(ctx, base);
+  __imp__sub_82394D40(ctx, base);
   if (Rd(table + 8) >= 7 && Rd(table + 8) <= 11) DumpRelease(keep, base);
   static int calls = 0;
   if (calls++ < 5) REXLOG_INFO("sc5 dbg dlc: the game asked about id {:X}: {} (state {})", id, ctx.r3.u32, Rd(table + 8));
@@ -635,7 +635,7 @@ REX_HOOK_RAW(sub_82385F48) {
   for (uint32_t want : DlcIds()) {
     PPCContext c = keep;
     c.r4.u64 = want;
-    __imp__sub_82385F48(c, base);
+    __imp__sub_82394D40(c, base);
     REXLOG_INFO("sc5 dbg dlc: id {:X} granted: {}", want, c.r3.u32);
     (c.r3.u32 ? yes : no)++;
   }
@@ -643,8 +643,8 @@ REX_HOOK_RAW(sub_82385F48) {
 }
 
 // SC5_DBG_PICLOAD=1: every picture file the game loads (a created character's card, docs\GAME.md "The VS screen's
-// card"; sub_8218B1C0: r3 its object, r4 its size, r5 the file, r7 an id), where it is (a creation slot's +offset), and
-// how its upload ends (sub_8218B298: the object's state, 2 done, 3 failed)
+// card"; sub_8218B998: r3 its object, r4 its size, r5 the file, r7 an id), where it is (a creation slot's +offset), and
+// how its upload ends (sub_8218BA70: the object's state, 2 done, 3 failed)
 namespace {
 bool PicDebug() {
   static const bool on = [] { const char* v = std::getenv("SC5_DBG_PICLOAD"); return v && v[0] == '1'; }();
@@ -653,16 +653,16 @@ bool PicDebug() {
 std::map<uint32_t, uint32_t> g_pic_state;
 }  // namespace
 
-REX_EXTERN(__imp__sub_8218B1C0);
-REX_HOOK_RAW(sub_8218B1C0) {
+REX_EXTERN(__imp__sub_8218B998);
+REX_HOOK_RAW(sub_8218B998) {
   if (!PicDebug()) {
-    __imp__sub_8218B1C0(ctx, base);
+    __imp__sub_8218B998(ctx, base);
     return;
   }
   const uint32_t obj = ctx.r3.u32, size = ctx.r4.u32, file = ctx.r5.u32, id = ctx.r7.u32, lr = uint32_t(ctx.lr);
   const uint32_t w0 = file ? Rd(file) : 0, w1 = file ? Rd(file + 4) : 0, w2 = file ? Rd(file + 8) : 0;
   const uint32_t first = sc5::creation::Slot(0);
-  __imp__sub_8218B1C0(ctx, base);
+  __imp__sub_8218B998(ctx, base);
   const bool in = first && file >= first && file < first + 50 * sc5::creation::kSlotSize;
   REXLOG_INFO("sc5 dbg pic: load obj {:08X} file {:08X} (slot {} +{}) size {} id {:08X} from {:08X}: {} head {:08X} "
               "{:08X} {:08X} state {} kind {}",
@@ -672,10 +672,10 @@ REX_HOOK_RAW(sub_8218B1C0) {
   g_pic_state[obj] = Rd(obj);
 }
 
-REX_EXTERN(__imp__sub_8218B298);
-REX_HOOK_RAW(sub_8218B298) {
+REX_EXTERN(__imp__sub_8218BA70);
+REX_HOOK_RAW(sub_8218BA70) {
   const uint32_t obj = ctx.r3.u32;
-  __imp__sub_8218B298(ctx, base);
+  __imp__sub_8218BA70(ctx, base);
   if (!PicDebug()) return;
   const uint32_t state = Rd(obj);
   const auto it = g_pic_state.find(obj);

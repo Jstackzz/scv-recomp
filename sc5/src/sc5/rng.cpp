@@ -17,18 +17,18 @@
 
 #include "sc5/frame.h"
 
-REX_EXTERN(sub_8266D2B0);          // the C runtime's _getptd: the calling thread's runtime data (rand's state at +0x14)
-REX_EXTERN(__imp__sub_82195D48);   // the effects' update (particles)
-REX_EXTERN(__imp__sub_82194210);   // the stage's gusts of wind (a new 576-byte force at random intervals)
-REX_EXTERN(__imp__sub_8219D508);   // a task of the effects' (particle emitters), from the step's task calls
-REX_EXTERN(__imp__sub_824A5ED0);   // a task that times itself and draws from Park-Miller and TT800 (ambient)
+REX_EXTERN(sub_8267D550);          // the C runtime's _getptd: the calling thread's runtime data (rand's state at +0x14)
+REX_EXTERN(__imp__sub_8219B548);   // the effects' update (particles)
+REX_EXTERN(__imp__sub_821949F8);   // the stage's gusts of wind (a new 576-byte force at random intervals)
+REX_EXTERN(__imp__sub_8219DD98);   // a task of the effects' (particle emitters), from the step's task calls
+REX_EXTERN(__imp__sub_824B58E8);   // a task that times itself and draws from Park-Miller and TT800 (ambient)
 
 namespace sc5::rng {
 namespace {
 
-constexpr uint32_t kParkMiller = 0x829249F8, kParkMillerSize = 4;
-constexpr uint32_t kTt800 = 0x82924A20, kTt800Size = 104;  // 25 words and the position
-constexpr uint32_t kMtPointer = 0x82773FB0, kMtSize = 4996;  // 4992 bytes of words and the index
+constexpr uint32_t kParkMiller = 0x8293857C, kParkMillerSize = 4;
+constexpr uint32_t kTt800 = 0x82938580, kTt800Size = 104;  // 25 words and the position
+constexpr uint32_t kMtPointer = 0x82787AB0, kMtSize = 4996;  // 4992 bytes of words and the index
 
 uint32_t g_main_rand = 0;
 
@@ -84,7 +84,7 @@ bool Separate() {
 uint32_t MainRandState(PPCContext& ctx, uint8_t* base) {
   if (!g_main_rand && frame::OnMainThread()) {
     const uint64_t r3 = ctx.r3.u64, lr = ctx.lr;
-    sub_8266D2B0(ctx, base);
+    sub_8267D550(ctx, base);
     g_main_rand = ctx.r3.u32 + 0x14;
     ctx.r3.u64 = r3;
     ctx.lr = lr;
@@ -152,41 +152,41 @@ void ResetVisual() { g_visual.valid = false; }
 }  // namespace sc5::rng
 
 // tests: the fight's Park-Miller draws by caller (SC5_DBG_DRAWS)
-REX_EXTERN(__imp__sub_824A33D8);
-REX_EXTERN(__imp__sub_824A3248);
-REX_HOOK_RAW(sub_824A33D8) {
+REX_EXTERN(__imp__sub_824B2CD0);
+REX_EXTERN(__imp__sub_824B2B40);
+REX_HOOK_RAW(sub_824B2CD0) {
   sc5::rng::NoteDraw(uint32_t(ctx.lr));
-  __imp__sub_824A33D8(ctx, base);
+  __imp__sub_824B2CD0(ctx, base);
 }
-REX_HOOK_RAW(sub_824A3248) {
+REX_HOOK_RAW(sub_824B2B40) {
   sc5::rng::NoteDraw(uint32_t(ctx.lr));
-  __imp__sub_824A3248(ctx, base);
+  __imp__sub_824B2B40(ctx, base);
 }
 
-REX_HOOK_RAW(sub_82195D48) {
+REX_HOOK_RAW(sub_8219B548) {
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_82195D48(ctx, base);
+  __imp__sub_8219B548(ctx, base);
   sc5::rng::LeaveVisual();
 }
 
 // SC5_NO_GUSTS=1 (tests): no gusts at all
-REX_HOOK_RAW(sub_82194210) {
+REX_HOOK_RAW(sub_821949F8) {
   static const bool off = [] { const char* v = std::getenv("SC5_NO_GUSTS"); return v && v[0] == '1'; }();
   if (off) return;
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_82194210(ctx, base);
+  __imp__sub_821949F8(ctx, base);
   sc5::rng::LeaveVisual();
 }
 
-// Two tasks the step calls (sub_82493230, 0x8249346C) that keep timers in their heap objects and so draw a different
+// Two tasks the step calls (sub_824A25C0, 0x824A27FC) that keep timers in their heap objects and so draw a different
 // number of times when a frame runs again (found by counting each call site's draws in frames and in their reruns)
-REX_HOOK_RAW(sub_8219D508) {
+REX_HOOK_RAW(sub_8219DD98) {
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_8219D508(ctx, base);
+  __imp__sub_8219DD98(ctx, base);
   sc5::rng::LeaveVisual();
 }
-REX_HOOK_RAW(sub_824A5ED0) {
+REX_HOOK_RAW(sub_824B58E8) {
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_824A5ED0(ctx, base);
+  __imp__sub_824B58E8(ctx, base);
   sc5::rng::LeaveVisual();
 }

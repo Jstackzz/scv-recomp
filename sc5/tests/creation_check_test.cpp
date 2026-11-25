@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
       for (uint32_t level = 0; level < dna::kBreakLevelCount; level++) {
         const uint32_t lv = dna::kBreakLevels + level * dna::kBreakLevelSize;
         for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
-          Put32(r, lv + p * 8, 0xFF0000FF);  // none, as the game's own init makes it (sub_82245928)
+          Put32(r, lv + p * 8, 0xFF0000FF);  // none, as the game's own init makes it (sub_82246AF8)
           r[lv + p * 8 + 4] = 0xFF;
         }
         for (uint32_t p = 0; p < 14; p++) Put32(r, lv + p * 8, 0x16000000 + p), r[lv + p * 8 + 4] = uint8_t(p);

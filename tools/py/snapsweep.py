@@ -13,7 +13,7 @@ import sys
 
 d = sys.argv[1]
 shift = int(float(sys.argv[2]) * (1 << 20)) if len(sys.argv) > 2 else 64 << 20
-PLAYERS = {0x82937070: "P1", 0x82994BA0: "P2"}
+PLAYERS = {0x8294AC10: "P1", 0x829A8740: "P2"}
 PSIZE = 0x5DB30
 PTRS = [0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04, 0x5CEB4, 0x5D2B4, 0x5D30C, 0x5D364, 0x5D3BC,
         0x5DACC, 0x5DAD0]
@@ -24,21 +24,21 @@ def counted(a):
         if base <= a < base + PSIZE:
             o = a - base
             for k in range(3):  # each player's buffers lie on round addresses: P2's 0x30 lower and 0x50 higher
-                lo = (0x3190 if base == 0x82937070 else 0x3160) + k * 0x8000
+                lo = (0x3190 if base == 0x8294AC10 else 0x3160) + k * 0x8000
                 if lo <= o < lo + 6208:
                     return False
-                dr = (0x1B310 if base == 0x82937070 else 0x1B360) + k * 0x800
+                dr = (0x1B310 if base == 0x8294AC10 else 0x1B360) + k * 0x800
                 if dr <= o < dr + 0x800:
                     return False
             return not (0x22638 <= o < 0x5DAD4 and any(p <= o < p + 4 for p in PTRS))
-    if 0x829F46A8 <= a < 0x829F46B0:
+    if 0x82A08248 <= a < 0x82A08250:
         return False
-    if 0x829F55D0 <= a < 0x829F55D0 + 16 * 64 and (a - 0x829F55D0) % 64 < 8:
+    if 0x82A09170 <= a < 0x82A09170 + 16 * 64 and (a - 0x82A09170) % 64 < 8:
         return False
-    if 0x829F3330 <= a < 0x829F3330 + 880 and 16 <= (a - 0x829F3330) % 176 < 20:
+    if 0x82A06ED0 <= a < 0x82A06ED0 + 880 and 16 <= (a - 0x82A06ED0) % 176 < 20:
         return False
-    if (0x829F5528 <= a < 0x829F5530 or 0x829F59D4 <= a < 0x829F59D8 or 0x829F55D0 <= a < 0x829F55D8
-            or 0x82767D1C <= a < 0x82767D20 or 0x82767E40 <= a < 0x82767E48):
+    if (0x82A090C8 <= a < 0x82A090D0 or 0x82A09574 <= a < 0x82A09578 or 0x82A09170 <= a < 0x82A09178
+            or 0x8277B81C <= a < 0x8277B820 or 0x8277B940 <= a < 0x8277B948):
         return False
     if 0x40000000 <= a < 0x80000000 or a >= 0xA0000000:
         return False

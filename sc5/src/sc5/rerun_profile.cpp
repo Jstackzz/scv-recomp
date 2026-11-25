@@ -1,6 +1,6 @@
 // The game's tasks timed one by one in frames run again (SC5_TEST_RERUN_PROFILE=1, tests).
 //
-// The step (sub_82493230) walks the game's task tree (the manager at [0x835A3850]; its first task at +12; a task's
+// The step (sub_824A25C0) walks the game's task tree (the manager at [0x835A3850]; its first task at +12; a task's
 // parent at +16, its links at +8 and +12) and calls each task's methods through its vtable (slots +0, +8, +12, +16,
 // +24), which the recompiled code dispatches through the SDK's function table. Every method of the classes found in
 // the tree has its table entry replaced with a wrapper of its own (a pool of template instances, one per method),
@@ -42,7 +42,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr uint32_t kManagerAt = 0x835A3840 + 16;
+constexpr uint32_t kManagerAt = 0x835B73C0 + 16;
 constexpr uint32_t kSlots[] = {0, 4, 8, 12, 16, 20, 24, 28};
 constexpr size_t kPool = 1024;
 
@@ -170,7 +170,7 @@ void Scan() {
     todo.pop_back();
     if (!Pointer(n) || !Pointer(n + 16) || !seen.insert(n).second) continue;
     const uint32_t vt = Rd(n);
-    if (vt < 0x82000000u || vt >= 0x82A00000u || !Pointer(vt) || !fd->GetFunction(Rd(vt + 12))) continue;
+    if (vt < 0x82000000u || vt >= 0x82A13BA8u || !Pointer(vt) || !fd->GetFunction(Rd(vt + 12))) continue;
     tasks++;
     if (g_vtables.insert(vt).second) {
       for (uint32_t slot : kSlots) {
@@ -242,7 +242,7 @@ void Report(uint64_t frames) {
                                    [&] { __imp__sub_##addr(ctx, base); });                           \
   }
 
-// Example (tests): SC5_RERUN_TIME(822BEE50) on a line of its own here times that function in frames run again (the
+// Example (tests): SC5_RERUN_TIME(822CBA00) on a line of its own here times that function in frames run again (the
 // time of the timed functions it calls left out) and lets SC5_TEST_RERUN_SKIP leave it out there; a function hooked
 // elsewhere already cannot take one. The pose was found this way (docs\GAME.md, "Where a frame run again spends its
 // time"); none are timed in a normal build.

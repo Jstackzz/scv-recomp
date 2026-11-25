@@ -30,8 +30,8 @@ bool Within(const uint8_t* r, uint32_t at, float lo, float hi) {
 }
 
 // A name field: NUL-terminated inside its bytes, UTF-8 without control characters, and without the three characters
-// the game itself turns into their full-width forms before it keeps a name ('%', '#', '$': sub_82221D88 and
-// sub_8233BA50), since its text code takes a name for a format.
+// the game itself turns into their full-width forms before it keeps a name ('%', '#', '$': sub_82222B28 and
+// sub_82349AE0), since its text code takes a name for a format.
 std::string Name(const uint8_t* r, uint32_t at, uint32_t size, const char* what) {
   uint32_t i = 0;
   while (i < size && r[at + i]) {
@@ -60,7 +60,7 @@ std::string Name(const uint8_t* r, uint32_t at, uint32_t size, const char* what)
 }
 
 // A colour (TK_CreationColorData_st: palette, a flag, row, column, saturation): none (palette 0xFF) or a place on one
-// of the game's palettes (0-3; sub_82249FF0) within its rows and columns (sub_8222C450), saturation 0-1
+// of the game's palettes (0-3; sub_8224B8E8) within its rows and columns (sub_8222D210), saturation 0-1
 std::string Colour(const uint8_t* r, uint32_t at, const Known& k, const std::string& what) {
   const uint8_t palette = r[at];
   if (palette == 0xFF) return {};
@@ -71,7 +71,7 @@ std::string Colour(const uint8_t* r, uint32_t at, const Known& k, const std::str
   return {};
 }
 
-// A voice the game knows: sub_82351040 keeps these and turns any other into 257, with which a customized fighter's
+// A voice the game knows: sub_8235EE20 keeps these and turns any other into 257, with which a customized fighter's
 // fight never loads (both games give up on it after 40 s; an original character takes it)
 bool KnownVoice(int v) {
   return (v >= 1 && v <= 8) || (v >= 11 && v <= 23) || v == 26 || (v >= 34 && v <= 36) || v == 40 || v == 41 ||
@@ -115,7 +115,7 @@ std::string PlainWhy(const std::string& why) {
 }
 
 uint32_t Checksum(const uint8_t* record) {
-  // sub_82245F98: each word turned left by an amount the previous one sets, XORed together
+  // sub_822470B0: each word turned left by an amount the previous one sets, XORed together
   uint32_t acc = 0, rot = 7;
   for (uint32_t j = 0; j < kChecksum / 4; j++) {
     const uint32_t w = std::rotl(U32(record, 4 * j), int(rot));
@@ -260,7 +260,7 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
   if (type != kOriginal && !KnownVoice(r[kVoice]))
     return std::format("a customized fighter with voice {}, which the game does not know", r[kVoice]);
 
-  // what the game's own repair pass keeps to (sub_82221D88): it would change a record outside these
+  // what the game's own repair pass keeps to (sub_82222B28): it would change a record outside these
   if (r[kAttackRate] < 80 || r[kAttackRate] > 200) return std::format("attack rate {}", r[kAttackRate]);
   if (int8_t(r[kPitch]) < -50 || int8_t(r[kPitch]) > 50) return std::format("voice pitch {}", int8_t(r[kPitch]));
   if (int8_t(r[kFormant]) < -50 || int8_t(r[kFormant]) > 50)
@@ -326,7 +326,7 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
 
   // parts coordinates (CCreationPartsCoordinateInfo: valid, parts id, parent bone, order, 7 vectors): valid 0 or 1,
   // the vectors finite and within +-1000. The game itself skips one whose part is not the one worn or whose bone is
-  // not one of its 18, and clamps the offsets to +-50 and +-180 (sub_822429C0).
+  // not one of its 18, and clamps the offsets to +-50 and +-180 (sub_82243AF8).
   for (uint32_t i = 0; i < kCoordCount; i++) {
     const uint32_t at = kCoords + i * kCoordSize, valid = U32(r, at);
     if (valid > 1) return std::format("parts coordinate {} has validity {}", i, valid);

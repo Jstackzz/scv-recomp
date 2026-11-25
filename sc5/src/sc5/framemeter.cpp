@@ -1,12 +1,12 @@
 // The frame meter, see framemeter.h.
 //
 // What it reads (found in Training, Mitsurugi against Siegfried, docs\GAME.md "Frame data in practice"), per fighter
-// object (player 1's at 0x82937070, player 2's at 0x82994BA0):
+// object (player 1's at 0x8294AC10, player 2's at 0x829A8740):
 //   +0x177A u16  what the fighter is doing: 1 nothing of its own (standing, walking, holding guard), 2 an action of its
 //                own (an attack, a throw, a step, a jump), 3 reacting to a hit (stunned, thrown, in the air, down), 6
 //                guarding a hit (guard stun)
 //   +0x0578 u32  1 while it may act (attack, guard, move), 0 while an action or a reaction holds it
-//   +0x228BC u32 its attack's record (a heap address; +0x14DB is set while the attack runs). sub_82370CD0 compares the
+//   +0x228BC u32 its attack's record (a heap address; +0x14DB is set while the attack runs). sub_8237F928 compares the
 //                move's frame with the record's impact window (+0x36 its first frame, +0x38 its last, counted from 0)
 //                and keeps the attack's phase at +0x177C u16: 1 startup, 2 impact (the attack can hit), 3 recovery.
 //                With no record it leaves +0x177C as it was (a throw that caught keeps 2 through its animation).
@@ -15,7 +15,7 @@
 //                low both (seen: high 0x49, mid 0x4B and 0x6F, low 0x37, special low 0x1B, throw 0x81)
 //   record +0x3A s16  its damage before any scaling (counter hits and combos change what the health loses)
 //   +0x2268C f32 its health (full at +0x22688: 240 in VS Battle and Training)
-//   0x829361B4 u32 the fight's frame count: one a frame while the fight runs, standing still while the game is paused,
+//   0x82949D54 u32 the fight's frame count: one a frame while the fight runs, standing still while the game is paused,
 //                set back with the rest of the fight by a rollback (in the fight's memory that the snapshot keeps)
 //
 // Each fight frame's reading (both fighters: what each cell shows, their health, the attack record's level and damage)
@@ -67,17 +67,17 @@
 #include "sc5/game.h"
 #include "sc5/sparring.h"
 
-REX_EXTERN(__imp__sub_82493230);  // the game's step (frame.cpp): pads, sequences, the battle
+REX_EXTERN(__imp__sub_824A25C0);  // the game's step (frame.cpp): pads, sequences, the battle
 
 namespace sc5::framemeter {
 namespace {
 
 // --- the game's memory ---
-constexpr uint32_t kPlayer[2] = {0x82937070, 0x82994BA0};
+constexpr uint32_t kPlayer[2] = {0x8294AC10, 0x829A8740};
 constexpr uint32_t kFree = 0x578, kState = 0x177A, kPhase = 0x177C, kAttacking = 0x14DB, kAttack = 0x228BC,
                    kHealth = 0x2268C;
 constexpr uint32_t kRecordLevel = 0x33, kRecordDamage = 0x3A;
-constexpr uint32_t kFightFrame = 0x829361B4;
+constexpr uint32_t kFightFrame = 0x82949D54;
 
 // --- the meter ---
 enum Kind : uint8_t { kFreeToAct, kStartup, kImpact, kRecovery, kStun, kMoving };
@@ -657,7 +657,7 @@ void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
 }  // namespace sc5::framemeter
 
 // After the game's step (every run of a frame, a rollback's included): the fighters read for the meter
-REX_HOOK_RAW(sub_82493230) {
-  __imp__sub_82493230(ctx, base);
+REX_HOOK_RAW(sub_824A25C0) {
+  __imp__sub_824A25C0(ctx, base);
   sc5::framemeter::AfterStep();
 }

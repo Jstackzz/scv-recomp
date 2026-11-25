@@ -5,8 +5,8 @@
 
 #include <rex/ppc/context.h>
 
-// sub_824717A8, a battle object's state save: r4 = its owner (+0x264) + 0x5BE90, the 4 bytes it writes next. With no
-// owner the restore skips that field (sub_82471830) but still reads its 4 bytes, so the save must write 4: read them
+// sub_82480C08, a battle object's state save: r4 = its owner (+0x264) + 0x5BE90, the 4 bytes it writes next. With no
+// owner the restore skips that field (sub_82480C90) but still reads its 4 bytes, so the save must write 4: read them
 // from the zero page (all zeros, sc5_app.cpp maps it readable), at 0x100 and not 0, which the stream's write takes for
 // "nothing to write" and skips, leaving every later read of the snapshot 4 bytes off (the KO replay's restore then
 // crashed in ever different places).

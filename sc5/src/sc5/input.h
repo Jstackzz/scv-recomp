@@ -1,6 +1,6 @@
 #pragma once
 // What the game reads from its controllers. SC5 polls XamInputGetState for user indices 0-3 every frame
-// (sub_82493BC8, at the top of the frame) and reads key presses with XamInputGetKeystrokeEx; this layer answers
+// (sub_824A2F58, at the top of the frame) and reads key presses with XamInputGetKeystrokeEx; this layer answers
 // instead of the SDK: from the PC's own controllers, or from a source a test script or netplay installs. Ported
 // from MK9 Online (mk9/input.h).
 #include <cstdint>

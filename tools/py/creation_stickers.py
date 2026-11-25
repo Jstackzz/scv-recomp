@@ -2,7 +2,7 @@
 python -I tools/py/creation_stickers.py <table.bin> > sc5/src/sc5/creation_stickers.inc
 
 <table.bin> is the game's illustration table as Creation mode holds it in memory (CreationIllustrationInfo, 204-byte
-entries; its schema: sub_8222A1A8): uniqueID at +0, sortedIndex +4, ..., OLTIndex +16, OLTRelationIndex +17,
+entries; its schema: sub_8222AF20): uniqueID at +0, sortedIndex +4, ..., OLTIndex +16, OLTRelationIndex +17,
 OLTKeyIndex +18 (the texture), releaseID +28. The online game never loads
 it (it is Creation's), so the check carries the ids and their release ids, and asks the game at runtime which of those
 releases this PC has (downloadable stickers only with their package)."""

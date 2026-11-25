@@ -31,13 +31,13 @@ bool Pickable(int slot);
 // the slots pickable here, one bit each
 uint32_t PickableMask();
 
-// The stage select (VS Battle's and Training's: sub_8234C028 updates its object every frame it is up): its cursor
-// at +200, a place of 28 (sub_8234C3F0 wraps it both ways): 0 Random, then the 27 stages to its right
+// The stage select (VS Battle's and Training's: sub_82359E08 updates its object every frame it is up): its cursor
+// at +200, a place of 28 (sub_8235A1D0 wraps it both ways): 0 Random, then the 27 stages to its right
 constexpr int kStagePlaces = 28;
 uint32_t StageObject();  // 0 when none is up
 int StageCursor();       // -1 when none is up
 
-// the roster (the launcher's ids, data\sc5.json) and the game's own character ids (the slot table at 0x82746018)
+// the roster (the launcher's ids, data\sc5.json) and the game's own character ids (the slot table at 0x82756020)
 int SlotOfRosterId(const std::string& id);   // -1 unknown
 int SlotOfCharacter(int character);          // -1 none
 int IdOfSlot(int slot);                      // the slot table's character id, the Creation slot's too (32); -1 none

@@ -34,8 +34,8 @@
 #include "sc5/frame.h"
 #include "sc5/game.h"
 
-REX_EXTERN(sub_8233A5D0);  // registers a text table (r3 its number, r4 its data, unscrambled in place)
-REX_EXTERN(sub_8233A6F0);  // a text table's data (r3 its number): 0 when the game does not have it
+REX_EXTERN(sub_82348660);  // registers a text table (r3 its number, r4 its data, unscrambled in place)
+REX_EXTERN(sub_82348780);  // a text table's data (r3 its number): 0 when the game does not have it
 
 namespace sc5::dlc {
 namespace fs = std::filesystem;
@@ -48,7 +48,7 @@ constexpr uint32_t kMarketplaceContent = 0x00000002;
 // the game's DLC manager (docs\GAME.md, "Unlocks and downloadable content"): its state at +8 (7 to 11 once the
 // packages are read), at +0x28 its 30 package objects of 344 bytes (+2 the entries' count, +0x1C the entries, 48
 // bytes each, +0xD their flags: 0x80 the entry's file is there), their count at +0x2C
-constexpr uint32_t kDlcManager = 0x8276F430;
+constexpr uint32_t kDlcManager = 0x82782F30;
 constexpr uint32_t kPackageSize = 344, kEntrySize = 48;
 constexpr uint8_t kEntryHasFile = 0x80;
 // a created character's record: 4 break levels from +1128, 288 bytes each, 34 parts of 8 bytes (ModelData first)
@@ -107,9 +107,9 @@ bool Place(const fs::path& from, const fs::path& to, bool* copied) {
 }
 
 // --- the names of the parts the DLC adds (text table 55) ---
-// The game's texts are tables of strings by number (sub_8233A5D0 registers one: r3 its number, r4 its data, which it
-// unscrambles in place; sub_82339600 gives string r4 of table r3, an empty one for a table it does not have). Title
-// update 1 registers 0 to 53 (the sections of text 424) and 54 (patch 0 to 7 by language, sub_8215C820); the parts the
+// The game's texts are tables of strings by number (sub_82348660 registers one: r3 its number, r4 its data, which it
+// unscrambles in place; sub_82347670 gives string r4 of table r3, an empty one for a table it does not have). Title
+// update 1 registers 0 to 53 (the sections of text 424) and 54 (patch 0 to 7 by language, sub_8215CCC8); the parts the
 // costume packs add are named in table 55, which only a later title update registers: patch 8 to 15 by language,
 // which the packages replace (the highest costume group's carries them: docs\GAME.md). So, the first time the game
 // asks for table 55 without having it, the packages' copy of patch 8 + the language is registered as 55.
@@ -144,7 +144,7 @@ std::map<int, std::string> PatchFilesOf(const fs::path& package, int group) {
   std::snprintf(index_name, sizeof index_name, "index_%02d_X360.dat", group);
   std::ifstream in(package / index_name, std::ios::binary);
   const std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  // u32 version, u32 ids, u32 strings size, the strings, u16 slots, u16 entries; each entry (sub_82388760): u16 group,
+  // u32 version, u32 ids, u32 strings size, the strings, u16 slots, u16 entries; each entry (sub_82397F28): u16 group,
   // u16 slot, u8, u16 n1 + n1 u16, u16 archive, u16 file, u16 n2 + n2 u16, u32 its file's name, u8, u64 offer, u32
   // license bits
   if (d.size() < 12) return out;
@@ -265,7 +265,7 @@ void BeforeText(PPCContext& ctx, uint8_t* base, uint32_t table) {
   {
     PPCContext c = ctx;
     c.r3.u64 = table;
-    sub_8233A6F0(c, base);
+    sub_82348780(c, base);
     if (c.r3.u32) return;  // the game has it
   }
   if (g_names_data.empty()) {
@@ -293,8 +293,8 @@ void BeforeText(PPCContext& ctx, uint8_t* base, uint32_t table) {
   PPCContext c = ctx;
   c.r3.u64 = table;
   c.r4.u64 = g_names_guest;
-  c.lr = 0x82189268;  // as from main's loop
-  sub_8233A5D0(c, base);
+  c.lr = 0x82189A40;  // as from main's loop
+  sub_82348660(c, base);
   const uint32_t strings = game::ReadU32(g_names_guest + 4);
   REXLOG_INFO("sc5 dlc: the names of the downloadable parts: table {}, {} strings (patch {})", table, strings,
               kNamesFirstFile + g_language);
@@ -320,10 +320,10 @@ bool ModelsInstalled(uint32_t record) {
 
 }  // namespace sc5::dlc
 
-// [[midasm_hook]] Sc5DlcFighterModels (config\sc5_codegen.toml), in sub_82147C70, which sets up a fighter for a fight
+// [[midasm_hook]] Sc5DlcFighterModels (config\sc5_codegen.toml), in sub_82148400, which sets up a fighter for a fight
 // from a creation manager entry (r4; the record first): r11 is the entry's "wears downloadable models" flag (+0x34D8,
 // the record's byte 15, which Creation sets for any 0x7F model), and with it set the game swaps the character for a
-// template of its style in plain clothes (sub_822958C8 mode 1), its own way out when such a model cannot be loaded. It
+// template of its style in plain clothes (sub_8229EF18 mode 1), its own way out when such a model cannot be loaded. It
 // did so for every such character, the costume packs' data installed or not; so when every downloadable model the
 // character wears has its data on this PC the flag is taken as clear and the character fights as created. Both games
 // of a match decide alike: a created character with downloadable parts is picked only when the two games' downloadable
@@ -332,7 +332,7 @@ void Sc5DlcFighterModels(PPCRegister& r4, PPCRegister& r11) {
   if (r11.u32 && r4.u32 && sc5::dlc::ModelsInstalled(r4.u32)) r11.u64 = 0;
 }
 
-// The game's file requests (sub_82355988 the size of a file, asked before it is read; sub_82355DF8 the read: r3 the
+// The game's file requests (sub_82363FC8 the size of a file, asked before it is read; sub_82355DF8 the read: r3 the
 // archive, r4 the file): the patch text's language for the parts' names. SC5_DBG_FILES=1 logs each with its callers.
 namespace {
 uint32_t Rd32(uint32_t a) { return sc5::game::ReadU32(a); }
@@ -348,11 +348,11 @@ void LogFile(const char* what, PPCContext& ctx) {
 }
 }  // namespace
 
-REX_EXTERN(__imp__sub_82355988);
-REX_HOOK_RAW(sub_82355988) {
+REX_EXTERN(__imp__sub_82363FC8);
+REX_HOOK_RAW(sub_82363FC8) {
   sc5::dlc::OnFileAsked(ctx.r3.s32, ctx.r4.s32);
   if (FileDebug()) LogFile("size", ctx);
-  __imp__sub_82355988(ctx, base);
+  __imp__sub_82363FC8(ctx, base);
 }
 REX_EXTERN(__imp__sub_82355DF8);
 REX_HOOK_RAW(sub_82355DF8) {
@@ -360,23 +360,23 @@ REX_HOOK_RAW(sub_82355DF8) {
   __imp__sub_82355DF8(ctx, base);
 }
 
-// A string of a text table (sub_82339600: r3 the table, r4 the string, 1 on): the downloadable parts' names registered
+// A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on): the downloadable parts' names registered
 // the first time the game asks for their table (above). SC5_DBG_TEXT=1 logs each string the game asks for and does not
 // have (no such table, or not that many strings), once each, with the caller.
-REX_EXTERN(__imp__sub_82339600);
-REX_HOOK_RAW(sub_82339600) {
+REX_EXTERN(__imp__sub_82347670);
+REX_HOOK_RAW(sub_82347670) {
   sc5::dlc::BeforeText(ctx, base, ctx.r3.u32);
   static const bool debug = [] { const char* v = std::getenv("SC5_DBG_TEXT"); return v && v[0] == '1'; }();
   if (!debug) {
-    __imp__sub_82339600(ctx, base);
+    __imp__sub_82347670(ctx, base);
     return;
   }
   const uint32_t table = ctx.r3.u32, index = ctx.r4.u32 & 0xFFFF, lr = uint32_t(ctx.lr);
   PPCContext c = ctx;
-  sub_8233A6F0(c, base);
+  sub_82348780(c, base);
   const uint32_t data = c.r3.u32;
   const bool missing = int32_t(ctx.r4.u32) != -1 && (!data || index == 0 || index > Rd32(data + 4));
-  __imp__sub_82339600(ctx, base);
+  __imp__sub_82347670(ctx, base);
   static std::mutex lock;
   std::lock_guard<std::mutex> hold(lock);
   static std::map<uint64_t, int> seen;

@@ -119,16 +119,16 @@ constexpr uint32_t kCheckEvery = 30;
 
 // what the two games make alike at the barrier: the counters that start at boot (docs\GAME.md, "Determinism"), each
 // at the larger of the two games' values (CountsUp); not the three that count frames presented to the GPU
-// (0x8280DE94, 0x8281929C, 0x8281991C: battle.cpp's kRaw says why), which each game's own GPU waits by
+// (0x82821A14, 0x8282CE1C, 0x8282D49C: battle.cpp's kRaw says why), which each game's own GPU waits by
 constexpr uint32_t kAgreedWords[] = {
-    0x82771B40, 0x82771B44, 0x82771B48, 0x82771B4C, 0x82771B50, 0x82771B54, 0x82771B58, 0x82771B5C,
-    0x828E8790, 0x835B3EB4,
+    0x82785640, 0x82785644, 0x82785648, 0x8278564C, 0x82785650, 0x82785654, 0x82785658, 0x8278565C,
+    0x828FC310, 0x835C79B4,
 };
-// and the battle's state machine (0x82767D08, 0x200 bytes: the current and pending states and the embedded states'
+// and the battle's state machine (0x8277B808, 0x200 bytes: the current and pending states and the embedded states'
 // own counts, static addresses only): a state keeps counts from before it (the "between rounds" a rematch's barrier
 // is the first frame of counted on from the result screens, which took a different time on each PC, and the two
 // games left it on different frames)
-constexpr uint32_t kAgreedMachine = 0x82767D08, kAgreedMachineSize = 0x200;
+constexpr uint32_t kAgreedMachine = 0x8277B808, kAgreedMachineSize = 0x200;
 // ... all but +0x14, a heap object's address (the menus' object the fight was set up from), which each game has where
 // its own heap put it: player 1's there left player 2's game pointing into its own heap at whatever lay at that
 // address, and with the two heaps apart (two PCs: a game whose heap started 2 MB higher showed it on one) its KO
@@ -136,11 +136,11 @@ constexpr uint32_t kAgreedMachine = 0x82767D08, kAgreedMachineSize = 0x200;
 // (and +0x13C, another heap object's address, which a fight sets: Elysium against Edge Master, Kilik against Ezio;
 // with the count at +0x138 that comes with it, worked out from a player's pose: battle.cpp KindOf)
 // (and +0x10, which goes with +0x14: that object counts as the fight's setup only while its +48 is the state machine's
-// +0x10 (sub_82479360 and the KO replay's start test it). In a rematch the two games had numbered it apart (0x569 and
+// +0x10 (sub_82488778 and the KO replay's start test it). In a rematch the two games had numbered it apart (0x569 and
 // 0x54B), player 2's game took player 1's, no longer saw its own setup object and played no KO replay: it went to the
 // result 397 frames before the other (Ezio against Viola with 40 ms each way and render scale 2 on game 2,
 // 2026-11-18). The snapshot does not carry it.)
-constexpr uint32_t kMachineOwnWords[] = {0x82767D18, 0x82767D1C, 0x82767E40, 0x82767E44};
+constexpr uint32_t kMachineOwnWords[] = {0x8277B818, 0x8277B81C, 0x8277B940, 0x8277B944};
 
 // The counters among the agreed words only count up, and none may go back at the barrier: each game takes the larger
 // of the two games' values (READY carries each game's) and never less than its own now; a spectator takes the larger
@@ -149,10 +149,10 @@ constexpr uint32_t kMachineOwnWords[] = {0x82767D18, 0x82767D1C, 0x82767E40, 0x8
 // barrier with a fade-in of 0 to elapsed below 0: -inf, the colour matrix of the final picture NaN, player 2's scene
 // black under its HUD until the next round's call (0.1.2's testers; the exposure session found it, 2026-11-19: 7 of 7
 // matches set back by 2 frames or more went black, none of 15 others). The main thread's counters stand still while a
-// game waits here, so both games come out alike; two, 0x82771B40 and 0x828E8790, count on during the wait (other
+// game waits here, so both games come out alike; two, 0x82785640 and 0x828FC310, count on during the wait (other
 // threads keep them: 137 frames in a game that waited 2.3 s), and they part the games whatever the barrier does, as
-// they did before. 0x82771B5C holds packed bytes another thread changes: player 1's, as the state machine's words.
-bool CountsUp(uint32_t a) { return (a >= 0x82771B40 && a <= 0x82771B58) || a == 0x828E8790 || a == 0x835B3EB4; }
+// they did before. 0x8278565C holds packed bytes another thread changes: player 1's, as the state machine's words.
+bool CountsUp(uint32_t a) { return (a >= 0x82785640 && a <= 0x82785658) || a == 0x828FC310 || a == 0x835C79B4; }
 
 std::vector<uint32_t> AgreedAddresses() {
   std::vector<uint32_t> out(std::begin(kAgreedWords), std::end(kAgreedWords));
@@ -161,16 +161,16 @@ std::vector<uint32_t> AgreedAddresses() {
       out.push_back(a);
   return out;
 }
-// the game's own input delay per player (sub_8216E2F8 reads it at 0x8216E63C: 2 frames offline); the netplay's
+// the game's own input delay per player (sub_8216E810 reads it at 0x8216EB54: 2 frames offline); the netplay's
 // delay stands in for it
-constexpr uint32_t kGameDelay = 0x8275C15C;
-// The game's count of frames shown (0x82771B44, one of the agreed words): only the present moves it (sub_824945F8),
+constexpr uint32_t kGameDelay = 0x8276FC4C;
+// The game's count of frames shown (0x82785644, one of the agreed words): only the present moves it (sub_824A3988),
 // and only when the GPU took the frame, yet the battle reads it, to throttle what it does to once in a few frames shown
-// (sub_82155B80, sub_82114200, sub_821CA8F0: "4 or more since the stamp", the stamp kept in its objects). A frame run
+// (sub_821561B0, sub_821143A8, sub_821CB220: "4 or more since the stamp", the stamp kept in its objects). A frame run
 // again presents nothing, and a busy GPU makes the present skip a count, so each game's count went its own way and
 // the stamps came out apart (frame numbers 32 apart in the players' objects, 2026-11-17). In a match it is the
 // match's frame from its agreed value at the barrier, in every frame run, again or not (SetFrameInputs).
-constexpr uint32_t kFramesShown = 0x82771B44;
+constexpr uint32_t kFramesShown = 0x82785644;
 uint32_t g_shown_base = 0;
 
 struct Wire {
@@ -806,7 +806,7 @@ void SendInputs() {
 
 // A KO's replay cut short (RSKIP): this game's answer, or the frame agreed. Both games press A on both pads at the
 // agreed frame for a few frames if the replay is still going there (decided at its top, the same in both: the replay
-// starts and ends on the same frame in the two games), which the replay's manager (sub_8211A8A8) takes as its player's
+// starts and ends on the same frame in the two games), which the replay's manager (sub_8211A9E8) takes as its player's
 // skip (START or A newly pressed on that player's pad). Asked frames are some 30 ahead, past where a rollback reaches.
 void SendReplaySkip(uint32_t frame, uint8_t kind) {
   Writer w = Header(kReplaySkip);
@@ -1336,7 +1336,7 @@ bool WaitForInputs(uint32_t f) {
 
 // --- what a desync says (Evidence, Detail above) ---
 
-constexpr uint32_t kFighters[2] = {0x82937070, 0x82994BA0};  // the players' objects (battle.cpp)
+constexpr uint32_t kFighters[2] = {0x8294AC10, 0x829A8740};  // the players' objects (battle.cpp)
 constexpr uint32_t kFighterSize = 0x5DB30, kFighterHealth = 0x2268C, kFighterRoundsWon = 0x75C;
 
 float FighterHealth(int s) {
@@ -1351,7 +1351,7 @@ std::string PlaceName(uint32_t a) {
   for (int s = 0; s < 2; s++)
     if (a >= kFighters[s] && a < kFighters[s] + kFighterSize) return fmt::format("P{}+0x{:X}", s + 1, a - kFighters[s]);
   if (a >= kAgreedMachine && a < kAgreedMachine + kAgreedMachineSize) return fmt::format("machine+0x{:X}", a - kAgreedMachine);
-  if (a >= 0x82771080u && a < 0x82771080u + 0xB40u) return fmt::format("pads+0x{:X}", a - 0x82771080u);
+  if (a >= 0x82784B80u && a < 0x82784B80u + 0xB40u) return fmt::format("pads+0x{:X}", a - 0x82784B80u);
   return fmt::format("{:08X}", a);
 }
 
@@ -1640,7 +1640,7 @@ bool RoundFought() { return game::BattleState() == game::kBattleFighting && !bat
 // (each player's +0x1B8 and +0x17AC), which the two games picked apart, loaded for 19 and 14 frames and started round
 // 3 on frames 5 apart (Elysium against Edge Master with 40 ms each way: TT800 a draw apart from frame 1189 and the
 // Twister two from 434, round 3 parted from its first check, 2026-11-18). Seeded as the barrier seeds them
-// (sub_824A35A8), from the match's seed and the frame.
+// (sub_824B2EA0), from the match's seed and the frame.
 uint32_t g_match_seed = 0;
 uint32_t g_seeded_state = 0;
 uint32_t SeededState() { return game::BattleState() | (battle::InKoReplay() ? 0x10000u : 0u); }
@@ -1692,7 +1692,7 @@ void SetFrameInputs(uint32_t f) {
   // moment, at every check. The fights stay alike, and so must the checks.
   static const int pose_noise = std::getenv("SC5_TEST_POSE_NOISE") ? std::atoi(std::getenv("SC5_TEST_POSE_NOISE")) : 0;
   if (pose_noise && pose_noise == g_slot + 1 && !g_cfg.watch)
-    for (uint32_t k = 0; k < 3; k++) Put32(0x829AFF00u + k * 0x800 + 0x7F0, 0xC0000000u | f);
+    for (uint32_t k = 0; k < 3; k++) Put32(0x829C3AA0u + k * 0x800 + 0x7F0, 0xC0000000u | f);
   if (desync_at && f == desync_at && !g_cfg.watch && (!desync_side || desync_side == g_slot + 1)) {
     const float hp = FighterHealth(0) - 1.0f;
     uint32_t v;
@@ -2251,7 +2251,7 @@ bool Meet(PPCContext& ctx, uint8_t* base) {
     if (n) REXLOG_INFO("sc5 net: match {}: {} agreed words changed:{}", g_match, n, differed);
   }
   g_shown_base = Get32(kFramesShown);  // the larger count, in both games
-  // the fight's random numbers from the agreed seed on both PCs (the game's own seeding: sub_824A35A8)
+  // the fight's random numbers from the agreed seed on both PCs (the game's own seeding: sub_824B2EA0)
   game::SetSeed(int64_t(seed));
   game::Reseed(ctx, base, seed);
   g_match_seed = seed;

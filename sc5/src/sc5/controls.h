@@ -26,7 +26,7 @@
 // (guard) joined by +. A button not listed keeps the game's own setting. Online the player's pad turns into Type A's
 // face buttons before the netplay sends it (ToDefaultLayout), so both games and the spectators see the combination
 // the player meant whatever each one set; offline the battle's conversion of player 1's pad takes it (controls.cpp's
-// hook of sub_82171AE8).
+// hook of sub_82172068).
 #include <cstdint>
 #include <string>
 
@@ -42,7 +42,7 @@ void Install();
 void Apply(uint32_t user, sc5::input::Pad& pad);
 std::string FilePath();
 
-// The game's own buttons in a fight, as its battle input carries them (sub_82171AE8)
+// The game's own buttons in a fight, as its battle input carries them (sub_82172068)
 constexpr uint8_t kGameA = 1, kGameB = 2, kGameK = 4, kGameG = 8;
 // The player's own pad in the game's default layout (Type A: X horizontal attack, Y vertical, B kick, A guard), for the
 // netplay: each button [fight] sets presses the face buttons that make its combination there and nothing else. The

@@ -45,8 +45,8 @@ commit `c94f5eb`) with this project's changes on top, in `patches\rexglue-sdk-v0
 - The auto exposure (`src\graphics\d3d12\command_processor.cpp`, `ReadBackSmallResolve`, 2026-11-18). Every frame
   the game shrinks the scene's brightness on the GPU: a 64x64 resolve (16 KB), then three of a single 32x32 tile
   (4 KB each, 8-bit RGBA), the last 8x8. Its frame's step reads the last on the CPU: the first texel of the tile at
-  physical 0x0F95A000 (guest 0xAF95A000), which `sub_8233E140`, a task of the step (so frames run again run it too),
-  turns into the exposure it eases towards (a float at 0x827445F4) and its post effects' constants. A resolve writes
+  physical 0x0F95A000 (guest 0xAF95A000), which `sub_8234BF20`, a task of the step (so frames run again run it too),
+  turns into the exposure it eases towards (a float at 0x827545F4) and its post effects' constants. A resolve writes
   only the GPU's copy of guest memory, so the game read 0 and over-exposed every scene: paler skin, silver-white
   hair on Mitsurugi (dark with grey streaks on the console), the sleeve prints washed out. Now a resolve of 8 KB or
   less (`kSmallResolveReadbackMax`) that the game makes again within two frames is copied into guest memory a frame
@@ -55,8 +55,8 @@ commit `c94f5eb`) with this project's changes on top, in `patches\rexglue-sdk-v0
   samples (0x0F973000): four 4 KB copies a frame, about 25 µs of the GPU thread a frame, no stall. A range resolved
   once (the textures made as a fight loads) is not read back; at render scale 2 to 4 the copy is downscaled first,
   as `readback_resolve` does.
-  Two PCs can't part over it. A hardware watch found `sub_8233E140` the only reader of the texel, and `sub_8233F698`
-  the only other reader of the exposure, for two drawing functions (`sub_8233F230`, `sub_82162200`). None of it is in
+  Two PCs can't part over it. A hardware watch found `sub_8234BF20` the only reader of the texel, and `sub_8234D478`
+  the only other reader of the exposure, for two drawing functions (`sub_8234D010`, `sub_82162668`). None of it is in
   the battle snapshot whose fight bytes the netplay hashes: two games, one reading back and one reading 0, had the
   same fight bytes at every check (they differed only in pose, pointer and heap bytes, which the hash leaves out).
   And two games stayed in sync over 16 matches, 10 of them with 40 ms each way (100 to 300 frames run again a

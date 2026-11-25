@@ -23,8 +23,8 @@
 
 #include "sc5/frame.h"
 
-REX_EXTERN(__imp__sub_824A35A8);
-REX_EXTERN(sub_824A35A8);  // seeds the game's random numbers: srand(seed >> 4) and its Mersenne Twister
+REX_EXTERN(__imp__sub_824B2EA0);
+REX_EXTERN(sub_824B2EA0);  // seeds the game's random numbers: srand(seed >> 4) and its Mersenne Twister
 
 namespace sc5::dbg {
 void OnFrameEnd();  // TEMPORARY (debug_watch.cpp)
@@ -33,7 +33,7 @@ void OnFrameEnd();  // TEMPORARY (debug_watch.cpp)
 namespace sc5::game {
 namespace {
 
-// a seed every call of sub_824A35A8 uses instead of its own (SC5_TEST_SEED, later netplay's agreed one), or none
+// a seed every call of sub_824B2EA0 uses instead of its own (SC5_TEST_SEED, later netplay's agreed one), or none
 std::atomic<int64_t> g_seed_override{-1};
 
 // SC5_TEST_SEED, read before the game first seeds (main's setup, before the first frame)
@@ -47,7 +47,7 @@ int64_t SeedOverride() {
   return g_seed_override.load(std::memory_order_relaxed);
 }
 
-constexpr uint32_t kBattleMachine = 0x82767D08;  // the battle's state machine: +0 the current state, +4 the pending one
+constexpr uint32_t kBattleMachine = 0x8277B808;  // the battle's state machine: +0 the current state, +4 the pending one
 
 std::atomic<int> g_sequence{kSeqNone};
 // the fight clock: armed when a fight starts loading, started at round 1's call
@@ -56,7 +56,7 @@ int64_t g_fight_start = -1;
 uint32_t g_last_battle = 0xFFFFFFFF;
 
 // SC5_TEST_HASH=1: each fight frame's players hashed into the log, to compare two runs with the same inputs
-constexpr uint32_t kPlayer1 = 0x82937070, kPlayer2 = 0x82994BA0, kPlayerSize = 0x5DB30;
+constexpr uint32_t kPlayer1 = 0x8294AC10, kPlayer2 = 0x829A8740, kPlayerSize = 0x5DB30;
 int g_test_hash = -1;
 // SC5_TEST_DUMP=<fight frame>,...: the players' objects written raw at those fight frames into SC5_TEST_DUMP_DIR
 std::vector<int64_t> g_dump_frames;
@@ -225,8 +225,8 @@ int64_t FightSeed() {
 void Reseed(PPCContext& ctx, uint8_t* base, uint32_t seed) {
   const PPCContext saved = ctx;
   ctx.r3.u64 = seed;
-  ctx.lr = 0x82189268;  // as from main's loop
-  sub_824A35A8(ctx, base);
+  ctx.lr = 0x82189A40;  // as from main's loop
+  sub_824B2EA0(ctx, base);
   ctx = saved;
 }
 
@@ -240,45 +240,45 @@ void SequenceCreated(int id) {
 // The sequence creators' first instructions (config\sc5_codegen.toml, "Sequences"): which screen comes next.
 #define SC5_SEQUENCE_HOOK(addr, id) \
   void Sc5Sequence_##addr() { sc5::game::SequenceCreated(id); }
-SC5_SEQUENCE_HOOK(82328C48, 1)
-SC5_SEQUENCE_HOOK(82328CE8, 2)
-SC5_SEQUENCE_HOOK(82328D88, 3)
-SC5_SEQUENCE_HOOK(82328E70, 4)
-SC5_SEQUENCE_HOOK(82328F50, 6)
-SC5_SEQUENCE_HOOK(82328FE8, 7)
-SC5_SEQUENCE_HOOK(82329060, 12)
-SC5_SEQUENCE_HOOK(823290D8, 13)
-SC5_SEQUENCE_HOOK(82329150, 8)
-SC5_SEQUENCE_HOOK(823291F8, 9)
-SC5_SEQUENCE_HOOK(82329298, 11)
-SC5_SEQUENCE_HOOK(82329338, 14)
-SC5_SEQUENCE_HOOK(823293B0, 15)
-SC5_SEQUENCE_HOOK(82329428, 17)
-SC5_SEQUENCE_HOOK(823294C0, 19)
-SC5_SEQUENCE_HOOK(82329560, 20)
-SC5_SEQUENCE_HOOK(82329600, 22)
-SC5_SEQUENCE_HOOK(823296A0, 23)
-SC5_SEQUENCE_HOOK(82329740, 25)
+SC5_SEQUENCE_HOOK(82335840, 1)
+SC5_SEQUENCE_HOOK(823358E0, 2)
+SC5_SEQUENCE_HOOK(82335980, 3)
+SC5_SEQUENCE_HOOK(82335A68, 4)
+SC5_SEQUENCE_HOOK(82335B48, 6)
+SC5_SEQUENCE_HOOK(82335BE0, 7)
+SC5_SEQUENCE_HOOK(82335C58, 12)
+SC5_SEQUENCE_HOOK(82335CD0, 13)
+SC5_SEQUENCE_HOOK(82335D48, 8)
+SC5_SEQUENCE_HOOK(82335DF0, 9)
+SC5_SEQUENCE_HOOK(82335E90, 11)
+SC5_SEQUENCE_HOOK(82335F30, 14)
+SC5_SEQUENCE_HOOK(82335FA8, 15)
+SC5_SEQUENCE_HOOK(82336020, 17)
+SC5_SEQUENCE_HOOK(823360B8, 19)
+SC5_SEQUENCE_HOOK(82336158, 20)
+SC5_SEQUENCE_HOOK(823361F8, 22)
+SC5_SEQUENCE_HOOK(82336298, 23)
+SC5_SEQUENCE_HOOK(82336338, 25)
 
 // AstralHome's creator (the main menu, sequence 4): makes its 1088-byte object and puts its handle at [r3] and the
 // object at [r3 + 4]
-REX_EXTERN(__imp__sub_82328E70);
-REX_HOOK_RAW(sub_82328E70) {
+REX_EXTERN(__imp__sub_82335A68);
+REX_HOOK_RAW(sub_82335A68) {
   const uint32_t out = ctx.r3.u32;
-  __imp__sub_82328E70(ctx, base);
+  __imp__sub_82335A68(ctx, base);
   sc5::game::g_home = sc5::game::ReadU32(out + 4);
   REXLOG_INFO("sc5: the main menu's object at {:08X} (frame {})", sc5::game::g_home.load(), sc5::frame::Count());
 }
 
-// The game's random numbers are seeded by sub_824A35A8: at boot from the date and time (sub_82163490), and again
-// as a battle is set up from a value its own online code agrees on (sub_823A0070, sub_823A22C8, the seed at
+// The game's random numbers are seeded by sub_824B2EA0: at boot from the date and time (sub_82163900), and again
+// as a battle is set up from a value its own online code agrees on (sub_823AFD00, sub_823B1FB0, the seed at
 // +0x19444). Every PC in a match, and every run of a test, must draw the same numbers.
 namespace sc5::game {
 std::atomic<bool> g_quiet_seeds{false};
 void QuietSeeds(bool quiet) { g_quiet_seeds.store(quiet, std::memory_order_relaxed); }
 }  // namespace sc5::game
 
-REX_HOOK_RAW(sub_824A35A8) {
+REX_HOOK_RAW(sub_824B2EA0) {
   const int64_t over = sc5::game::SeedOverride();
   if (!sc5::game::g_quiet_seeds.load(std::memory_order_relaxed))
     REXLOG_INFO("sc5: random numbers seeded with {:08X}{} (from {:08X}, frame {})", ctx.r3.u32,
@@ -286,7 +286,7 @@ REX_HOOK_RAW(sub_824A35A8) {
                 sc5::frame::Count());
   if (over >= 0) ctx.r3.u64 = uint32_t(over);
   sc5::game::g_last_seed.store(ctx.r3.u32, std::memory_order_relaxed);
-  __imp__sub_824A35A8(ctx, base);
+  __imp__sub_824B2EA0(ctx, base);
 }
 
 // The battle state snapshot the game just saved (sc5_codegen.toml): with SC5_TEST_HASH=1 its hash into the log

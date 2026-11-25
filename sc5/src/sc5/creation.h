@@ -21,7 +21,7 @@ constexpr uint32_t RemoteSlot(int side) { return kSlots - 2 + uint32_t(side & 1)
 
 using Record = std::vector<uint8_t>;  // kRecordSize bytes, as the save keeps them (big-endian)
 
-// the save image in memory (the save object's, [0x8273EF10] + 0x48; 0 before the save is in)
+// the save image in memory (the save object's, [0x8274EF10] + 0x48; 0 before the save is in)
 uint32_t SaveImage();
 // slot n's first byte in memory (0 when there is no save image)
 uint32_t Slot(uint32_t n);
@@ -50,7 +50,7 @@ uint32_t ChecksumOf(const Record& r);
 
 // What this PC's game can load for a created character (creation_check.h's Known): read once from the game's own
 // tables at the select screen (the creation context, [select object + 1264]: each base type's parts sets with their
-// models, the weapons of each style), keeping only what the game says is released here (sub_8245BED0, unlocks.cpp:
+// models, the weapons of each style), keeping only what the game says is released here (sub_8246B318, unlocks.cpp:
 // downloadable parts only with their package). Main thread (it asks the game); false while the tables are not there.
 bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t select_object);
 // true once ReadKnown has read the tables and DropRefused has taken out what fails the check: created characters are
@@ -77,7 +77,7 @@ std::vector<HeldOut> HeldOutList();
 // Everything a record from another PC must pass before anything loads it (creation_check.h's CheckRecord against this
 // PC's Known): "" when it passes, else why not
 std::string Check(const Record& r);
-// On top of Check, for a record that passed it: the game's own repair pass (sub_82221D88, what a console runs on a
+// On top of Check, for a record that passed it: the game's own repair pass (sub_82222B28, what a console runs on a
 // save's records, here checking the checksum too) on a copy in a buffer of the SDK's own heap, which nothing of the
 // game reads (not a save slot: the creation manager copies slots as it goes). "" when the pass takes the record as it
 // is; why not when it refuses it or would change any byte. Main thread.
@@ -91,7 +91,7 @@ void ClearRemote(int only = -1);
 // entries of 13,544 bytes from +4: the record, then what it works out from it (a count of break-level parts at +13476
 // that its lists take as "used", the type at +13480, the DLC flag at +13528). It copies the save's slots as a VS
 // Battle's menus come, so a record placed during the select screen needs its entry filled too: the game's own
-// sub_82220B50 does it from the record (main thread, from a frame's top). False without a manager.
+// sub_82221978 does it from the record (main thread, from a frame's top). False without a manager.
 bool FillEntry(PPCContext& ctx, uint8_t* base, uint32_t manager, uint32_t n);
 // a remote slot's entry that its save slot no longer backs (an earlier match's), and a refused own one, listed no
 // more: each frame of the select screen, before any pick

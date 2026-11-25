@@ -1,9 +1,9 @@
 """Print a recompiled function's PowerPC listing with guest addresses, from the generated code.
 
-    python -I tools/py/listfn.py 824943F0 [--grep TEXT]
+    python -I tools/py/listfn.py 824A3780 [--grep TEXT]
 
 The generated C++ (sc5/generated/default/sc5_recomp.*.cpp) keeps each instruction as a comment ("// lwz r11,0(r3)")
-and each branch target as a label ("loc_82494534:"); addresses are counted from the function's start and set again at
+and each branch target as a label ("loc_824A38C4:"); addresses are counted from the function's start and set again at
 every label, so they stay right where the code generator left an instruction out of the comments.
 """
 
@@ -31,7 +31,7 @@ def find(func):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("address", help="the function's guest address, hex (824943F0)")
+    ap.add_argument("address", help="the function's guest address, hex (824A3780)")
     ap.add_argument("--grep", help="only lines containing this text")
     args = ap.parse_args()
     func = args.address.upper().removeprefix("0X").removeprefix("SUB_")

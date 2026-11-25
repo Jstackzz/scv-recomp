@@ -469,7 +469,7 @@ def parse_index(d):
 
 
 def x360_index(slots, entries, files=None):
-    """The 360 game's index (sub_82388990, sub_82388760): version 1, the names of the entries' files (strings, offset
+    """The 360 game's index (sub_82398158, sub_82397F28): version 1, the names of the entries' files (strings, offset
     0 none), each entry's tail the offset of its file's name, a zero offer id and license bit 0 (the package's license
     mask, every bit for the player's own packages)."""
     files = files or {}

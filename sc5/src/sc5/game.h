@@ -32,7 +32,7 @@ enum Sequence : int {
 int SequenceId();
 const char* SequenceName(int id);
 
-// The battle's state machine (0x82767D08): which of its embedded states is current, as its offset in the struct
+// The battle's state machine (0x8277B808): which of its embedded states is current, as its offset in the struct
 // (0 when none). The ones a VS fight goes through:
 constexpr uint32_t kBattleIdle = 0x18;        // menus
 constexpr uint32_t kBattleLoading = 0xD0;
@@ -48,7 +48,7 @@ const char* BattleStateName(uint32_t state);
 // loaded is 0), or -1 outside a fight: what tests time their inputs by (the frames before depend on loading).
 int64_t FightFrame();
 
-// The seed every seeding of the game's random numbers uses from now on (sub_824A35A8), or -1 for its own (the date
+// The seed every seeding of the game's random numbers uses from now on (sub_824B2EA0), or -1 for its own (the date
 // and time at boot, its online code's at a battle). SC5_TEST_SEED=<n> sets it from the start.
 void SetSeed(int64_t seed);
 // the seed the fight's random numbers took last (the override when there is one), and the game's seeding run again

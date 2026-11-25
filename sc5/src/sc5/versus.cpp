@@ -1,7 +1,7 @@
 // A VS fight's setup, see versus.h.
 //
-// sub_8243D2A0 copies the VS settings record (r4: two sides of 88 bytes, then the match's) into the battle setup;
-// sub_8243D430 then sets the players up from it. The record (0x402D075C in tests):
+// sub_8244C6A8 copies the VS settings record (r4: two sides of 88 bytes, then the match's) into the battle setup;
+// sub_8244C838 then sets the players up from it. The record (0x402D075C in tests):
 //   side +0  1 a player, 2 the CPU          +4  the input: 1 a pad, 2 the CPU's
 //        +8  the rounds to win ("Battle Count", 3 unless changed)   +12, +16  health 240.0   +20  240
 //        +48 1, then nine words 0x22
@@ -28,8 +28,8 @@
 #include "sc5/game.h"
 #include "sc5/net/netplay.h"
 
-REX_EXTERN(__imp__sub_8243D2A0);
-REX_EXTERN(__imp__sub_8243D430);
+REX_EXTERN(__imp__sub_8244C6A8);
+REX_EXTERN(__imp__sub_8244C838);
 
 namespace sc5::versus {
 namespace {
@@ -47,15 +47,15 @@ void Put(uint32_t a, uint32_t v) {
 constexpr uint32_t kSide = 88, kRounds = 8, kRoundTime = 176, kStage = 208;
 
 // What both games must have alike from the battle setup on, which player 2's game takes from player 1's: the random
-// number generators the setup does not seed (Park-Miller and TT800, 0x829249F0-0x82924A87, sc5/rng.cpp) and the
+// number generators the setup does not seed (Park-Miller and TT800, 0x82938574-0x82924A87, sc5/rng.cpp) and the
 // counters that started at boot (as the netplay's barrier agrees them again: the loading in between draws from them),
 // but the three that count frames presented to the GPU, which each game's own GPU waits by (battle.cpp's kRaw).
-// The C library's rand() and the Mersenne Twister both games seed with the match's seed (sub_824A35A8).
+// The C library's rand() and the Mersenne Twister both games seed with the match's seed (sub_824B2EA0).
 std::vector<uint32_t> SetupAddresses() {
   std::vector<uint32_t> out;
-  for (uint32_t a = 0x829249F0; a < 0x829249F0 + 0x98; a += 4) out.push_back(a);
-  for (uint32_t a : {0x82771B40u, 0x82771B44u, 0x82771B48u, 0x82771B4Cu, 0x82771B50u, 0x82771B54u, 0x82771B58u,
-                     0x82771B5Cu, 0x828E8790u, 0x835B3EB4u})
+  for (uint32_t a = 0x82938574; a < 0x82938574 + 0x98; a += 4) out.push_back(a);
+  for (uint32_t a : {0x82785640u, 0x82785644u, 0x82785648u, 0x8278564Cu, 0x82785650u, 0x82785654u, 0x82785658u,
+                     0x8278565Cu, 0x828FC310u, 0x835C79B4u})
     out.push_back(a);
   return out;
 }
@@ -71,7 +71,7 @@ void SetOnline(bool on, int side, int wins) {
 }  // namespace sc5::versus
 
 // the VS settings copied into the battle setup
-REX_HOOK_RAW(sub_8243D2A0) {
+REX_HOOK_RAW(sub_8244C6A8) {
   using namespace sc5::versus;
   const uint32_t rec = ctx.r4.u32;
   sc5::autopilot::OnSetup();  // the stage select's pick taken: told before player 2's game waits below for player 1's
@@ -106,27 +106,27 @@ REX_HOOK_RAW(sub_8243D2A0) {
     const int64_t seed = sc5::game::FightSeed();
     if (seed >= 0) sc5::game::Reseed(ctx, base, uint32_t(seed));
   }
-  __imp__sub_8243D2A0(ctx, base);
+  __imp__sub_8244C6A8(ctx, base);
 }
 
-// The round's call (sub_82323DD0, from the battle's state machine) first asks whether a sound from before still plays
-// (an audio object's +380, the setup's +180): if so it stops it and its state (0x82767D2C) keeps 1 at +0xC, else 2.
+// The round's call (sub_82330618, from the battle's state machine) first asks whether a sound from before still plays
+// (an audio object's +380, the setup's +180): if so it stops it and its state (0x8277B82C) keeps 1 at +0xC, else 2.
 // That follows the audio's own timing, so after a first match two PCs took different ways and their round calls ran
 // apart (a desync in the second match's first check). The call's state always keeps 2 here (the way with nothing
 // playing; a sound still playing is stopped all the same).
-REX_EXTERN(__imp__sub_82323DD0);
-REX_HOOK_RAW(sub_82323DD0) {
-  __imp__sub_82323DD0(ctx, base);
-  constexpr uint32_t kCallAfterSound = 0x82767D2C + 0xC;
+REX_EXTERN(__imp__sub_82330618);
+REX_HOOK_RAW(sub_82330618) {
+  __imp__sub_82330618(ctx, base);
+  constexpr uint32_t kCallAfterSound = 0x8277B82C + 0xC;
   if (sc5::versus::Get(kCallAfterSound) == 1) sc5::versus::Put(kCallAfterSound, 2);
 }
 
 // the players set up: online, player 2 is the second pad's
-REX_HOOK_RAW(sub_8243D430) {
-  __imp__sub_8243D430(ctx, base);
+REX_HOOK_RAW(sub_8244C838) {
+  __imp__sub_8244C838(ctx, base);
   static const bool test_human = [] { const char* v = std::getenv("SC5_TEST_P2_HUMAN"); return v && v[0] == '1'; }();
   if (!sc5::versus::g_online && !sc5::net::Active() && !test_human) return;
-  constexpr uint32_t kP2 = 0x82994BA0;
+  constexpr uint32_t kP2 = 0x829A8740;
   sc5::versus::Put(kP2 + 628, 1);  // the input: a pad
   sc5::versus::Put(kP2 + 432, 1);  // which: the second
   REXLOG_INFO("sc5 versus: player 2 is the second pad's");

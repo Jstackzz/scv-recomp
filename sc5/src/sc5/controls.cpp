@@ -95,8 +95,8 @@ struct Map {
   Map() { fight.fill(-1); }
 };
 
-// The buttons [fight] can set, and each one's bit in the game's own pad state (the pad manager at 0x82771080, + 128 a
-// pad: what the battle's conversion sub_82171AE8 reads; its table at 0x8275C12C has the eight of the game's Control
+// The buttons [fight] can set, and each one's bit in the game's own pad state (the pad manager at 0x82784B80, + 128 a
+// pad: what the battle's conversion sub_82172068 reads; its table at 0x8276FC1C has the eight of the game's Control
 // Settings, LT 0x2 LB 0x4 RT 0x10 B 0x20 A 0x40 RB 0x80 Y 0x100 X 0x200; the stick clicks, 0x1 and 0x8, press nothing
 // there: the conversion lets through only the d-pad and START, 0xBC00)
 struct FightButton {
@@ -565,19 +565,19 @@ void OfflineFight(uint32_t bits, uint32_t& strip, uint32_t& add) {
 
 }  // namespace sc5::controls
 
-// The battle's conversion of a pad's buttons into the game's (sub_82171AE8, from the battle's input task sub_8213DEC0,
+// The battle's conversion of a pad's buttons into the game's (sub_82172068, from the battle's input task sub_8213E538,
 // twice a player a frame: the buttons held and those newly pressed; r3 the pad, r4 its bits as the pad manager keeps
 // them; r3 back: kGame* with the d-pad and START let through). Offline (no match of the netplay's, whose pads come in
 // Type A already: ToDefaultLayout) player 1's pad (pad 0: the first controller and the keyboard) takes [fight]: each
 // button set there presses its combination, every other button what the game's own Control Settings give it.
 // Tests: SC5_DBG_FIGHT=1 logs each pad's game buttons newly pressed (its second call a frame).
-REX_EXTERN(__imp__sub_82171AE8);
-REX_HOOK_RAW(sub_82171AE8) {
+REX_EXTERN(__imp__sub_82172068);
+REX_HOOK_RAW(sub_82172068) {
   const uint32_t pad = ctx.r3.u32, bits = ctx.r4.u32;
   uint32_t strip = 0, add = 0;
   if (pad == 0 && !sc5::net::Active()) sc5::controls::OfflineFight(bits, strip, add);
   if (strip) ctx.r4.u64 = bits & ~strip;
-  __imp__sub_82171AE8(ctx, base);
+  __imp__sub_82172068(ctx, base);
   if (strip) ctx.r3.u64 = ctx.r3.u32 | add;
   static const bool dbg = [] { const char* v = std::getenv("SC5_DBG_FIGHT"); return v && v[0] == '1'; }();
   if (dbg && pad < 4) {

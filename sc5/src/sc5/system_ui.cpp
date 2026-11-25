@@ -13,7 +13,7 @@ namespace sc5::system_ui {
 namespace {
 
 // The prompts answered for the player, by the game's call that raises them (a return address in the chain, the same
-// in every language). The game's message box helper is sub_824906D8(task, buttons, title id, text id).
+// in every language). The game's message box helper is sub_8249FA48(task, buttons, title id, text id).
 struct Known {
   uint32_t caller;
   uint32_t button;

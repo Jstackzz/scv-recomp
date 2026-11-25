@@ -1,8 +1,8 @@
 #pragma once
-// The game's frame boundary. main (sub_82189228) sets the game up (sub_82163490) and then runs
-// `while (sub_82163C00()) {}` on the main guest thread: sub_82163C00 is one frame. It reads the pads
-// (sub_82493BC8), runs the game's sequences (sub_824943F0) and tasks (sub_82494CA0), draws (sub_8249B8A8,
-// sub_8249E548) and presents (sub_824945F8). Its call from main (0x82189264) is the top of a frame: nothing of
+// The game's frame boundary. main (sub_82189A00) sets the game up (sub_82163900) and then runs
+// `while (sub_82164070()) {}` on the main guest thread: sub_82164070 is one frame. It reads the pads
+// (sub_824A2F58), runs the game's sequences (sub_824A3780) and tasks (sub_824A4030), draws (sub_824AAC38,
+// sub_824AD398) and presents (sub_824A3988). Its call from main (0x82189A3C) is the top of a frame: nothing of
 // the game's but main's own frame is on the guest stack there, and the pads are not read yet.
 #include <cstdint>
 
@@ -29,7 +29,7 @@ void Post(Hook hook);
 
 // Rollback: from the top hook, after putting the battle back to an earlier frame (and the count with SetCount), run
 // one frame again: the whole frame function, its drawing (phases 0x200 and 0x400), its end (0x500, the present) and
-// the models' pose (sub_822BCF88: nothing in the fight reads it, frame.cpp) left out, then the end-of-frame
+// the models' pose (sub_822C9B38: nothing in the fight reads it, frame.cpp) left out, then the end-of-frame
 // bookkeeping (the count, game::OnFrameEnd; not the end hook). Main thread.
 void RunAgain(PPCContext& ctx, uint8_t* base);
 void SetCount(uint64_t n);

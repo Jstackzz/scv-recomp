@@ -1,9 +1,9 @@
 // Sound and rollback. The game plays its sounds through CRI AtomEx: it gives a player a cue (criAtomExPlayer_SetCueId,
-// sub_8256C4E8: r3 the player, r4 the cue sheet, r5 the cue) and starts it (criAtomExPlayer_Start, sub_8256CDF8: r3
+// sub_8257C298: r3 the player, r4 the cue sheet, r5 the cue) and starts it (criAtomExPlayer_Start, sub_8257CBA8: r3
 // the player; the playback id back, -1 when nothing started). Its sound handles keep the playback id, and two of its
-// three ways to start a sound (sub_821D63B0, sub_821D6650) stop the handle's player first (criAtomExPlayer_Stop,
-// sub_8256C568, through sub_821D64E0); it stops one sound with criAtomExPlayback_Stop (sub_8256C348: r3 the playback
-// id) and asks after one with criAtomExPlayback_GetStatus (sub_8256CD60: 1 preparing, 2 playing, 3 gone).
+// three ways to start a sound (sub_821D6BB8, sub_821D6E58) stop the handle's player first (criAtomExPlayer_Stop,
+// sub_8257C318, through sub_821D6CE8); it stops one sound with criAtomExPlayback_Stop (sub_8257C0F8: r3 the playback
+// id) and asks after one with criAtomExPlayback_GetStatus (sub_8257CB10: 1 preparing, 2 playing, 3 gone).
 //
 // A rollback runs frames again that started their sounds already. As Timestone (the UMVC3 rollback mod) plans it,
 // every start is kept with its frame, player and cue, and a rollback (RollbackBegin .. RollbackEnd) reconciles them:
@@ -50,11 +50,11 @@
 #include "sc5/frame.h"
 #include "sc5/sound.h"
 
-REX_EXTERN(__imp__sub_8256CDF8);
-REX_EXTERN(__imp__sub_8256C4E8);
-REX_EXTERN(__imp__sub_8256C568);
-REX_EXTERN(__imp__sub_8256C348);
-REX_EXTERN(__imp__sub_8256B678);
+REX_EXTERN(__imp__sub_8257CBA8);
+REX_EXTERN(__imp__sub_8257C298);
+REX_EXTERN(__imp__sub_8257C318);
+REX_EXTERN(__imp__sub_8257C0F8);
+REX_EXTERN(__imp__sub_8257B428);
 
 namespace {
 
@@ -85,13 +85,13 @@ void Prune(uint64_t frame) {
 
 }  // namespace
 
-REX_HOOK_RAW(sub_8256C4E8) {
+REX_HOOK_RAW(sub_8257C298) {
   if (sc5::frame::OnMainThread()) g_cue[ctx.r3.u32] = Cue{ctx.r4.u32, ctx.r5.u32};
-  __imp__sub_8256C4E8(ctx, base);
+  __imp__sub_8257C298(ctx, base);
 }
 
-REX_HOOK_RAW(sub_8256CDF8) {
-  if (!sc5::frame::OnMainThread()) return __imp__sub_8256CDF8(ctx, base);
+REX_HOOK_RAW(sub_8257CBA8) {
+  if (!sc5::frame::OnMainThread()) return __imp__sub_8257CBA8(ctx, base);
   const uint64_t frame = sc5::frame::Count();
   const uint32_t player = ctx.r3.u32;
   const auto c = g_cue.find(player);
@@ -99,7 +99,7 @@ REX_HOOK_RAW(sub_8256CDF8) {
   if (g_rolling_back && sc5::frame::Replaying()) {
     // the first run's start of the same cue in the rollback's frames: this frame's first, else the nearest. Not by
     // player: the game deals its players out in turn, and the turn is not part of what rollback puts back. Not this
-    // frame's only: the game starts some sounds when the one before has ended (CRI's status, sub_8256CD60), which is
+    // frame's only: the game starts some sounds when the one before has ended (CRI's status, sub_8257CB10), which is
     // the audio's time: a frame run again later sees it ended frames earlier than the first run did.
     Rec* best = nullptr;
     uint64_t best_d = 0;
@@ -132,30 +132,30 @@ REX_HOOK_RAW(sub_8256CDF8) {
       REXLOG_INFO("sc5 dbg sound: frame {} run again starts {}:{} on player {:X}, unmatched; kept near it:{}", frame,
                   cue.sheet, cue.cue, player, kept);
     }
-    __imp__sub_8256CDF8(ctx, base);
+    __imp__sub_8257CBA8(ctx, base);
     g_recs.push_back(Rec{frame, player, cue.sheet, cue.cue, ctx.r3.u32, false});
     g_late++;
     return;
   }
-  __imp__sub_8256CDF8(ctx, base);
+  __imp__sub_8257CBA8(ctx, base);
   g_recs.push_back(Rec{frame, player, cue.sheet, cue.cue, ctx.r3.u32, false});
   Prune(frame);
 }
 
 // criAtomExPlayer_Stop (r3 the player) in a frame run again: what is still to be matched on that player is spared
-REX_HOOK_RAW(sub_8256C568) {
+REX_HOOK_RAW(sub_8257C318) {
   if (!g_rolling_back || !sc5::frame::Replaying() || !sc5::frame::OnMainThread())
-    return __imp__sub_8256C568(ctx, base);
+    return __imp__sub_8257C318(ctx, base);
   const uint32_t player = ctx.r3.u32;
   bool spare = false;
   for (const Rec& r : g_recs) spare = spare || Spared(r, player);
-  if (!spare) return __imp__sub_8256C568(ctx, base);
+  if (!spare) return __imp__sub_8257C318(ctx, base);
   const PPCContext saved = ctx;
   for (const Rec& r : g_recs) {
     if (r.player != player || r.id == kNone || Spared(r, player)) continue;
     ctx = saved;
     ctx.r3.u64 = r.id;
-    __imp__sub_8256C348(ctx, base);
+    __imp__sub_8257C0F8(ctx, base);
   }
   ctx = saved;
   g_narrowed++;
@@ -182,7 +182,7 @@ void RollbackEnd(PPCContext& ctx, uint8_t* base) {
     if (it->id != kNone) {
       ctx = saved;
       ctx.r3.u64 = it->id;
-      __imp__sub_8256C348(ctx, base);
+      __imp__sub_8257C0F8(ctx, base);
     }
     g_wrong++;
     it = g_recs.erase(it);
@@ -197,10 +197,10 @@ void RollbackEnd(PPCContext& ctx, uint8_t* base) {
 
 }  // namespace sc5::sound
 
-// The music, effects and voices levels. The game sets its sound categories' volumes in one place: sub_82338F38 applies
-// its sound options (the object at 0x8290DC84, levels 0 to 15) through sub_821D4628 (r3 the category, f1 the volume, 0
-// to 1), which scales the volume by the category's base level (the floats at 0x82902608) and hands it to CRI
-// (criAtomExCategory_SetVolumeById, sub_8256B678: r3 the category's id, f1 its volume; nothing else calls it). Each
+// The music, effects and voices levels. The game sets its sound categories' volumes in one place: sub_82346FA8 applies
+// its sound options (the object at 0x82921808, levels 0 to 15) through sub_821D4E30 (r3 the category, f1 the volume, 0
+// to 1), which scales the volume by the category's base level (the floats at 0x82916188) and hands it to CRI
+// (criAtomExCategory_SetVolumeById, sub_8257B428: r3 the category's id, f1 its volume; nothing else calls it). Each
 // level scales what the game hands CRI there, after the game's own clamp (so above 100% is louder than the game's
 // loudest), and nothing of the game's own changes: its options and its records of them stay as the player set them.
 // A change applies at the top of the next frame (the main thread, where the game sets them too): each category again
@@ -249,7 +249,7 @@ void Reapply(PPCContext& ctx, uint8_t* base) {
     const PPCContext saved = ctx;
     ctx.r3.u64 = cat;
     ctx.f1.f64 = volume * factor;
-    __imp__sub_8256B678(ctx, base);
+    __imp__sub_8257B428(ctx, base);
     ctx = saved;
     REXLOG_INFO("sc5 sound: category {} at {:.0f}% of the game's {:.2f}", cat, factor * 100.0f, volume);
   }
@@ -343,7 +343,7 @@ void LogCategoryTables() {
 
 }  // namespace
 
-REX_HOOK_RAW(sub_8256B678) {
+REX_HOOK_RAW(sub_8257B428) {
   const uint32_t cat = ctx.r3.u32;
   static bool dbg_once = [] {
     const char* v = std::getenv("SC5_DBG_SOUND");
@@ -370,15 +370,15 @@ REX_HOOK_RAW(sub_8256B678) {
                   factor != 1.0f ? " (scaled by the launcher's level)" : "");
     ctx.f1.f64 *= factor;
   }
-  __imp__sub_8256B678(ctx, base);
+  __imp__sub_8257B428(ctx, base);
 }
 
-// The game's movies (CRI Mana; sub_825A2838: r3 the movie player, f1 its volume) play at the game's music level (the
-// float sub_82338F38 keeps at 0x8274D5D0; sub_821D1F30 hands it over, the only caller): the music level scales them too.
-REX_EXTERN(__imp__sub_825A2838);
-REX_HOOK_RAW(sub_825A2838) {
+// The game's movies (CRI Mana; sub_825B25C0: r3 the movie player, f1 its volume) play at the game's music level (the
+// float sub_82346FA8 keeps at 0x827610B8; sub_821D2710 hands it over, the only caller): the music level scales them too.
+REX_EXTERN(__imp__sub_825B25C0);
+REX_HOOK_RAW(sub_825B25C0) {
   ctx.f1.f64 *= g_level[0].load(std::memory_order_relaxed);
-  __imp__sub_825A2838(ctx, base);
+  __imp__sub_825B25C0(ctx, base);
 }
 
 namespace sc5::sound {

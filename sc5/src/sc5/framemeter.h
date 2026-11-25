@@ -6,7 +6,7 @@
 // the attack's level). Shown while the launcher's "Frame data in practice" is on (SC5_FRAMEDATA, display.txt's
 // frame_data; on in a game started by hand) and F7 in the game has not hidden it.
 //
-// It only reads the fighters' memory, from a hook after the game's step (sub_82493230: every run of a frame, a
+// It only reads the fighters' memory, from a hook after the game's step (sub_824A25C0: every run of a frame, a
 // rollback's reruns too), and never calls the game's code otherwise: it cannot change what the game computes, so two
 // games of an online match stay alike whatever either shows. Each frame's reading is kept under the fight's own frame
 // count, which a rollback sets back and a pause stops: a frame run again replaces its first run, so what is shown is

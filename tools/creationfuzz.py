@@ -35,7 +35,7 @@ def rotl(w, r):
 
 
 def checksum(rec):
-    """The game's (sub_82245F98): each word turned left by an amount the word before sets, XORed together."""
+    """The game's (sub_822470B0): each word turned left by an amount the word before sets, XORed together."""
     acc, rot = 0, 7
     for j in range(3334):
         w = rotl(struct.unpack_from(">I", rec, 4 * j)[0], rot)
@@ -152,7 +152,7 @@ def spoil(name, b, rnd):
         b[14] = 127
     elif name == "fightervoice":  # voice
         b[10] = 254
-    elif name.startswith("fightervoice") and name[12:].isdigit():  # a voice the game knows (sub_82351040)
+    elif name.startswith("fightervoice") and name[12:].isdigit():  # a voice the game knows (sub_8235EE20)
         b[10] = int(name[12:])
     elif name == "fighterheight":  # height
         b[13224] = 127

@@ -8,12 +8,12 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
-REX_EXTERN(__imp__sub_8245BED0);  // the release state of an id: (release table, id) -> state | 8 if new
+REX_EXTERN(__imp__sub_8246B318);  // the release state of an id: (release table, id) -> state | 8 if new
 
 namespace sc5::unlocks {
 namespace {
 
-constexpr uint32_t kIds = 0x1D02;  // the table's entries (sub_8245BED0 answers 0 from there on)
+constexpr uint32_t kIds = 0x1D02;  // the table's entries (sub_8246B318 answers 0 from there on)
 bool g_enabled = true;
 
 }  // namespace
@@ -29,7 +29,7 @@ bool Enabled() { return g_enabled; }
 
 // A locked entry (state 0, or 1) answers released (2), keeping its "new" mark; downloadable content (3) and hidden
 // entries (4) go to the game's own answer. The table itself is not changed: the save keeps what was earned, and the
-// game's own unlocks (sub_8245BF90 reads the table directly) still record into it.
+// game's own unlocks (sub_8246B3D8 reads the table directly) still record into it.
 bool Released(const uint8_t* base, uint32_t table, uint32_t id, uint32_t& state_out) {
   if (!g_enabled || !table || id >= kIds) return false;
   const uint32_t at = table + (id >> 1);
@@ -44,11 +44,11 @@ bool Released(const uint8_t* base, uint32_t table, uint32_t id, uint32_t& state_
 
 }  // namespace sc5::unlocks
 
-REX_HOOK_RAW(sub_8245BED0) {
+REX_HOOK_RAW(sub_8246B318) {
   uint32_t state = 0;
   if (sc5::unlocks::Released(base, ctx.r3.u32, ctx.r4.u32 & 0xFFFF, state)) {
     ctx.r3.u64 = state;
     return;
   }
-  __imp__sub_8245BED0(ctx, base);
+  __imp__sub_8246B318(ctx, base);
 }

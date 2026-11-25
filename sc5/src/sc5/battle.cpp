@@ -22,17 +22,17 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
-REX_EXTERN(sub_82159DF0);  // saves the battle's state into a stream (r3)
-REX_EXTERN(sub_8215A360);  // restores it from a stream (r3)
-REX_EXTERN(__imp__sub_8213DEC0);  // a task's update: the players' held and newly pressed buttons (0x82927E88)
+REX_EXTERN(sub_8215A298);  // saves the battle's state into a stream (r3)
+REX_EXTERN(sub_8215A808);  // restores it from a stream (r3)
+REX_EXTERN(__imp__sub_8213E538);  // a task's update: the players' held and newly pressed buttons (0x8293BA28)
 
 namespace sc5::dbg { void QuietWatch(bool on); }  // debug_watch.cpp: a read watch leaves our saves out
 namespace sc5::battle {
 namespace {
 
-constexpr uint32_t kStreamVtable = 0x820BA8B8;
+constexpr uint32_t kStreamVtable = 0x820BA908;
 constexpr uint32_t kCapacity = 0x28000;
-constexpr uint32_t kMainLoopReturn = 0x82189268;  // what a call from main's loop leaves in lr
+constexpr uint32_t kMainLoopReturn = 0x82189A40;  // what a call from main's loop leaves in lr
 
 rex::memory::Memory* Mem() {
   auto* ks = REX_KERNEL_STATE();
@@ -46,44 +46,44 @@ void Put32(uint32_t address, uint32_t value) {
 uint32_t Get32(uint32_t address) { return __builtin_bswap32(*Mem()->TranslateVirtual<const uint32_t*>(address)); }
 
 // What the game's snapshot does not carry exactly, kept raw beside it (SC5_BATTLE_RAW=1, being tried): the players'
-// objects (static), the battle's state machine, the pad manager (0x82771080: pads, presses, its frame counters; and the
-// 0x100 bytes before it, being looked at), the game's 360 pads (0x828B3A40: four objects of 400 bytes that read
-// XInput, with the last packet number each saw), the random numbers sub_824A33D8 and sub_824A3248 draw (a Park-Miller
-// generator at 0x829249F8) and sub_824A3030 (TT800: 25 words at 0x82924A20, its position at +100), the fighters'
-// AI (sub_822DC390 runs it for both players, human or not, every frame: its state 0x82A15980-0x82A190E0, the virtual
-// pads at 0x82A18518, 152 bytes a player; being tried), the players' input delay rings (0x828FD130: per player a write count, then 61 slots of 8 bytes, then a flag; sub_8216E2F8
-// puts each frame's input `delay` slots ahead, 0x8275C15C per player, 2 offline), the frame counters that start at
+// objects (static), the battle's state machine, the pad manager (0x82784B80: pads, presses, its frame counters; and the
+// 0x100 bytes before it, being looked at), the game's 360 pads (0x828C75C0: four objects of 400 bytes that read
+// XInput, with the last packet number each saw), the random numbers sub_824B2CD0 and sub_824B2B40 draw (a Park-Miller
+// generator at 0x8293857C) and sub_824B2928 (TT800: 25 words at 0x82938580, its position at +100), the fighters'
+// AI (sub_822E8FA0 runs it for both players, human or not, every frame: its state 0x82A29520-0x82A2CC90, the virtual
+// pads at 0x82A2C0B8, 152 bytes a player; being tried), the players' input delay rings (0x82910CB0: per player a write count, then 61 slots of 8 bytes, then a flag; sub_8216E810
+// puts each frame's input `delay` slots ahead, 0x8276FC4C per player, 2 offline), the frame counters that start at
 // boot, the main thread's rand state.
 struct Region {
   uint32_t address, size;
 };
-constexpr uint32_t kPlayerObjects[2] = {0x82937070, 0x82994BA0};
+constexpr uint32_t kPlayerObjects[2] = {0x8294AC10, 0x829A8740};
 constexpr uint32_t kThrowObject = 0x5BE90;  // in each player's object: a throw's heap object (see Restore)
 const Region kRaw[] = {
-    {0x82937070, 0x5DB30}, {0x82994BA0, 0x5DB30}, {0x82767D08, 0x200}, {0x82770F80, 0x100},
-    {0x82771080, 0xB40},   {0x828B3A40, 0x6A8},   {0x828FD130, 0x3E0}, {0x829249F0, 0x98},
-    {0x828E8790, 4},       {0x835B3EB4, 4},       {0x82A15980, 0x3760},
+    {0x8294AC10, 0x5DB30}, {0x829A8740, 0x5DB30}, {0x8277B808, 0x200}, {0x82784A80, 0x100},
+    {0x82784B80, 0xB40},   {0x828C75C0, 0x6A8},   {0x82910CB0, 0x3E0}, {0x82938574, 0x98},
+    {0x828FC310, 4},       {0x835C79B4, 4},       {0x82A29520, 0x3760},
 };
-// (Not the three counters of the game's frames on the GPU, though they too start at boot: 0x8281929C, the low word of
-// the frame sync's count of frames presented (0x82819200 + 152, sub_82542D50), 0x8280DE94 (sub_82550DF8) and
-// 0x8281991C (sub_82543CB0). Only the present (sub_824945F8, never in a frame run again) moves them, so each rollback
+// (Not the three counters of the game's frames on the GPU, though they too start at boot: 0x8282CE1C, the low word of
+// the frame sync's count of frames presented (0x8282CD80 + 152, sub_82552A28), 0x82821A14 (sub_82560AD8) and
+// 0x8282D49C (sub_82553960). Only the present (sub_824A3988, never in a frame run again) moves them, so each rollback
 // set them back by its frames, and the game's waits for its GPU waited at last for a frame it had already presented:
-// the main thread blocked in sub_82542D50 for good, at a KO's replay or a match's loading, after a few hundred frames
+// the main thread blocked in sub_82552A28 for good, at a KO's replay or a match's loading, after a few hundred frames
 // run again (2026-11-18). Nothing in the fight reads them.)
-// (The AI's region ends where the game's main allocator begins: its control block at 0x82A190E0, a TLSF pool of 3 MB
-// that sub_8237B250 / sub_8237B268 / sub_8237B278 allocate, free and resize in, its start, end and size, then its free
-// lists by size. The region once ran to 0x82A19140 and put back the first 18 lists of small blocks as they were when
+// (The AI's region ends where the game's main allocator begins: its control block at 0x82A2CC90, a TLSF pool of 3 MB
+// that sub_82389F18 / sub_82389F30 / sub_82389F40 allocate, free and resize in, its start, end and size, then its free
+// lists by size. The region once ran to 0x82A2CCF0 and put back the first 18 lists of small blocks as they were when
 // the frame was kept: a block taken since was handed out again, and the game crashed on a later allocation inside a
 // restore, writing through a "next free" read from a block in use: Aeon Calcos against Siegfried with 40 ms each way,
-// "write of guest 0x3ED82A23" from sub_8237AB38, 2026-11-17.)
+// "write of guest 0x3ED82A23" from sub_82389800, 2026-11-17.)
 // Found as the game runs, kept with their addresses (DynamicRegions): the main thread's rand state; the Mersenne
-// Twister's state (sub_824A2FD0 seeds it: [0x82773FB0] -> 4992 bytes of words, then its index); the task sub_8213DEC0
+// Twister's state (sub_824B28C8 seeds it: [0x82787AB0] -> 4992 bytes of words, then its index); the task sub_8213E538
 // updates (a heap object, 0x401C0200 in every run so far: at +128 each player's buttons held in the last frame, which
-// its "newly pressed" bits come from); the forces sub_821936C8 sums for each player every frame (a manager in the
+// its "newly pressed" bits come from); the forces sub_82193EB0 sums for each player every frame (a manager in the
 // heap, 0x401CC300: its list at +128, each force's next at +128, its vector from vtable slot +32; the sum, clamped,
 // goes to each player's +0x1CE30, which the pose's cloth and secondary bones take in: a constant one, one by the
 // stage's floor under the player, and two point forces with a transform at +448 their owners move).
-//   ... and the KO replay's manager (sub_8211A8A8 runs it once a frame: r3 is [battle task + 128] + 4, a heap object,
+//   ... and the KO replay's manager (sub_8211A9E8 runs it once a frame: r3 is [battle task + 128] + 4, a heap object,
 // 0x41780004 so far). While a round is fought it saves the battle into the next of its five streams (0x2800C bytes
 // each from +0x2CC, a sixth holds the present during a replay) whenever its own frame counter (+0xF0318) is 84 past the
 // last save's stamp (five stamps at +0x2B4, the next stream at +0x2B0); after a KO it plays one back. Nothing put its
@@ -97,40 +97,40 @@ uint32_t g_rand_state = 0;  // the main thread's _getptd() + 0x14, once known
 std::atomic<uint32_t> g_input_task{0};
 std::atomic<uint32_t> g_force_manager{0};
 std::atomic<uint32_t> g_replay_manager{0};
-constexpr uint32_t kMtPointer = 0x82773FB0, kMtSize = 4996;
+constexpr uint32_t kMtPointer = 0x82787AB0, kMtSize = 4996;
 constexpr uint32_t kReplayHead = 0x2CC, kReplayStream = 0x2800C, kReplayStreams = 6, kReplayTail = 0x7C;
 //   ... and the battle's cameras. The side of the screen each player is on, which turns the stick's left and right
-// into back and forward, comes from them: each player's +0xC4 (sub_8216E2F8), 1 for the player sub_8216C378 names,
-// the sign of a cross product of the two fighters' positions and the camera's (sub_8216B338: the view at +16 of the
+// into back and forward, comes from them: each player's +0xC4 (sub_8216E810), 1 for the player sub_8216C890 names,
+// the sign of a cross product of the two fighters' positions and the camera's (sub_8216B850: the view at +16 of the
 // cameras' director, its x and z through vtable slots +80 and +88), or player 1 while the camera with the greatest
-// blend weight (sub_824A4660: eight cameras at +608, the weight at +156) is in its modes 1 and 3. The camera follows
+// blend weight (sub_824B3F58: eight cameras at +608, the weight at +156) is in its modes 1 and 3. The camera follows
 // the fighters smoothly, and nothing put it back: a frame run again moved it on once more, so after their rollbacks
 // two games' cameras stood a little apart, and as the fighters crossed over, the games turned them on different frames
 // and read the same stick as other directions (Ezio against Viola with 40 ms each way: P1's inputs at +0x240C apart
-// from frame 3480). The director is the battle scene's task from +224 ([0x82927BB8], 0x540 bytes to the task's end:
+// from frame 3480). The director is the battle scene's task from +224 ([0x8293B74C], 0x540 bytes to the task's end:
 // the cameras' positions, targets and blends; pointers only to itself, to the two arrays below and to what the fight
 // loaded), and its cameras are two arrays in physical memory, 8 of 0x320 bytes ([+0x2B4]) and 9 of 0x280 ([+0x384]),
 // whose pointers are to static objects (a camera's target, one of the players' objects): kept with each frame.
-constexpr uint32_t kCameraDirector = 0x82927BB8, kCameraSystem = 0x540;
-//   ... and the battle's four save slots, which moves' scripts use (sub_82129B10's commands: 9002 saves the battle into
-// a slot, sub_82479360; 9003 puts a slot back, sub_82479488, keeping a few of the present's fields: each player's
+constexpr uint32_t kCameraDirector = 0x8293B74C, kCameraSystem = 0x540;
+//   ... and the battle's four save slots, which moves' scripts use (sub_8212A0D8's commands: 9002 saves the battle into
+// a slot, sub_82488778; 9003 puts a slot back, sub_824888A0, keeping a few of the present's fields: each player's
 // +468, +1588, +4188 and one of +1788's; 9004 empties them all): a move saves the battle and a few frames on goes back
 // to it. Each slot is a stream like the KO replay's (a 12-byte header, then the game's own snapshot), at 0x49CA0 +
-// slot * 0x2800C in the buffer of the battle's setup ([0x82767D1C] + 140, that object current while its +48 is the
-// state machine's +16); per slot a count at 0x8273C21C (-1 empty, 0 saved, +1 each time it is put back; 2 written
-// instead of a save while 0x82927FA8 is set), a word at 0x82927BDC (0 saved, 1 put back) and the KO replay manager's
-// copy of the counts at 0x828FD084.
+// slot * 0x2800C in the buffer of the battle's setup ([0x8277B81C] + 140, that object current while its +48 is the
+// state machine's +16); per slot a count at 0x8274C21C (-1 empty, 0 saved, +1 each time it is put back; 2 written
+// instead of a save while 0x8293BB48 is set), a word at 0x8293B770 (0 saved, 1 put back) and the KO replay manager's
+// copy of the counts at 0x82910C04.
 // Nothing put them back: a frame run again after its first run had put a slot back found the slot's count and word
 // as that run had left them, and the move's script went on without going back. With the same inputs, one game went
 // back 7 frames (the slot saved at 6015, put back at 6022) and the other, which had run 6022 on a guess first, did
 // not (Xiba against Leixia with 40 ms each way: P1's counters 7 apart from frame 6023, the check at 6030 apart,
 // 2026-11-18). The counts and words are kept with each frame, and so is each slot that holds a save (a frame run
 // again may not save where its first run did: the slot holds what the kept frame had).
-constexpr uint32_t kSlotCounts = 0x8273C21C, kSlotsPutBack = 0x82927BDC, kSlotCountsCopy = 0x828FD084;
-constexpr uint32_t kSlotSetup = 0x82767D1C, kSlotOffset = 0x49CA0, kSlotStride = 0x2800C, kSlots = 4;
-// The forces are NOT kept: the manager (336 bytes, sub_82193608) queues calls for the next frame, its forces (400
-// bytes, sub_82193AD8: an animated wind 0x820BCDE8, one by the floor 0x820BCE0C) and the gusts (576 bytes,
-// sub_82194210, at random intervals) come and go with attacks and time; put back, they froze or crashed the game.
+constexpr uint32_t kSlotCounts = 0x8274C21C, kSlotsPutBack = 0x8293B770, kSlotCountsCopy = 0x82910C04;
+constexpr uint32_t kSlotSetup = 0x8277B81C, kSlotOffset = 0x49CA0, kSlotStride = 0x2800C, kSlots = 4;
+// The forces are NOT kept: the manager (336 bytes, sub_82193DF0) queues calls for the next frame, its forces (400
+// bytes, sub_821942C0: an animated wind 0x820BCE08, one by the floor 0x820BCE2C) and the gusts (576 bytes,
+// sub_821949F8, at random intervals) come and go with attacks and time; put back, they froze or crashed the game.
 
 std::vector<Region> DynamicRegions() {
   std::vector<Region> out;
@@ -248,7 +248,7 @@ uint32_t Save(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   g_recording = stream;
   g_recorded.clear();
   sc5::dbg::QuietWatch(true);
-  sub_82159DF0(ctx, base);
+  sub_8215A298(ctx, base);
   g_recording = 0;
   g_blocks[stream].swap(g_recorded);
   ctx.lr = lr;
@@ -262,7 +262,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   const uint32_t size = Get32(stream + 4);
   Put32(stream + 8, 0);
   // Each player's +0x5BE90 is the address of a throw's heap object, which the game's own restore sets to the object it
-  // makes again (a battle object's restore, sub_82471830, writes its owner's). The raw copy put back after it holds the
+  // makes again (a battle object's restore, sub_82480C90, writes its owner's). The raw copy put back after it holds the
   // address the object had when the frame was kept, freed since: a call through it crashed the game a few frames after
   // a rollback over a throw (Aeon Calcos's back throw, "invalid call ... 0x00000032"). So where the game's restore set
   // the field, its value stays; where it left it (no throw in the frame gone back to), the kept one is put back.
@@ -272,7 +272,7 @@ bool Restore(PPCContext& ctx, uint8_t* base, uint32_t stream) {
   ctx.r3.u64 = stream;
   ctx.lr = kMainLoopReturn;
   sc5::dbg::QuietWatch(true);
-  sub_8215A360(ctx, base);
+  sub_8215A808(ctx, base);
   ctx.lr = lr;
   const uint32_t read = Get32(stream + 8);
   if (read != size) {
@@ -371,7 +371,7 @@ const std::vector<Block>* Blocks(uint32_t stream) {
 // that ended it, when a rollback ran it again, left the cameras otherwise than its first run had (part of what they
 // take in is worked out in the drawing, which a frame run again leaves out): with the next round's cameras apart, a
 // round went its own way after a crossing over (Cervantes against Yoshimitsu with 40 ms each way, from frame 5790);
-// and each player's +0xC4, which side of the screen the player is on (sub_8216C378: player 1 while the camera with
+// and each player's +0xC4, which side of the screen the player is on (sub_8216C890: player 1 while the camera with
 // the greatest blend weight is in its modes 1 and 3), differed in the replay's one check (Aeon Calcos against
 // Siegfried, frame 2730), 2026-11-18. At the replay's end the game puts the present back.
 bool InKoReplay() {
@@ -379,7 +379,7 @@ bool InKoReplay() {
   return m >= 0x40000000u && m < 0xA0000000u && Get32(m) == 2;
 }
 
-// each player's raw pointers in the snapshot (sub_82141778 sets the first five; the rest point into loaded data too).
+// each player's raw pointers in the snapshot (sub_82141F98 sets the first five; the rest point into loaded data too).
 // +0x5BE90 is set by a throw that lands (a heap object of it): two PCs' heaps lie apart, so the check found every landed
 // throw "out of step" though both fights went on alike (2026-11-17, the first matches between two PCs: Hilde's and
 // Ezio's throws; a game with its heap 64 MB higher showed it on one PC, that word alone differing by the 64 MB)
@@ -395,8 +395,8 @@ constexpr uint32_t kPlayerPointers[] = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5C
 // (cloth, secondary bones), so the first checks of a round failed: every match of the first two pairs of players on
 // 0.1.4 went back to its round's start at frame 120, some three times and then ended (2026-11-24: 170 reports, each
 // with the snapshots "laid out apart" and "1 blocks (2048 bytes)" differing at the sync).
-constexpr uint32_t kPoseBuffers[2] = {0x8293A200, 0x82997D00};   // + k * 0x8000, 6208 bytes each
-constexpr uint32_t kDrawnBuffers[2] = {0x82952380, 0x829AFF00};  // + k * 0x800, 0x800 bytes each
+constexpr uint32_t kPoseBuffers[2] = {0x8294DDA0, 0x829AB8A0};   // + k * 0x8000, 6208 bytes each
+constexpr uint32_t kDrawnBuffers[2] = {0x82965F20, 0x829C3AA0};  // + k * 0x800, 0x800 bytes each
 
 Kind KindOf(uint32_t source) {
   for (int p = 0; p < 2; p++) {
@@ -409,49 +409,49 @@ Kind KindOf(uint32_t source) {
       if (source >= drawn && source < drawn + 0x800) return Kind::Pose;
     }
   }
-  for (uint32_t player : {0x82937070u, 0x82994BA0u}) {
+  for (uint32_t player : {0x8294AC10u, 0x829A8740u}) {
     if (source >= player + 0x22638 && source < player + 0x5DAD4)
       for (uint32_t o : kPlayerPointers)
         if (source >= player + o && source < player + o + 4) return Kind::Pointer;
   }
-  // a static object past player 2's (the snapshot's 3152-byte block from 0x829F4E90) keeps two heap pointers (the
+  // a static object past player 2's (the snapshot's 3152-byte block from 0x82A08A30) keeps two heap pointers (the
   // first set during a fight: Ezio against Nightmare, a game with its heap 64 MB higher)
-  if (source >= 0x829F5528u && source < 0x829F5530u) return Kind::Pointer;
-  // ... and two more before it, at 0x829F46A8, that the stage sets late in a match (stage 2A at frame 8550 with the
+  if (source >= 0x82A090C8u && source < 0x82A090D0u) return Kind::Pointer;
+  // ... and two more before it, at 0x82A08248, that the stage sets late in a match (stage 2A at frame 8550 with the
   // rounds at 3-1, stage 18 at 6510 with 2-0, Algol against Yoshimitsu, game 2's heap 2 MB higher: 0x41483010 against
   // 0x41683010, that shift and nothing else, to the match's end). On two PCs any match that came so far on those
   // stages failed its next check: stage 2A lost three matches of the first to 30 of 2026-11-20 (2026-11-24)
-  if (source >= 0x829F46A8u && source < 0x829F46B0u) return Kind::Pointer;
+  if (source >= 0x82A08248u && source < 0x82A08250u) return Kind::Pointer;
   // the battle's state machine keeps one at +0x14 (the menus' object it was set up from; net/netplay.cpp) and one at
   // +0x13C that a fight sets
-  if ((source >= 0x82767D1Cu && source < 0x82767D20u) || (source >= 0x82767E44u && source < 0x82767E48u))
+  if ((source >= 0x8277B81Cu && source < 0x8277B820u) || (source >= 0x8277B944u && source < 0x8277B948u))
     return Kind::Pointer;
-  // ... and the count that comes with +0x13C at +0x138: between rounds sub_8231F8D8 stores the pair that
-  // sub_82148B90 works out from a player's pose (it hands sub_822998E8 the pose object at +0x3140), and the two games'
+  // ... and the count that comes with +0x13C at +0x138: between rounds sub_8232C120 stores the pair that
+  // sub_821490E0 works out from a player's pose (it hands sub_822A5758 the pose object at +0x3140), and the two games'
   // poses differ in their last bits: 1142 and 1126 in two games whose fights went on alike to the same result (Kilik
   // against Ezio with 40 ms each way, from round 2's first check, 2026-11-18)
-  if (source >= 0x82767E40u && source < 0x82767E44u) return Kind::Pose;
-  // ... and at +0xC44 a value sub_82210320 takes from the stage as the fight loads (sub_822134F8), -40.0 when the
+  if (source >= 0x8277B940u && source < 0x8277B944u) return Kind::Pose;
+  // ... and at +0xC44 a value sub_82210948 takes from the stage as the fight loads (sub_82213B20), -40.0 when the
   // stage's data is not in yet: how far the loading had got, different on two PCs, and nothing in the fight reads it
   // differently (two games with -40.0 and -5.5 there stayed alike in all else)
-  if (source >= 0x829F59D4u && source < 0x829F59D8u) return Kind::Pointer;
-  // ... and at +0x740 two words that go from 0xFFFF and 0 to a flag and a number between rounds (sub_8220F370, from a
-  // task through sub_822130C8 and sub_82212720; the flag's high half cleared later by sub_82210548, on different frames
+  if (source >= 0x82A09574u && source < 0x82A09578u) return Kind::Pointer;
+  // ... and at +0x740 two words that go from 0xFFFF and 0 to a flag and a number between rounds (sub_8220F998, from a
+  // task through sub_822136F0 and sub_82212D48; the flag's high half cleared later by sub_82210B70, on different frames
   // in the two games), the number different from game to game and run to run like the float at +0xC44: Elysium against
   // Edge Master as their next styles loaded, 1468 against 1477, 1383 against 1577, 1553 against 1387, the fights alike
   // in all else to the match's end and the next round on the same frame (40 ms each way, 2026-11-18)
-  // (... and so in each of the 16 entries of that list, 64 bytes apart: sub_8220F370 adds an entry a kind of thing the
+  // (... and so in each of the 16 entries of that list, 64 bytes apart: sub_8220F998 adds an entry a kind of thing the
   // stage does, and a fight with more of them fills the next ones: the second's number 829 against 944 from frame 810
   // on stage 27, 537 against 684 from 3630 on stage 11, the third's 1563 against 1860, Algol against Yoshimitsu pushed
   // out of the ring with 60 ms each way, 2026-11-24; the fights alike in all else to the same result)
-  if (source >= 0x829F55D0u && source < 0x829F55D0u + 16 * 64 && ((source - 0x829F55D0u) & 63) < 8) return Kind::Pointer;
-  // ... and the number each of five effect slots is made with (the pool at 0x829F3330: 176 bytes a slot, taken in turn,
-  // +880; sub_82184A58 from a move's script hands sub_821845F0 a word of its fighter's, which that keeps at the slot's
+  if (source >= 0x82A09170u && source < 0x82A09170u + 16 * 64 && ((source - 0x82A09170u) & 63) < 8) return Kind::Pointer;
+  // ... and the number each of five effect slots is made with (the pool at 0x82A06ED0: 176 bytes a slot, taken in turn,
+  // +880; sub_82185230 from a move's script hands sub_82184DC8 a word of its fighter's, which that keeps at the slot's
   // +16): 1 in one game and 2 in the other from frame 355 to the match's end, Algol against Yoshimitsu on stage 1C with
   // 60 ms each way, the fights alike in all else to the same result; and 2 in both in the next run of the same match.
   // Nothing reads it in the second after but the snapshot's own save and restore (SC5_DBG_WATCH_READS, 2026-11-24).
-  if (source >= 0x829F3330u && source < 0x829F3330u + 5 * 176) {
-    const uint32_t in_slot = (source - 0x829F3330u) % 176;
+  if (source >= 0x82A06ED0u && source < 0x82A06ED0u + 5 * 176) {
+    const uint32_t in_slot = (source - 0x82A06ED0u) % 176;
     if (in_slot >= 16 && in_slot < 20) return Kind::Pointer;
   }
   if (source >= 0x70000000u && source < 0x80000000u) return Kind::Stack;
@@ -488,8 +488,8 @@ const uint8_t* Data(uint32_t stream) { return stream ? Mem()->TranslateVirtual<c
 
 }  // namespace sc5::battle
 
-REX_EXTERN(__imp__sub_821936C8);  // each player's forces (cloth, secondary bones): see DynamicRegions
-REX_HOOK_RAW(sub_821936C8) {
+REX_EXTERN(__imp__sub_82193EB0);  // each player's forces (cloth, secondary bones): see DynamicRegions
+REX_HOOK_RAW(sub_82193EB0) {
   sc5::battle::g_force_manager.store(ctx.r3.u32, std::memory_order_relaxed);
   // TEMPORARY: SC5_DBG_FORCES_FROM/TO (fight frames): each force's contents when they are summed
   static const int64_t from = std::getenv("SC5_DBG_FORCES_FROM") ? std::atoll(std::getenv("SC5_DBG_FORCES_FROM")) : -1;
@@ -507,7 +507,7 @@ REX_HOOK_RAW(sub_821936C8) {
     std::string list = fmt::format(" mgr {:016X}", hash(ctx.r3.u32, 0x100));
     for (uint32_t f = get(ctx.r3.u32 + 128), i = 0; f && i < 16; f = get(f + 128), i++) {
       const uint32_t vt = get(f);
-      list += fmt::format(" [{:08X} {:08X} {:016X}]", f, vt, hash(f, vt == 0x820BCE78 ? 576 : 400));
+      list += fmt::format(" [{:08X} {:08X} {:016X}]", f, vt, hash(f, vt == 0x820BCE98 ? 576 : 400));
     }
     REXLOG_INFO("sc5 dbg: forces {}{}:{}", ff, sc5::frame::Replaying() ? " again" : "", list);
     if (const char* dir = std::getenv("SC5_TEST_DUMP_DIR"); dir && *dir) {
@@ -524,25 +524,25 @@ REX_HOOK_RAW(sub_821936C8) {
   }
   // a visual system: its random numbers (the forces it creates, from its queue) from the visual states (rng.h)
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_821936C8(ctx, base);
+  __imp__sub_82193EB0(ctx, base);
   sc5::rng::LeaveVisual();
 }
 
-REX_HOOK_RAW(sub_8213DEC0) {
+REX_HOOK_RAW(sub_8213E538) {
   sc5::battle::g_input_task.store(ctx.r3.u32, std::memory_order_relaxed);
-  __imp__sub_8213DEC0(ctx, base);
+  __imp__sub_8213E538(ctx, base);
 }
 
 // More visual systems whose random numbers come from the visual states (rng.h), each drawing as often as there are
 // objects that rollback does not put back, so that after a rollback each game drew its own number of times and the
 // fight's generators parted (Aeon Calcos against Siegfried with 40 ms each way: a Park-Miller draw for P1's +0x5DAF0,
-// sub_821DF1C8, came out apart at frame 240; counted per call site in both games' last runs of each frame):
+// sub_821DFA48, came out apart at frame 240; counted per call site in both games' last runs of each frame):
 //  - the forces' own updates, slot 1 of each force's class: the animated wind and the force by the floor
-//    (sub_82191358, vtables 0x820BCDE8 and 0x820BCE0C), the point forces (sub_82191BE0, sub_82193200) and the gusts
-//    (sub_821929F0, 0x820BCE78), which add a random wobble to their vectors (sub_82190EB8, TT800: three draws a force a
+//    (sub_82191B40, vtables 0x820BCE08 and 0x820BCE2C), the point forces (sub_821923C8, sub_821939E8) and the gusts
+//    (sub_821931D8, 0x820BCE98), which add a random wobble to their vectors (sub_821916A0, TT800: three draws a force a
 //    frame, 27 in one game and 32 to 37 in the other);
-//  - an emitter of effects (sub_82373660: positions and directions at random, then sub_82373290 takes an effect id
-//    from the effects' table at 0x82763440), which a cooldown in its own object lets fire (sub_82376F88): 17
+//  - an emitter of effects (sub_82382328: positions and directions at random, then sub_82381F58 takes an effect id
+//    from the effects' table at 0x82776F08), which a cooldown in its own object lets fire (sub_82385C50): 17
 //    Park-Miller draws at frame 219 in one game and none in the other.
 #define SC5_VISUAL_SYSTEM(fn)                    \
   REX_EXTERN(__imp__##fn);                       \
@@ -551,44 +551,44 @@ REX_HOOK_RAW(sub_8213DEC0) {
     __imp__##fn(ctx, base);                      \
     sc5::rng::LeaveVisual();                     \
   }
-SC5_VISUAL_SYSTEM(sub_82191358)
-SC5_VISUAL_SYSTEM(sub_82191BE0)
-SC5_VISUAL_SYSTEM(sub_82193200)
-SC5_VISUAL_SYSTEM(sub_821929F0)
-//  - the stage's particles (sub_824ADBD8, from the task sub_82489500: its emitters sub_82488708, sub_82488E28 and
-//    sub_82489028 draw each particle's place and speed from Park-Miller, 60 to 70 draws a frame on the stage with
+SC5_VISUAL_SYSTEM(sub_82191B40)
+SC5_VISUAL_SYSTEM(sub_821923C8)
+SC5_VISUAL_SYSTEM(sub_821939E8)
+SC5_VISUAL_SYSTEM(sub_821931D8)
+//  - the stage's particles (sub_824BD678, from the task sub_82498938: its emitters sub_82497B40, sub_82498140 and
+//    sub_82498460 draw each particle's place and speed from Park-Miller, 60 to 70 draws a frame on the stage with
 //    water, ids 21 and 22), whose particles live in heap objects: a game that went back drew its own number of times,
-//    and the next Park-Miller number the fight took came out apart: each player's +0x5DAE0 / +0x5DAF0 (sub_821DF318
-//    from a move's script, sub_821DE088), then the fight itself (health 160 against 68 at frame 5640). Algol against
+//    and the next Park-Miller number the fight took came out apart: each player's +0x5DAE0 / +0x5DAF0 (sub_821DFB98
+//    from a move's script, sub_821DE908), then the fight itself (health 160 against 68 at frame 5640). Algol against
 //    Yoshimitsu pushed out of the ring, 60 ms each way with jitter and loss: every check apart from frame 480 on
 //    stage 21 and from 570 on stage 22 (2026-11-24); the players of 2026-11-20 lost matches on stage 22 this way.
-SC5_VISUAL_SYSTEM(sub_824ADBD8)
-//  - the effects' emitters, all of them (the module from sub_82373290 to sub_82379B20: every function of it that draws
-//    from a generator itself; sub_82373660 was the first found). A stage has its own (sub_82211950 from the stage's
-//    update fires sub_82374F70, whose sub_82373AF8 drew 6 Park-Miller numbers in one game and 9 in the other at frame
+SC5_VISUAL_SYSTEM(sub_824BD678)
+//  - the effects' emitters, all of them (the module from sub_82381F58 to sub_823887E8: every function of it that draws
+//    from a generator itself; sub_82382328 was the first found). A stage has its own (sub_82211F78 from the stage's
+//    update fires sub_82383C38, whose sub_823827C0 drew 6 Park-Miller numbers in one game and 9 in the other at frame
 //    475 on stage 21, the frame before the draw above came out apart: found with SC5_DBG_DRAWS, tools/py/drawscmp.py),
 //    so a match went out of step on the stages whose emitters nobody had met yet
-SC5_VISUAL_SYSTEM(sub_823738C8)
-SC5_VISUAL_SYSTEM(sub_82373AF8)
-SC5_VISUAL_SYSTEM(sub_823761B8)
-SC5_VISUAL_SYSTEM(sub_82376528)
-SC5_VISUAL_SYSTEM(sub_82377488)
-SC5_VISUAL_SYSTEM(sub_82377910)
-SC5_VISUAL_SYSTEM(sub_82378468)
-SC5_VISUAL_SYSTEM(sub_82378B58)
-SC5_VISUAL_SYSTEM(sub_82378D80)
-SC5_VISUAL_SYSTEM(sub_82378E58)
-SC5_VISUAL_SYSTEM(sub_82379438)
-SC5_VISUAL_SYSTEM(sub_82379508)
-SC5_VISUAL_SYSTEM(sub_82379748)
-SC5_VISUAL_SYSTEM(sub_823798B8)
-SC5_VISUAL_SYSTEM(sub_82379B20)
-SC5_VISUAL_SYSTEM(sub_82373660)
+SC5_VISUAL_SYSTEM(sub_82382590)
+SC5_VISUAL_SYSTEM(sub_823827C0)
+SC5_VISUAL_SYSTEM(sub_82384E80)
+SC5_VISUAL_SYSTEM(sub_823851F0)
+SC5_VISUAL_SYSTEM(sub_82386150)
+SC5_VISUAL_SYSTEM(sub_823865D8)
+SC5_VISUAL_SYSTEM(sub_82387130)
+SC5_VISUAL_SYSTEM(sub_82387820)
+SC5_VISUAL_SYSTEM(sub_82387A48)
+SC5_VISUAL_SYSTEM(sub_82387B20)
+SC5_VISUAL_SYSTEM(sub_82388100)
+SC5_VISUAL_SYSTEM(sub_823881D0)
+SC5_VISUAL_SYSTEM(sub_82388410)
+SC5_VISUAL_SYSTEM(sub_82388580)
+SC5_VISUAL_SYSTEM(sub_823887E8)
+SC5_VISUAL_SYSTEM(sub_82382328)
 #undef SC5_VISUAL_SYSTEM
 
 // The KO replay's manager, kept with each frame (DynamicRegions): its address as the battle's task hands it over
-REX_EXTERN(__imp__sub_8211A8A8);
-REX_HOOK_RAW(sub_8211A8A8) {
+REX_EXTERN(__imp__sub_8211A9E8);
+REX_HOOK_RAW(sub_8211A9E8) {
   sc5::battle::g_replay_manager.store(ctx.r3.u32, std::memory_order_relaxed);
-  __imp__sub_8211A8A8(ctx, base);
+  __imp__sub_8211A9E8(ctx, base);
 }

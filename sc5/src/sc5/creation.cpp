@@ -4,10 +4,10 @@
 // a 132-byte header, the record (TK_CreationCharacterDNA_st, 13,340 bytes) and the picture Creation takes. A fresh save
 // has all 50 with the same empty record and a header of zeros; a created character's header ends with +112 a number,
 // +116 1 for a customized fighter (+120 1 for an original character), +124 and +128 0x01000000. In memory the save
-// object ([0x8273EF10]) keeps the image from +0x48 (its release table starts right after it, +0x22C248: docs\GAME.md,
+// object ([0x8274EF10]) keeps the image from +0x48 (its release table starts right after it, +0x22C248: docs\GAME.md,
 // "Unlocks"). Creation's list and the select screen read the slots there as they go.
 //
-// The record (TK_CreationCharacterDNA_st, the game's schema sub_822256B0) field by field: creation_check.h and
+// The record (TK_CreationCharacterDNA_st, the game's schema sub_82226450) field by field: creation_check.h and
 // docs\GAME.md, "Created characters online", with the game's tables this file reads and what the check makes of them.
 
 #include "sc5/creation.h"
@@ -37,20 +37,20 @@
 #include "sc5/game.h"
 #include "sc5/select.h"
 
-REX_EXTERN(sub_82220B50);  // the creation manager: an entry from a record (r3: where its address is, r4: the record)
-REX_EXTERN(sub_8245BED0);  // the release state of an id (r3 the release table, r4 the id): 2 released (unlocks.cpp's)
-REX_EXTERN(sub_82221D88);  // the repair pass of a save's record (r3 the record, r4 a byte: 0x10 check its checksum)
+REX_EXTERN(sub_82221978);  // the creation manager: an entry from a record (r3: where its address is, r4: the record)
+REX_EXTERN(sub_8246B318);  // the release state of an id (r3 the release table, r4 the id): 2 released (unlocks.cpp's)
+REX_EXTERN(sub_82222B28);  // the repair pass of a save's record (r3 the record, r4 a byte: 0x10 check its checksum)
 // a base type's parts sets from the creation data (r3: a table {type, count, entries}, r4: the base type, r5 and r6:
 // its data and size): the entries from the game's heap, the table's old ones freed
-REX_EXTERN(sub_8221E190);
-REX_EXTERN(sub_8223BC98);  // a base type's data in the creation data's archive (r3: the archive's object, r4: the type)
-REX_EXTERN(sub_8223BD28);  // and its size
-REX_EXTERN(sub_8266A1B0);  // the game's free (r3: a block of its heap)
+REX_EXTERN(sub_8221E848);
+REX_EXTERN(sub_8223CE00);  // a base type's data in the creation data's archive (r3: the archive's object, r4: the type)
+REX_EXTERN(sub_8223CE90);  // and its size
+REX_EXTERN(sub_8267A180);  // the game's free (r3: a block of its heap)
 
 namespace sc5::creation {
 namespace {
 
-constexpr uint32_t kSaveObject = 0x8273EF10;
+constexpr uint32_t kSaveObject = 0x8274EF10;
 constexpr uint32_t kEntrySize = 13544, kEntryCount = 13476;
 constexpr uint32_t kImageAt = 0x48;
 constexpr uint32_t kImageSize = 0x22C200;
@@ -104,7 +104,7 @@ constexpr Sticker kStickers[] = {
 #include "sc5/creation_stickers.inc"
 };
 
-// The creation context of the select screen ([object + 1264], built by sub_8223BE80 and sub_8223BF60): +12 the
+// The creation context of the select screen ([object + 1264], built by sub_8223CFE8 and sub_8223D0D0): +12 the
 // parts sets of each base type (6 x {type, count, entries of 2,496 bytes}, from its builder's +14788), +28 the
 // builder (14,936 bytes; +14860 the weapons' count, +14864 their entries of 160 bytes)
 constexpr uint32_t kContextAt = 1264, kContextTables = 12, kContextBuilder = 28;
@@ -117,9 +117,9 @@ constexpr uint32_t kMaxMembers = 14, kModelsPerMember = 9;
 // a weapon (CWeaponInfo_st): its style, variation, release
 constexpr uint32_t kWeaponSize = 160, kWeaponRelease = 12;
 // the save object's release table (after the save image): a nibble per id, its low 3 bits the state (3:
-// downloadable content); sub_8245BED0 answers whether an id is released (unlocks.cpp opens everything else)
+// downloadable content); sub_8246B318 answers whether an id is released (unlocks.cpp opens everything else)
 constexpr uint32_t kReleaseTable = 0x22C248, kReleaseIds = 0x1D02;
-constexpr uint32_t kPalette = 0x82767918;  // the colour palette's header
+constexpr uint32_t kPalette = 0x8277B418;  // the colour palette's header
 
 uint32_t RawRelease(uint32_t id) {
   const uint32_t save = game::ReadU32(kSaveObject);
@@ -136,8 +136,8 @@ bool Released(PPCContext& ctx, uint8_t* base, uint32_t id) {
   const PPCContext saved = ctx;
   ctx.r3.u64 = save + kReleaseTable;
   ctx.r4.u64 = id & 0xFFFF;
-  ctx.lr = 0x82189268;  // as from main's loop
-  sub_8245BED0(ctx, base);
+  ctx.lr = 0x82189A40;  // as from main's loop
+  sub_8246B318(ctx, base);
   const uint32_t state = ctx.r3.u32;
   ctx = saved;
   return (state & 7) == 2;
@@ -151,7 +151,7 @@ uint32_t Fnv(uint32_t h, uint32_t v) {
 
 // The fighters' costumes, base type 5. The builder keeps the creation data's archive ([+14868]'s object, its data at
 // +12: a count of files, then their offsets) with every base type's parts sets in it, but the select screen reads
-// only base types 0 and 1 into its tables; Creation reads 5 as well (sub_82249BB0). In the test PC's game base type 5
+// only base types 0 and 1 into its tables; Creation reads 5 as well (sub_8224B3C8). In the test PC's game base type 5
 // has 118 parts sets, none downloadable: 89 of category 19 (+4), each a fighter's whole costume (id 0x0013vvcc, cc
 // the fighter's costume code and vv the costume, with one model 0x00ccvv'00 in slot 31), and the 29 of category 21
 // that every base type's table has, the fighters' hair (0x020200cc, models 0x01nn0000 in slot 15). Of the costumes
@@ -161,9 +161,9 @@ uint32_t Fnv(uint32_t h, uint32_t v) {
 constexpr uint32_t kBuilderArchive = 14868;
 constexpr uint32_t kSetCategory = 4, kCostumeCategory = 19, kHairCategory = 21;
 constexpr uint32_t kFightCostumes = 2;  // vv below it
-// the game's characters (sub_823507F0's table, 33 entries of 36 bytes): the character type at +0, its costume code at
+// the game's characters (sub_8235E5D0's table, 33 entries of 36 bytes): the character type at +0, its costume code at
 // +4 (which its models' and templates' names carry: Patroklos, 18, has 0x35)
-constexpr uint32_t kCharacterTable = 0x82743828, kCharacterCount = 33, kCharacterSize = 36;
+constexpr uint32_t kCharacterTable = 0x82753828, kCharacterCount = 33, kCharacterSize = 36;
 
 // a call into the game's code from the frame's top (main thread): its r3 after
 template <typename F>
@@ -173,7 +173,7 @@ uint32_t Call(PPCContext& ctx, uint8_t* base, F fn, uint32_t r3, uint32_t r4, ui
   ctx.r4.u64 = r4;
   ctx.r5.u64 = r5;
   ctx.r6.u64 = r6;
-  ctx.lr = 0x82189268;  // as from main's loop
+  ctx.lr = 0x82189A40;  // as from main's loop
   fn(ctx, base);
   const uint32_t r = ctx.r3.u32;
   ctx = saved;
@@ -198,14 +198,14 @@ int CostumeCode(int type) {
 uint32_t ReadFighters(PPCContext& ctx, uint8_t* base, uint32_t builder, Known& k, std::set<uint32_t>& dlc_sets,
                       std::set<uint32_t>& dlc_models, uint32_t& fp) {
   const uint32_t archive = game::ReadU32(builder + kBuilderArchive);
-  const uint32_t data = archive ? Call(ctx, base, sub_8223BC98, archive, kFighterBase) : 0;
-  const uint32_t size = data ? Call(ctx, base, sub_8223BD28, archive, kFighterBase) : 0;
+  const uint32_t data = archive ? Call(ctx, base, sub_8223CE00, archive, kFighterBase) : 0;
+  const uint32_t size = data ? Call(ctx, base, sub_8223CE90, archive, kFighterBase) : 0;
   static const uint32_t table = REX_KERNEL_STATE()->memory()->SystemHeapAlloc(16, 0x20);
   if (!data || !size || size > (16u << 20) || !table) return 0;
   PutBe32(Host(table), 0xFFFFFFFF);  // {type, count, entries}: none yet
   PutBe32(Host(table + 4), 0);
   PutBe32(Host(table + 8), 0);
-  Call(ctx, base, sub_8221E190, table, kFighterBase, data, size);
+  Call(ctx, base, sub_8221E848, table, kFighterBase, data, size);
   const uint32_t n = game::ReadU32(table + 4), e = game::ReadU32(table + 8);
   struct Parts {
     std::set<uint32_t> sets, models;
@@ -236,7 +236,7 @@ uint32_t ReadFighters(PPCContext& ctx, uint8_t* base, uint32_t builder, Known& k
       }
     }
   }
-  if (e) Call(ctx, base, sub_8266A1B0, e, 0);
+  if (e) Call(ctx, base, sub_8267A180, e, 0);
   PutBe32(Host(table + 8), 0);
   for (const int type : k.characters) {
     const auto own = type == kOriginal ? costumes.end() : costumes.find(CostumeCode(type));
@@ -358,8 +358,8 @@ std::string GameRepairCheck(PPCContext& ctx, uint8_t* base, const Record& r) {
   const PPCContext saved = ctx;
   ctx.r3.u64 = scratch + 16;
   ctx.r4.u64 = scratch;
-  ctx.lr = 0x82189268;  // as from main's loop
-  sub_82221D88(ctx, base);
+  ctx.lr = 0x82189A40;  // as from main's loop
+  sub_82222B28(ctx, base);
   const uint32_t took = ctx.r3.u32;  // 0: a wrong checksum, or no character (base type -1)
   ctx = saved;
   if (!took) return "the game's own repair pass refuses it";
@@ -372,7 +372,7 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   const uint32_t c = obj ? game::ReadU32(obj + kContextAt) : 0;
   const uint32_t d = c ? game::ReadU32(c + kContextBuilder) : 0;
   const uint32_t tables = c ? game::ReadU32(c + kContextTables) : 0;
-  // the context is whole (sub_8223BF60) and its tables are its builder's
+  // the context is whole (sub_8223D0D0) and its tables are its builder's
   if (!d || tables != d + kBuilderTables || !SaveImage()) return false;
   Known k;
   std::set<uint32_t> dlc_sets, dlc_models;
@@ -420,7 +420,7 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
       fp = Fnv(Fnv(fp, 2), uint32_t(style) << 16 | uint32_t(variation));
     }
   }
-  // the colour palette's size (sub_8222C450 reads it at [0x82767918]: +8 the last row, +10 the last column); the game
+  // the colour palette's size (sub_8222D210 reads it at [0x8277B418]: +8 the last row, +10 the last column); the game
   // checks a colour's place against it itself, so without it any place up to 63 does
   const uint32_t palette = game::ReadU32(kPalette);
   k.palette_rows = palette ? int(game::ReadU32(palette + 8) >> 16) : 63;
@@ -488,7 +488,7 @@ bool UsesDlc(const Record& r) {
 
 void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager) {
   // once the tables are read and the creation manager is there: the select screen sets it a few frames in, and an
-  // entry left filled stays on the costume panel (sub_82221408 lists every entry with parts), which shifts every later
+  // entry left filled stays on the costume panel (sub_82222208 lists every entry with parts), which shifts every later
   // costume's slot
   if (g_dropped || !g_known_read || !manager) return;
   g_dropped = true;
@@ -513,23 +513,23 @@ namespace {
 // The card the VS screen shows for a created character from the other PC. The VS screen (from its copy of the slot's
 // picture, 0x82909C60 for player 2's) and Creation's list draw a character's card from the picture in its slot: a file
 // from +13,576 (16 bytes: its kind, a byte the kind uses, its size, width and height, a checksum of its data checked
-// when the kind has 0x80; then its data), which sub_8218B1C0 loads when its size is not 0 and sub_8218B298 uploads.
+// when the kind has 0x80; then its data), which sub_8218B998 loads when its size is not 0 and sub_8218BA70 uploads.
 // Creation keeps the character it shot there as kind 0x80 (172x256, a compressed "PTC+MSHM" file of up to 16,240
 // bytes), which does not come with the record, so the card was black. In its place a picture of our own: SCV Online's
 // navy and gold, a figure with a question mark, made once.
 //
-// Its form is the loader's kind 2 (sub_8218B860; byte 1 = 3: an A8R8G8B8 texture, linear, one of the forms
-// sub_8218A238 takes), whose data the upload decodes (sub_824FFA68): a 10-byte little-endian header (width, row pitch in
+// Its form is the loader's kind 2 (sub_8218C038; byte 1 = 3: an A8R8G8B8 texture, linear, one of the forms
+// sub_8218AA10 takes), whose data the upload decodes (sub_8250F828): a 10-byte little-endian header (width, row pitch in
 // bytes, height, flags: 0x18 four channels, 0x20 each coded on its own with no colour transform), then each channel (A,
-// R, G, B: the texture's bytes in that order) as sub_824FF048 reads it: a 64-bit little-endian mask of the coefficients
-// present, in the codec's order (the game's table at 0x82702660: k -> row * 8 + column), a byte added after the inverse
+// R, G, B: the texture's bytes in that order) as sub_8250EE08 reads it: a 64-bit little-endian mask of the coefficients
+// present, in the codec's order (the game's table at 0x82712660: k -> row * 8 + column), a byte added after the inverse
 // DCT, 64 quantization multipliers (row-major), then each present coefficient's quantized value for every 8x8 block in
 // turn (signed bytes; 0x80 n repeats the last value n times). The inverse DCT is MPEG's reference integer one
-// (sub_82503F28), so the forward one here is the standard DCT. 128x192 (rows of 32 texels), which the VS screen
+// (sub_82513CE8), so the forward one here is the standard DCT. 128x192 (rows of 32 texels), which the VS screen
 // stretches over the card as it does Creation's 172x256; JPEG's luminance quantization, coarser until the file fits.
 constexpr uint32_t kCardAt = 13576;
 constexpr int kCardW = 128, kCardH = 192;
-constexpr uint32_t kZigzag = 0x82702660;
+constexpr uint32_t kZigzag = 0x82712660;
 
 struct Rgb {
   float r, g, b;
@@ -717,8 +717,8 @@ bool FillEntry(PPCContext& ctx, uint8_t* base, uint32_t manager, uint32_t n) {
   const PPCContext saved = ctx;
   ctx.r3.u64 = holder;
   ctx.r4.u64 = Slot(n) + kRecordAt;
-  ctx.lr = 0x82189268;  // as from main's loop
-  sub_82220B50(ctx, base);
+  ctx.lr = 0x82189A40;  // as from main's loop
+  sub_82221978(ctx, base);
   ctx = saved;
   PutBe32(Host(holder), 0);
   REXLOG_INFO("sc5 creation: the manager's entry {} filled (parts {}, type {})", n + 1,

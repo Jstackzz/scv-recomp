@@ -1,12 +1,12 @@
 #pragma once
-// The game's random numbers (docs\GAME.md, "Rollback"). Four generators, all seeded by sub_824A35A8: the C library's
-// rand (state per guest thread at _getptd()+0x14), Park-Miller (sub_824A33D8 / sub_824A3248, 0x829249F8), TT800
-// (sub_824A3030, 0x82924A20) and a Mersenne Twister ([0x82773FB0]). The fight and the visual systems draw from the same
+// The game's random numbers (docs\GAME.md, "Rollback"). Four generators, all seeded by sub_824B2EA0: the C library's
+// rand (state per guest thread at _getptd()+0x14), Park-Miller (sub_824B2CD0 / sub_824B2B40, 0x8293857C), TT800
+// (sub_824B2928, 0x82938580) and a Mersenne Twister ([0x82787AB0]). The fight and the visual systems draw from the same
 // ones. The visual systems keep their state in heap objects that come and go (effects, the stage's wind and gusts),
 // which rollback cannot put back, so a frame run again can draw a different number of times there, and every number
 // the fight draws after that is another. Their updates therefore draw from a set of states of their own: swapped in
-// around sub_82195D48 (effects), sub_821936C8 (the forces on cloth and hair), sub_82194210 (gusts) and two tasks
-// (sub_8219D508, sub_824A5ED0), and never put back by rollback; the fight's states are what rollback keeps.
+// around sub_8219B548 (effects), sub_82193EB0 (the forces on cloth and hair), sub_821949F8 (gusts) and two tasks
+// (sub_8219DD98, sub_824B58E8), and never put back by rollback; the fight's states are what rollback keeps.
 #include <cstdint>
 
 struct PPCContext;

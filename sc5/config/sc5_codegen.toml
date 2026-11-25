@@ -6,148 +6,148 @@
 # scanner does not find them on its own.
 [functions]
 # virtual-call forwarders: lwz r11,0x14(r3); lwz r10,0(r11); lwz r3,4(r11); lwz r11,N(r10); mtctr; bctr
-0x8258D350 = { end = 0x8258D368 }   # slot 0x5C
-0x8258D368 = { end = 0x8258D380 }   # slot 0x60
-0x8258D380 = { end = 0x8258D398 }   # slot 0x64
-0x8258D398 = { end = 0x8258D3B0 }   # slot 0x68
-0x8258D3B0 = { end = 0x8258D3C8 }   # slot 0x6C
-0x82540020 = { end = 0x82540028 }   # addi r3,r3,8; b 0x8254DF00 (this-adjusting thunk)
-0x8253DB68 = { end = 0x8253DB84 }   # argument shuffle, b 0x82545FC0
-0x82583DC0 = { end = 0x82583DEC }   # list append, blr
+0x8259D0D8 = { end = 0x8259D0F0 }   # slot 0x5C
+0x8259D0F0 = { end = 0x8259D108 }   # slot 0x60
+0x8259D108 = { end = 0x8259D120 }   # slot 0x64
+0x8259D120 = { end = 0x8259D138 }   # slot 0x68
+0x8259D138 = { end = 0x8259D150 }   # slot 0x6C
+0x8254FE00 = { end = 0x8254FE08 }   # addi r3,r3,8; b 0x825521D8 (this-adjusting thunk)
+0x8254D918 = { end = 0x8254D934 }   # argument shuffle, b 0x82555C70
+0x82593B30 = { end = 0x82593B5C }   # list append, blr
 # a small-block allocator's free and its two adapters (mr r3,r4; b ...), none with .pdata: the scanner merged them
-# into sub_822D0BA0, leaving the free's own branches unresolved (REX_FATAL had any of them been taken)
-0x822D0B90 = { end = 0x822D0B98 }   # mr r3,r4; b 0x822D0BA0
-0x822D0B98 = { end = 0x822D0BA0 }   # mr r3,r4; b 0x822D0D70
-0x822D0D70 = { end = 0x822D0E40 }   # free(r3): cmplwi r3,0; beqlr ...
+# into sub_822DD840, leaving the free's own branches unresolved (REX_FATAL had any of them been taken)
+0x822DD830 = { end = 0x822DD838 }   # mr r3,r4; b 0x822DD840
+0x822DD838 = { end = 0x822DD840 }   # mr r3,r4; b 0x822DDA10
+0x822DDA10 = { end = 0x822DDAE0 }   # free(r3): cmplwi r3,0; beqlr ...
 
-# The game reads address 0 on purpose: sub_822A7CF8 (a parameter-table getter) loads its out-of-range default
-# with "li r11,0; lhz r11,0(r11)" (0x822A7DE0). The console reads that as 0; the runtime maps the zero page
+# The game reads address 0 on purpose: sub_822B4510 (a parameter-table getter) loads its out-of-range default
+# with "li r11,0; lhz r11,0(r11)" (0x822B45F8). The console reads that as 0; the runtime maps the zero page
 # readable for it (sc5_app.cpp: protect_zero off).
 
 # Checks inserted into the game's code (src/sc5/guards.cpp): where its own code reads through a pointer that can be
 # empty and the console's memory map let that pass.
-# sub_824717A8, a battle object's state save (vtable 0x820D9DB0 slot 4; run for each of the game's battle state
+# sub_82480C08, a battle object's state save (vtable 0x820DA7A0 slot 4; run for each of the game's battle state
 # snapshots, about every 80 frames of a fight, for the KO replay: docs/GAME.md), writes a field of its owner (+0x264,
-# +0x5BE90 into it) without checking that there is one; the objects sub_82476720 builds for a VS fight have none, and
-# guest 0x0005BE90 is not mapped here. Its restore (slot 5, sub_82471830) reads the 4 bytes and skips them when the
+# +0x5BE90 into it) without checking that there is one; the objects sub_82485B38 builds for a VS fight have none, and
+# guest 0x0005BE90 is not mapped here. Its restore (slot 5, sub_82480C90) reads the 4 bytes and skips them when the
 # owner is none: zeros do.
 [[midasm_hook]]
 name = "Sc5GuardOwnerField"
-address = 0x8247180C          # mtctr r6: r4 = [this+0x264] + 0x5BE90, what the 4-byte write reads
+address = 0x82480C6C          # mtctr r6: r4 = [this+0x264] + 0x5BE90, what the 4-byte write reads
 registers = ["r4"]
 
 # Sequences (the game's screens, docs\GAME.md): each creator's first instruction tells src/sc5/game.cpp which one comes
 # next (the launcher's autopilot and netplay follow them).
 [[midasm_hook]]
-name = "Sc5Sequence_82328C48"
-address = 0x82328C48          # Setup
+name = "Sc5Sequence_82335840"
+address = 0x82335840          # Setup
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82328CE8"
-address = 0x82328CE8          # Attract
+name = "Sc5Sequence_823358E0"
+address = 0x823358E0          # Attract
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82328D88"
-address = 0x82328D88          # Title
+name = "Sc5Sequence_82335980"
+address = 0x82335980          # Title
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82328E70"
-address = 0x82328E70          # AstralHome (4, 18)
+name = "Sc5Sequence_82335A68"
+address = 0x82335A68          # AstralHome (4, 18)
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82328F50"
-address = 0x82328F50          # Entry
+name = "Sc5Sequence_82335B48"
+address = 0x82335B48          # Entry
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82328FE8"
-address = 0x82328FE8          # Game
+name = "Sc5Sequence_82335BE0"
+address = 0x82335BE0          # Game
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329060"
-address = 0x82329060          # Creation
+name = "Sc5Sequence_82335C58"
+address = 0x82335C58          # Creation
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_823290D8"
-address = 0x823290D8          # Option
+name = "Sc5Sequence_82335CD0"
+address = 0x82335CD0          # Option
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329150"
-address = 0x82329150          # SignOut
+name = "Sc5Sequence_82335D48"
+address = 0x82335D48          # SignOut
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_823291F8"
-address = 0x823291F8          # VSStandard (9), VSSpecial (10)
+name = "Sc5Sequence_82335DF0"
+address = 0x82335DF0          # VSStandard (9), VSSpecial (10)
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329298"
-address = 0x82329298          # Arcade
+name = "Sc5Sequence_82335E90"
+address = 0x82335E90          # Arcade
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329338"
-address = 0x82329338          # Training
+name = "Sc5Sequence_82335F30"
+address = 0x82335F30          # Training
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_823293B0"
-address = 0x823293B0          # LogoSequence
+name = "Sc5Sequence_82335FA8"
+address = 0x82335FA8          # LogoSequence
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329428"
-address = 0x82329428          # Sample
+name = "Sc5Sequence_82336020"
+address = 0x82336020          # Sample
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_823294C0"
-address = 0x823294C0          # WorldMap
+name = "Sc5Sequence_823360B8"
+address = 0x823360B8          # WorldMap
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329560"
-address = 0x82329560          # Online
+name = "Sc5Sequence_82336158"
+address = 0x82336158          # Online
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329600"
-address = 0x82329600          # QuickBattle
+name = "Sc5Sequence_823361F8"
+address = 0x823361F8          # QuickBattle
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_823296A0"
-address = 0x823296A0          # LegendaryOfSouls
+name = "Sc5Sequence_82336298"
+address = 0x82336298          # LegendaryOfSouls
 registers = []
 
 [[midasm_hook]]
-name = "Sc5Sequence_82329740"
-address = 0x82329740          # Invite
+name = "Sc5Sequence_82336338"
+address = 0x82336338          # Invite
 registers = []
 
-# The battle state snapshot sub_82159DF0 has just written (docs\GAME.md, "The battle"), r31 the stream: hashed into the
+# The battle state snapshot sub_8215A298 has just written (docs\GAME.md, "The battle"), r31 the stream: hashed into the
 # log with SC5_TEST_HASH=1 (src/sc5/game.cpp), to compare two runs (pointers in it are block and offset, so the
 # heap's layout does not show).
 [[midasm_hook]]
 name = "Sc5BattleSnapshotSaved"
-address = 0x8215A358          # the save's end (addi r1,r1,192)
+address = 0x8215A800          # the save's end (addi r1,r1,192)
 registers = ["r31"]
 
 # Temporary: which writer puts the snapshot positions SC5_DBG_POS lists (synctest round trips differ there)
 [[midasm_hook]]
 name = "Sc5DbgSnapWrite"
-address = 0x8211CA9C          # the stream's write after its frame: r3 stream, r4 source, r5 size
+address = 0x8211CB84          # the stream's write after its frame: r3 stream, r4 source, r5 size
 registers = ["r1", "r3", "r4", "r5"]
 
-# A fight's setup of a created character (sub_82147C70): r11 its "wears downloadable models" flag, just loaded from the
+# A fight's setup of a created character (sub_82148400): r11 its "wears downloadable models" flag, just loaded from the
 # creation manager's entry (r4), with which the game swaps the character for a plain template of its style; cleared
 # when every downloadable model it wears has its data on this PC (src/sc5/dlc.cpp), so costume pack parts show in fights.
 [[midasm_hook]]

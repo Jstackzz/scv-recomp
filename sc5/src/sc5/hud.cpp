@@ -1,12 +1,12 @@
 // The fight's HUD and its round markers, see hud.h.
 //
-// A round's end (sub_8213E180, from the "fighting" state's update in the battle's state machine, sub_82441628) gives its
-// winner the round through sub_82146C48: the player's rounds won (+0x1108, a halfword; the match ends when it reaches
-// +0x110C, the rounds to win; the game's other count at +0x75C goes up at the same time, sub_821882F0) and the HUD's
+// A round's end (sub_8213E7F8, from the "fighting" state's update in the battle's state machine, sub_82450BD0) gives its
+// winner the round through sub_82147418: the player's rounds won (+0x1108, a halfword; the match ends when it reaches
+// +0x110C, the rounds to win; the game's other count at +0x75C goes up at the same time, sub_82188AC8) and the HUD's
 // own count of them (HUD +0x94 + 4 * side, the side the player's +0x1A8) each go up by one, and the marker lights
-// (sub_8217D090, effect 1966 or 1967). The HUD draws its markers from its own count every frame (sub_82181588 from
-// sub_82182898: five a side, marker n lit while n <= the count), and sets it from the player's count only as each round
-// starts (sub_8231CAA0, from the round's call). The players' objects are in every snapshot; the HUD, a heap object, is
+// (sub_8217D818, effect 1966 or 1967). The HUD draws its markers from its own count every frame (sub_82181D60 from
+// sub_82183070: five a side, marker n lit while n <= the count), and sets it from the player's count only as each round
+// starts (sub_82329248, from the round's call). The players' objects are in every snapshot; the HUD, a heap object, is
 // not. So a frame run again over a KO counted the round on the HUD once more (its first run and its rerun), and a KO
 // that came only on a guess, which the real input then took back, stayed on the HUD: a player shown with a round more
 // than they had until the next round's call, and to the result after the match's last round (four markers in a first
@@ -27,8 +27,8 @@
 namespace sc5::hud {
 namespace {
 
-constexpr uint32_t kHudRef = 0x829F2F98;
-constexpr uint32_t kPlayers[2] = {0x82937070, 0x82994BA0};
+constexpr uint32_t kHudRef = 0x82A06B38;
+constexpr uint32_t kPlayers[2] = {0x8294AC10, 0x829A8740};
 constexpr uint32_t kRoundsWon = 0x1108;  // the player's rounds won (halfword), which the HUD's count follows
 constexpr uint32_t kRoundsWonToo = 0x75C;  // the game's other count of them (a word)
 constexpr uint32_t kSide = 0x1A8;  // the player's side (a byte: 0 player 1, 1 player 2)

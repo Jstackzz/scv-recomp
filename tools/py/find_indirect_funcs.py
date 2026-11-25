@@ -6,7 +6,7 @@ Two sources of pointers:
   data  words in .rdata/.data that point into code (vtables, callback tables), in runs of at least two that are
         not jump tables (most entries inside one .pdata function), or alone when --single is given
   code  addresses the code builds itself: lis rX,HI then addi/ori rY,rX,LO within a few instructions
-        (a callback handed to a library, e.g. CRI's at 0x825E06C0)
+        (a callback handed to a library, e.g. CRI's at 0x825F0438)
 
 A target is kept when it is not a known function start, lies outside every .pdata function, and the instruction
 before it ends something (blr, bctr, an unconditional b, or padding). Targets inside a .pdata function are labels

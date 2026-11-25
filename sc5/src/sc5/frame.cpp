@@ -22,16 +22,16 @@
 #include <windows.h>
 #endif
 
-REX_EXTERN(__imp__sub_82163C00);  // one frame (frame.h)
-REX_EXTERN(__imp__sub_8249B8A8);  // the frame's phase 0x200 (drawing)
-REX_EXTERN(__imp__sub_8249E548);  // phase 0x400 (drawing)
-REX_EXTERN(__imp__sub_824945F8);  // phase 0x500 (the frame's end: present, wait for the display)
-REX_EXTERN(__imp__sub_824943F0);  // the frame's simulation: 0 to 2 steps of sub_82493230 (see below)
+REX_EXTERN(__imp__sub_82164070);  // one frame (frame.h)
+REX_EXTERN(__imp__sub_824AAC38);  // the frame's phase 0x200 (drawing)
+REX_EXTERN(__imp__sub_824AD398);  // phase 0x400 (drawing)
+REX_EXTERN(__imp__sub_824A3988);  // phase 0x500 (the frame's end: present, wait for the display)
+REX_EXTERN(__imp__sub_824A3780);  // the frame's simulation: 0 to 2 steps of sub_824A25C0 (see below)
 
 namespace sc5::frame {
 namespace {
 
-constexpr uint32_t kLoopTop = 0x82189268;  // the return address of main's call of the frame (0x82189264)
+constexpr uint32_t kLoopTop = 0x82189A40;  // the return address of main's call of the frame (0x82189A3C)
 
 std::atomic<uint64_t> g_frames{0};
 std::atomic<uint32_t> g_main_tid{0};
@@ -89,19 +89,19 @@ void SetCount(uint64_t n) { g_frames.store(n, std::memory_order_relaxed); }
 
 void ProfileRerun(double whole_ms);  // below, SC5_TEST_RERUN_PROFILE
 
-// The game's count of frames shown (0x82771B44): the present adds one when the GPU took the frame, and the battle
-// throttles by it (sub_82155B80 and others: "4 or more since the stamp"). A frame run again presents nothing, so after
+// The game's count of frames shown (0x82785644): the present adds one when the GPU took the frame, and the battle
+// throttles by it (sub_821561B0 and others: "4 or more since the stamp"). A frame run again presents nothing, so after
 // a rollback put the count back it stood still, and the throttles did otherwise than in the frames' first runs (the
 // synctest's KO 188 frames earlier than without rollback, 2026-11-18): a frame run again counts as shown. (In a match
 // the netplay sets it from the match's frame anyway, net/netplay.cpp.)
-constexpr uint32_t kFramesShown = 0x82771B44;
+constexpr uint32_t kFramesShown = 0x82785644;
 
 void RunAgain(PPCContext& ctx, uint8_t* base) {
   const auto t0 = std::chrono::steady_clock::now();
   g_replaying.store(true, std::memory_order_relaxed);
   const uint64_t lr = ctx.lr;
   ctx.lr = kLoopTop;
-  __imp__sub_82163C00(ctx, base);
+  __imp__sub_82164070(ctx, base);
   ctx.lr = lr;
   if (auto* ks = REX_KERNEL_STATE()) {
     uint32_t* shown = ks->memory()->TranslateVirtual<uint32_t*>(kFramesShown);
@@ -148,10 +148,10 @@ void End(PPCContext& ctx, uint8_t* base) {
 }  // namespace sc5::frame
 
 // one frame (main's loop calls it until it returns false)
-REX_HOOK_RAW(sub_82163C00) {
+REX_HOOK_RAW(sub_82164070) {
   const bool from_main = uint32_t(ctx.lr) == sc5::frame::kLoopTop;
   if (from_main) sc5::frame::Top(ctx, base);
-  __imp__sub_82163C00(ctx, base);
+  __imp__sub_82164070(ctx, base);
   if (from_main) sc5::frame::End(ctx, base);
 }
 
@@ -167,41 +167,41 @@ bool ReplayDraws() {
 // systems do: a frame's first run draws and its rerun does not, so any number they took from the fight's generators
 // would leave those wherever the frame's last run had (two games' TT800 and Mersenne Twister came apart under
 // rollback, Elysium against Edge Master with 40 ms each way, 2026-11-18; net/netplay.cpp ReseedAtStateChange).
-REX_HOOK_RAW(sub_8249B8A8) {
+REX_HOOK_RAW(sub_824AAC38) {
   if (sc5::frame::Replaying() && !ReplayDraws()) return;
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_8249B8A8(ctx, base);
+  __imp__sub_824AAC38(ctx, base);
   sc5::rng::LeaveVisual();
 }
-// ... but phase 0x400 runs when sub_8249E110 calls it: a request a task made of the drawing (sub_8249EB48: set up,
+// ... but phase 0x400 runs when sub_824AD5B0 calls it: a request a task made of the drawing (sub_824ADEB8: set up,
 // then waited for, then its answer read) waits there in a loop of phase 0x400 and a short sleep until the drawing has
 // taken it. Left out in a frame run again, the request was never taken and the game waited for good (Elysium against
-// Edge Master with 40 ms each way, fight frame 160 in a frame run again: sub_82353C58's task through sub_82355988 and
-// sub_8249EBF0, the main thread asleep in sub_8267AC68 from then on, 2026-11-18).
-constexpr uint32_t kDrawRequestWait = 0x8249E12C;  // where sub_8249E110's call of phase 0x400 returns
-REX_HOOK_RAW(sub_8249E548) {
+// Edge Master with 40 ms each way, fight frame 160 in a frame run again: sub_82361C70's task through sub_82363FC8 and
+// sub_824ADF60, the main thread asleep in sub_824D8008 from then on, 2026-11-18).
+constexpr uint32_t kDrawRequestWait = 0x8249E12C;  // where sub_824AD5B0's call of phase 0x400 returns
+REX_HOOK_RAW(sub_824AD398) {
   if (sc5::frame::Replaying() && !ReplayDraws() && uint32_t(ctx.lr) != kDrawRequestWait) return;
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_8249E548(ctx, base);
+  __imp__sub_824AD398(ctx, base);
   sc5::rng::LeaveVisual();
 }
-REX_HOOK_RAW(sub_824945F8) {
+REX_HOOK_RAW(sub_824A3988) {
   if (sc5::frame::Replaying()) return;
   sc5::rng::EnterVisual(ctx, base);
-  __imp__sub_824945F8(ctx, base);
+  __imp__sub_824A3988(ctx, base);
   sc5::rng::LeaveVisual();
 }
 
-// It does work out the models' pose (sub_822BCF88: a model's bones, which the main thread hands worker threads as some
+// It does work out the models' pose (sub_822C9B38: a model's bones, which the main thread hands worker threads as some
 // 54 jobs a fighter, then the cloth and hair and what hangs on the bones), though that is two thirds of a frame run
 // again (1.1 of 1.75 ms, SC5_TEST_RERUN_PROFILE). Left out (2026-11-17), the fight stayed the same for Siegfried
 // against Siegfried, but the next frame builds its skeleton from the pose before it (three buffers taken in turn,
-// each player's +0x3190: the pose's last stage scales some bones, sub_822B7918), and sub_82145EB8 takes an angle of
-// bone 2 into the fight (+0x3070, its sectors at +0x3066 / +0x3068, which the move scripts read: sub_8215CD68): after
+// each player's +0x3190: the pose's last stage scales some bones, sub_822C44C8), and sub_82146688 takes an angle of
+// bone 2 into the fight (+0x3070, its sectors at +0x3066 / +0x3068, which the move scripts read: sub_8215D210): after
 // a frame run again without its pose, that bone came out a bit or two apart, by how far each game had rolled back
 // (Aeon Calcos against Siegfried with 40 ms each way parted at frame 210, P1+0x3078). SC5_RERUN_POSE=0 leaves it out
 // (tests: what it costs).
-REX_EXTERN(__imp__sub_822BCF88);
+REX_EXTERN(__imp__sub_822C9B38);
 namespace {
 bool RerunPose() {
   static const bool on = [] {
@@ -211,31 +211,31 @@ bool RerunPose() {
   return on;
 }
 }  // namespace
-REX_HOOK_RAW(sub_822BCF88) {
+REX_HOOK_RAW(sub_822C9B38) {
   if (sc5::frame::Replaying() && !RerunPose() && sc5::frame::OnMainThread()) return;
-  __imp__sub_822BCF88(ctx, base);
+  __imp__sub_822C9B38(ctx, base);
 }
 
-// One simulation step a frame. sub_824943F0 runs the game's step (sub_82493230: pads, sequences, the battle) once,
-// and in a fight (0x82771B78 set) once more for each whole step the float at 0x82927D48 says the game is behind, at
-// most 2, keeping the fraction for later; the present (sub_824945F8) sets that from the frame times it measured (16
+// One simulation step a frame. sub_824A3780 runs the game's step (sub_824A25C0: pads, sequences, the battle) once,
+// and in a fight (0x82785678 set) once more for each whole step the float at 0x8293B794 says the game is behind, at
+// most 2, keeping the fraction for later; the present (sub_824A3988) sets that from the frame times it measured (16
 // kept): below 1 at 60 frames a second, 1 or 2 after a late frame, so that the game catches up. With that, how far a
 // fight gets in a number of frames follows the clock, and a frame run again (no present) takes the catching up meant
 // for a later one: a stall of a few frames changes how a fight goes. Rollback and netplay need a frame to be one
 // step, so it is set to 0 before each frame's simulation (a slow PC slows the game down instead). SC5_FRAME_CATCHUP=1
 // leaves the game's own count (tests). The frames whose count was 1 or more are logged (the first 20).
 namespace {
-constexpr uint32_t kStepsBehind = 0x82927D48;
+constexpr uint32_t kStepsBehind = 0x8293B794;
 const bool g_catchup = [] {
   const char* v = std::getenv("SC5_FRAME_CATCHUP");
   return v && v[0] == '1';
 }();
 uint64_t g_behind = 0;
 }  // namespace
-// SC5_TEST_RERUN_PROFILE=1: where a frame run again spends its time: the pads (sub_82493BC8), the step (sub_824943F0)
-// and the tasks (sub_82494CA0), each frame's whole run beside them; logged every 2000 frames run again
-REX_EXTERN(__imp__sub_82493BC8);
-REX_EXTERN(__imp__sub_82494CA0);
+// SC5_TEST_RERUN_PROFILE=1: where a frame run again spends its time: the pads (sub_824A2F58), the step (sub_824A3780)
+// and the tasks (sub_824A4030), each frame's whole run beside them; logged every 2000 frames run again
+REX_EXTERN(__imp__sub_824A2F58);
+REX_EXTERN(__imp__sub_824A4030);
 namespace {
 const bool g_profile = [] {
   const char* v = std::getenv("SC5_TEST_RERUN_PROFILE");
@@ -250,8 +250,8 @@ void Timed(F&& run) {
   g_prof_ms[kPhase] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 }  // namespace
-REX_HOOK_RAW(sub_82493BC8) { Timed<0>([&] { __imp__sub_82493BC8(ctx, base); }); }
-REX_HOOK_RAW(sub_82494CA0) { Timed<2>([&] { __imp__sub_82494CA0(ctx, base); }); }
+REX_HOOK_RAW(sub_824A2F58) { Timed<0>([&] { __imp__sub_824A2F58(ctx, base); }); }
+REX_HOOK_RAW(sub_824A4030) { Timed<2>([&] { __imp__sub_824A4030(ctx, base); }); }
 namespace sc5::frame {
 void ProfileRerun(double whole_ms) {
   if (!g_profile) return;
@@ -269,7 +269,7 @@ void ProfileRerun(double whole_ms) {
 }  // namespace sc5::frame
 
 void Sc5Step(PPCContext& ctx, uint8_t* base);
-REX_HOOK_RAW(sub_824943F0) {
+REX_HOOK_RAW(sub_824A3780) {
   if (g_profile && sc5::frame::Replaying()) {
     static uint64_t steps = 0;
     if (steps++ % 500 == 0) sc5::rerun_profile::Scan();  // classes that came since are timed too
@@ -287,13 +287,13 @@ void Sc5Step(PPCContext& ctx, uint8_t* base) {
                   g_catchup ? "" : " (not done)");
     if (!g_catchup) *behind = 0;
   }
-  __imp__sub_824943F0(ctx, base);
+  __imp__sub_824A3780(ctx, base);
 }
 
-// Two blends of the post-effects run every frame as step tasks: the effects' parameters (sub_82345578 calls
-// sub_82345710 for each of two effects: the effect in r5, its start at +60, fade-in +48, hold +52, fade-out +56) and the
-// colour grading (sub_82348198 calls sub_82348280: start +56, fade-in +44, hold +48, fade-out +52). Each weighs an
-// effect by elapsed = the frame count at 0x82771B48 - its start: elapsed / fade-in while elapsed < fade-in, so with a
+// Two blends of the post-effects run every frame as step tasks: the effects' parameters (sub_82353358 calls
+// sub_823534F0 for each of two effects: the effect in r5, its start at +60, fade-in +48, hold +52, fade-out +56) and the
+// colour grading (sub_82355F78 calls sub_82356060: start +56, fade-in +44, hold +48, fade-out +52). Each weighs an
+// effect by elapsed = the frame count at 0x82785648 - its start: elapsed / fade-in while elapsed < fade-in, so with a
 // fade-in of 0 a count behind the effect's start gives -inf, and NaN goes on into the blended parameters, the colour
 // grading and the final picture's colour matrix: the scene black under the HUD until the effect is set again. On the
 // console the count never goes back; here a rollback puts it back (battle.cpp's kRaw) while the post-effects, not in the
@@ -308,7 +308,7 @@ void BlendFromNow(PPCContext& ctx, uint32_t start_at, uint32_t fade_in_at, Blend
   const uint32_t effect = ctx.r5.u32;
   uint32_t* start = mem->TranslateVirtual<uint32_t*>(effect + start_at);
   uint32_t* fade_in = mem->TranslateVirtual<uint32_t*>(effect + fade_in_at);
-  const uint32_t now = __builtin_bswap32(*mem->TranslateVirtual<const uint32_t*>(0x82771B48));
+  const uint32_t now = __builtin_bswap32(*mem->TranslateVirtual<const uint32_t*>(0x82785648));
   const uint32_t was_start = __builtin_bswap32(*start), was_fade_in = __builtin_bswap32(*fade_in);
   const bool ahead = int32_t(now - was_start) < 0;
   if (ahead) {
@@ -326,7 +326,7 @@ void BlendFromNow(PPCContext& ctx, uint32_t start_at, uint32_t fade_in_at, Blend
   }
 }
 }  // namespace
-REX_EXTERN(__imp__sub_82345710);
-REX_HOOK_RAW(sub_82345710) { BlendFromNow(ctx, 60, 48, [&] { __imp__sub_82345710(ctx, base); }); }
-REX_EXTERN(__imp__sub_82348280);
-REX_HOOK_RAW(sub_82348280) { BlendFromNow(ctx, 56, 44, [&] { __imp__sub_82348280(ctx, base); }); }
+REX_EXTERN(__imp__sub_823534F0);
+REX_HOOK_RAW(sub_823534F0) { BlendFromNow(ctx, 60, 48, [&] { __imp__sub_823534F0(ctx, base); }); }
+REX_EXTERN(__imp__sub_82356060);
+REX_HOOK_RAW(sub_82356060) { BlendFromNow(ctx, 56, 44, [&] { __imp__sub_82356060(ctx, base); }); }

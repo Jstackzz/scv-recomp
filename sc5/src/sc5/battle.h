@@ -1,6 +1,6 @@
 #pragma once
 // The game's own battle state snapshots (docs\GAME.md, "The battle"), taken and put back by us: what the game saves
-// about every 80 frames for its KO replay (sub_82159DF0) and restores from (sub_8215A360), into streams of our own in
+// about every 80 frames for its KO replay (sub_8215A298) and restores from (sub_8215A808), into streams of our own in
 // guest memory. The candidate for rollback's saved states (net\synctest.cpp checks it).
 #include <cstdint>
 #include <string>
@@ -10,7 +10,7 @@ struct PPCContext;
 
 namespace sc5::battle {
 
-// A stream as the game's are (vtable 0x820BA8B8: +4 written, +8 read, data from +12, 0x28000 bytes at most), allocated
+// A stream as the game's are (vtable 0x820BA908: +4 written, +8 read, data from +12, 0x28000 bytes at most), allocated
 // in guest memory; 0 when none could be.
 uint32_t NewStream();
 
@@ -27,7 +27,7 @@ const uint8_t* Data(uint32_t stream);
 std::string RawDifferences(uint32_t a, uint32_t b, uint32_t& count);
 
 // The blocks the game's last save into a stream wrote, in order, with the guest address each came from (Save records
-// them through the stream's write, sc5_codegen.toml's hook at 0x8211CA9C)
+// them through the stream's write, sc5_codegen.toml's hook at 0x8211CB84)
 struct Block {
   uint32_t pos, size, source;
 };
@@ -49,7 +49,7 @@ Kind KindOf(uint32_t source);
 uint64_t FightHash(uint32_t stream);
 // the stream write hook's report (debug_watch.cpp's Sc5DbgSnapWrite)
 void OnSnapWrite(uint32_t stream, uint32_t pos, uint32_t size, uint32_t source);
-// A KO's replay is playing (the replay's manager, sub_8211A8A8, in its state 2): the battle state machine says
+// A KO's replay is playing (the replay's manager, sub_8211A9E8, in its state 2): the battle state machine says
 // "fighting", but the game plays a stretch of the round back and puts the present back at its end (battle.cpp)
 bool InKoReplay();
 

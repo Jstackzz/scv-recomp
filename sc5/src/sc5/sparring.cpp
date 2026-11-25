@@ -1,7 +1,7 @@
 // Online Practice's rules, see sparring.h.
 //
-// The fighters' health: a float at +0x2268C of each player's object (0x82937070, 0x82994BA0), full at +0x22688 (240.0
-// in VS Battle). The round's clock (a block of the fight at 0x8293619C): +0xC the seconds left, +0x10 the frames left
+// The fighters' health: a float at +0x2268C of each player's object (0x8294AC10, 0x829A8740), full at +0x22688 (240.0
+// in VS Battle). The round's clock (a block of the fight at 0x82949D3C): +0xC the seconds left, +0x10 the frames left
 // in the second (60 down to 1; at 0 a second goes), +0 the round's time as set. Found by comparing a fight's snapshots.
 
 #include "sc5/sparring.h"
@@ -21,9 +21,9 @@ namespace {
 
 std::atomic<bool> g_on{false};
 
-constexpr uint32_t kPlayer[2] = {0x82937070, 0x82994BA0};
+constexpr uint32_t kPlayer[2] = {0x8294AC10, 0x829A8740};
 constexpr uint32_t kHealth = 0x2268C, kFullHealth = 0x22688;
-constexpr uint32_t kClock = 0x8293619C, kClockSet = 0x0, kClockSeconds = 0xC, kClockFrames = 0x10;
+constexpr uint32_t kClock = 0x82949D3C, kClockSet = 0x0, kClockSeconds = 0xC, kClockFrames = 0x10;
 
 // below this part of full health at a frame's top a fighter is full again at once: no single hit takes more
 constexpr float kFloor = 0.4f;

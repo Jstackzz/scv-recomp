@@ -12,7 +12,7 @@
 
 namespace sc5::creation {
 
-// The record's fields (the game's schema, sub_822256B0, and its parts: tools\py and docs\GAME.md, "Created
+// The record's fields (the game's schema, sub_82226450, and its parts: tools\py and docs\GAME.md, "Created
 // characters").
 namespace dna {
 constexpr uint32_t kSize = 13340;
@@ -43,7 +43,7 @@ constexpr uint32_t kWeaponStyle = 0, kWeaponVariation = 2, kWeaponEffect = 4, kW
                    kWeaponStickerCount = 4, kWeaponTrace = 408, kWeaponEffectInfo = 624;
 }  // namespace dna
 
-// The game's checksum of a record (sub_82245F98): over its first 13,336 bytes
+// The game's checksum of a record (sub_822470B0): over its first 13,336 bytes
 uint32_t Checksum(const uint8_t* record);
 
 // A record's character type and base type: an original character (listed under the Creation slot) has base type 0
@@ -52,7 +52,7 @@ uint32_t Checksum(const uint8_t* record);
 constexpr int kOriginal = 32, kFighterBase = 5;
 
 // A model (ModelData) is the parts set type, the table index, the variation and the segment: the game loads the file
-// the first three name (sub_82298A50: the model table's row and column; 0x7F a downloadable one, its package group and
+// the first three name (sub_822A4530: the model table's row and column; 0x7F a downloadable one, its package group and
 // entry) and in each break level shows the segment the last names (sub_82147F48 in a fight, sub_821D0E28 in Creation),
 // or none when it is negative. Creation writes segment 0xFF (as its own "none", FF0000FF) for a piece it keeps worn but
 // does not show: the parts tables never list that form (seen 2026-11-20, a player's new female characters: model
@@ -74,7 +74,7 @@ struct Known {
   // a record's sticker repeats them (+16, +17, +14)
   std::map<uint32_t, uint32_t> stickers;
   std::set<std::pair<int, int>> weapons;       // (style, variation)
-  // the colour palette's last row and column (sub_8222C450 takes a place up to them)
+  // the colour palette's last row and column (sub_8222D210 takes a place up to them)
   int palette_rows = 0, palette_cols = 0;
 };
 

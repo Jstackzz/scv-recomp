@@ -1,14 +1,14 @@
 // The character select screen, see select.h.
 //
-// The select object (VS Battle's: set up by sub_822FBDF8, vtable 0x820CBD50; the other modes' by sub_822F72C8 and
-// sub_82301500) keeps, from what the game's own code reads and writes (sub_822FE558, a side's cursor and its pick;
-// sub_823000B0, the pick; sub_822F5E38, the grid):
+// The select object (VS Battle's: set up by sub_82308520, vtable 0x820CC658; the other modes' by sub_82303EA8 and
+// sub_8230DC78) keeps, from what the game's own code reads and writes (sub_8230ACD0, a side's cursor and its pick;
+// sub_8230C828, the pick; sub_82302A70, the grid):
 //   +0x9C + 4 side   the side's step: 0 choosing a character, 1 its costume, 2 and 3 done
-//   +0xAC + 12 side  the side's cursor: x (0-7), y (0-3), a repeat timer; sub_822FE558 moves it (with wrap-around, and
+//   +0xAC + 12 side  the side's cursor: x (0-7), y (0-3), a repeat timer; sub_8230ACD0 moves it (with wrap-around, and
 //                    past the two empty slots 19 and 20, which make one crest in the third row)
-//   +1600 + 4 slot   0: the slot can be picked; 1 locked, 2 Dampierre's without his package (sub_822F5E38)
-// The costume panel's "n / count" label goes through sub_822FFF98(side, n, count) every frame it is up.
-// The slots, row by row, are the table at 0x82746018 (72 bytes each: +0 the game's character id, +0x24 the release
+//   +1600 + 4 slot   0: the slot can be picked; 1 locked, 2 Dampierre's without his package (sub_82302A70)
+// The costume panel's "n / count" label goes through sub_8230C710(side, n, count) every frame it is up.
+// The slots, row by row, are the table at 0x82756020 (72 bytes each: +0 the game's character id, +0x24 the release
 // id, +0x26 the icon's name); the names below are the ones the screen shows for them.
 
 #include "sc5/select.h"
@@ -28,7 +28,7 @@
 namespace sc5::select {
 namespace {
 
-constexpr uint32_t kSlotTable = 0x82746018, kSlotSize = 72;
+constexpr uint32_t kSlotTable = 0x82756020, kSlotSize = 72;
 
 struct Slot {
   const char* roster;  // the launcher's id (data\sc5.json), nullptr for none
@@ -153,38 +153,38 @@ int StageCursor() {
 
 }  // namespace sc5::select
 
-// the select screens' setup functions (each builds the grid, sub_822F5E38)
-REX_EXTERN(__imp__sub_822FBDF8);
-REX_HOOK_RAW(sub_822FBDF8) {
+// the select screens' setup functions (each builds the grid, sub_82302A70)
+REX_EXTERN(__imp__sub_82308520);
+REX_HOOK_RAW(sub_82308520) {
   sc5::select::SetUp(ctx.r3.u32, "VS Battle's");
-  __imp__sub_822FBDF8(ctx, base);
+  __imp__sub_82308520(ctx, base);
 }
-REX_EXTERN(__imp__sub_822F72C8);
-REX_HOOK_RAW(sub_822F72C8) {
+REX_EXTERN(__imp__sub_82303EA8);
+REX_HOOK_RAW(sub_82303EA8) {
   sc5::select::SetUp(ctx.r3.u32, "a");
-  __imp__sub_822F72C8(ctx, base);
+  __imp__sub_82303EA8(ctx, base);
 }
-REX_EXTERN(__imp__sub_82301500);
-REX_HOOK_RAW(sub_82301500) {
+REX_EXTERN(__imp__sub_8230DC78);
+REX_HOOK_RAW(sub_8230DC78) {
   sc5::select::SetUp(ctx.r3.u32, "a");
-  __imp__sub_82301500(ctx, base);
+  __imp__sub_8230DC78(ctx, base);
 }
 
 // the stage select's update, every frame it is up (r3 its object)
-REX_EXTERN(__imp__sub_8234C028);
-REX_HOOK_RAW(sub_8234C028) {
+REX_EXTERN(__imp__sub_82359E08);
+REX_HOOK_RAW(sub_82359E08) {
   sc5::select::g_stage_obj = ctx.r3.u32;
   sc5::select::g_stage_frame = sc5::frame::Count();
-  __imp__sub_8234C028(ctx, base);
+  __imp__sub_82359E08(ctx, base);
 }
 
 // the costume panel's label: (side, n, count), n from 1; (side, 0, 0) clears it
-REX_EXTERN(__imp__sub_822FFF98);
-REX_HOOK_RAW(sub_822FFF98) {
+REX_EXTERN(__imp__sub_8230C710);
+REX_HOOK_RAW(sub_8230C710) {
   const uint32_t side = ctx.r3.u32, n = ctx.r4.u32, count = ctx.r5.u32;
   if (side < 2 && n >= 1 && n <= count && count < 64) {
     sc5::select::g_costume[side] = int(n) - 1;
     sc5::select::g_costumes[side] = int(count);
   }
-  __imp__sub_822FFF98(ctx, base);
+  __imp__sub_8230C710(ctx, base);
 }
