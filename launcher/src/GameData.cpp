@@ -43,6 +43,43 @@ QString Game::otherRelease(const QByteArray& xex) const {
         .arg(what, title, edition, xexSha1);
 }
 
+QString TitleUpdate::name() const { return QCoreApplication::translate("Game", "title update %1").arg(number); }
+
+const TitleUpdate* Game::knownUpdate(const QString& xexpSha1) const {
+    if (xexpSha1.isEmpty()) return nullptr;
+    if (xexpSha1.compare(update.xexpSha1, Qt::CaseInsensitive) == 0) return &update;
+    for (const TitleUpdate& u : olderUpdates)
+        if (xexpSha1.compare(u.xexpSha1, Qt::CaseInsensitive) == 0) return &u;
+    return nullptr;
+}
+
+QString Game::updateNeeded() const {
+    const auto tr = [](const char* text) { return QCoreApplication::translate("Game", text); };
+    const QString file = update.packageNote.isEmpty()
+                             ? update.package
+                             : QStringLiteral("%1 (%2)").arg(update.package, update.packageNote);
+    return tr("SCV Online now needs %1, the last update of %2. Both players of a match must have the same update.")
+               .arg(update.name(), title) +
+           QStringLiteral("\n\n") +
+           tr("%1 is the file %2. Your Xbox 360 downloads it from Xbox Live when it starts the game online, and "
+              "usually keeps it in its folder Content\\0000000000000000\\%3\\000B0000.")
+               .arg(update.name().left(1).toUpper() + update.name().mid(1), file, titleId);
+}
+
+QString Game::otherUpdate(const QString& what, const QString& xexpSha1, const QString& toVersion) const {
+    const auto tr = [](const char* text) { return QCoreApplication::translate("Game", text); };
+    const TitleUpdate* known = knownUpdate(xexpSha1);
+    QString first;
+    if (known && known != &update)
+        first = tr("%1 %2.").arg(what, known->name());
+    else if (!toVersion.isEmpty() && toVersion != update.toVersion)
+        first = tr("%1 another title update of %2: it makes the game version %3, and %4 makes it version %5.")
+                    .arg(what, title, toVersion, update.name(), update.toVersion);
+    else
+        first = tr("%1 not %2: its files are not the ones %2 has (a changed or damaged copy).").arg(what, update.name());
+    return first + QStringLiteral("\n\n") + updateNeeded();
+}
+
 QList<GameMode> Game::onlineModes() const {
     QList<GameMode> out;
     for (const auto& m : modes)
@@ -101,14 +138,21 @@ bool GameData::load(QString* error) {
         g.xexVersion = o.value(QStringLiteral("xex_version")).toString();
         g.discName = o.value(QStringLiteral("disc_name")).toString();
         g.discSha1 = o.value(QStringLiteral("disc_sha1")).toString();
-        const QJsonObject tu = o.value(QStringLiteral("title_update")).toObject();
-        g.update.name = tu.value(QStringLiteral("name")).toString();
-        g.update.package = tu.value(QStringLiteral("package")).toString();
-        g.update.xexpSha1 = tu.value(QStringLiteral("xexp_sha1")).toString();
-        g.update.fromVersion = tu.value(QStringLiteral("from_version")).toString();
-        g.update.toVersion = tu.value(QStringLiteral("to_version")).toString();
-        const QJsonObject files = tu.value(QStringLiteral("files")).toObject();
-        for (auto it = files.begin(); it != files.end(); ++it) g.update.files.insert(it.key(), it.value().toString());
+        const auto titleUpdate = [](const QJsonObject& tu) {
+            TitleUpdate u;
+            u.number = tu.value(QStringLiteral("number")).toInt();
+            u.package = tu.value(QStringLiteral("package")).toString();
+            u.packageNote = tu.value(QStringLiteral("package_note")).toString();
+            u.xexpSha1 = tu.value(QStringLiteral("xexp_sha1")).toString();
+            u.fromVersion = tu.value(QStringLiteral("from_version")).toString();
+            u.toVersion = tu.value(QStringLiteral("to_version")).toString();
+            const QJsonObject files = tu.value(QStringLiteral("files")).toObject();
+            for (auto it = files.begin(); it != files.end(); ++it) u.files.insert(it.key(), it.value().toString());
+            return u;
+        };
+        g.update = titleUpdate(o.value(QStringLiteral("title_update")).toObject());
+        for (const auto& uv : o.value(QStringLiteral("older_title_updates")).toArray())
+            g.olderUpdates.append(titleUpdate(uv.toObject()));
         g.notes = o.value(QStringLiteral("notes")).toString();
         for (const auto& mv : o.value(QStringLiteral("modes")).toArray()) {
             const QJsonObject mo = mv.toObject();

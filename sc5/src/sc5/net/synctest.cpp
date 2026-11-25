@@ -135,7 +135,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
   const bool snapshot_same = want == got && std::memcmp(battle::Data(g_check), battle::Data(g_ring[slot]), want) == 0;
   // TEMPORARY: the snapshots compared write by write (each block the game wrote, matched by where it came from, so a
   // block more or less in one does not shift the rest), the differences by kind: the players' poses (three buffers of
-  // 6208 bytes at +0x3190, +0xB190, +0x13190), heap objects (effects such as the weapon's trail), the rest (the fight)
+  // 6208 bytes, battle.cpp's kPoseBuffers), heap objects (effects such as the weapon's trail), the rest (the fight)
   if (!snapshot_same) {
     static uint64_t fight_checks = 0, fight_logged = 0, structure_logged = 0;
     const auto* wa = battle::Blocks(g_check);

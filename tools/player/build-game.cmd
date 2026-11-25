@@ -3,7 +3,7 @@ rem Builds the native Soulcalibur V on this PC from the player's own disc and ti
 rem code: every PC translates its own copy). The launcher's Build game page runs it once the disc and the update are in
 rem place (docs\PROTOCOL.md 3.7); it can be run by hand too. Nothing has to be installed: everything used here comes
 rem with the package (sc5\player\README.md in the repository).
-rem   SC5_GAME_DIR   the extracted disc: default.xex with the title update's default.xexp beside it (default: disc\ here)
+rem   SC5_GAME_DIR   the extracted disc: default.xex with title update 3's default.xexp beside it (default: disc\ here)
 rem   SC5_GAME_EXE   where sc5.exe goes; sc5game.dll and the runtime's DLLs go beside it (default: sc5.exe here)
 rem   (SC5_UPDATE_DIR, the update's other files, is for the game to read: the build needs only default.xexp)
 rem Steps:
@@ -27,6 +27,7 @@ if not exist "%DISC%\default.xex" goto nogame
 if not exist "%DISC%\default.xexp" goto noupdate
 if not exist host\sc5.exe goto missing
 if not exist sdk\bin\rexglue.exe goto missing
+if not exist project\title-update.txt goto missing
 if not exist "%TOOLS%\clang.exe" goto missing
 if not exist "%TOOLS%\lld-link.exe" goto missing
 if not exist "%TOOLS%\ninja.exe" goto missing
@@ -46,6 +47,16 @@ rem has them: the code is the updated game's
 if not exist project\xex mkdir project\xex || exit /b 1
 copy /y "%DISC%\default.xex" project\xex\default.xex >nul || goto cannotread
 copy /y "%DISC%\default.xexp" project\xex\default.xexp >nul || goto cannotread
+rem the update must be the one this release is built on (project\title-update.txt: "<default.xexp's SHA-1> <its
+rem number>", from the launcher's sc5.json): the code of another one would not be the game the other player runs, and
+rem the game would not start on it. The launcher checks it first; this is for a run by hand, and for an old update left
+rem in place after SCV Online moved to a new one (title update 1 until 0.1.5, title update 3 since).
+set "WANT=" & set "TUNUM=" & set "GOT="
+for /f "usebackq tokens=1,2" %%A in ("project\title-update.txt") do set "WANT=%%A" & set "TUNUM=%%B"
+for /f "skip=1 delims=" %%H in ('certutil -hashfile project\xex\default.xexp SHA1 2^>nul') do if not defined GOT set "GOT=%%H"
+if not defined GOT goto cannothash
+set "GOT=%GOT: =%"
+if /i not "%GOT%"=="%WANT%" goto otherupdate
 pushd project || exit /b 1
 ..\sdk\bin\rexglue.exe --log-level warn codegen sc5_manifest.toml
 if errorlevel 1 goto codegenfailed
@@ -83,8 +94,19 @@ echo The game is built from the updated executable: put the update in place firs
 exit /b 1
 
 :missing
-echo Part of SCV Online is missing from this folder (host\sc5.exe, sdk\bin\rexglue.exe, or clang, lld-link or ninja
-echo in ..\..\toolchain\bin): an antivirus may have taken it. Allow it there, or unpack the release again.
+echo Part of SCV Online is missing from this folder (host\sc5.exe, sdk\bin\rexglue.exe, project\title-update.txt, or
+echo clang, lld-link or ninja in ..\..\toolchain\bin): an antivirus may have taken it. Allow it there, or unpack the
+echo release again.
+exit /b 1
+
+:cannothash
+echo The title update could not be checked (Windows' certutil did not answer).
+exit /b 1
+
+:otherupdate
+echo The title update in place is not title update %TUNUM% (its default.xexp has SHA-1 %GOT%).
+echo SCV Online is built on title update %TUNUM% only: both players of a match must have the same update.
+echo On Build game, choose title update %TUNUM% in step 2, then press CHECK AND BUILD.
 exit /b 1
 
 :cannotread

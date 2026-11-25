@@ -216,10 +216,15 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    **Local test** box starts two instances on this PC (UDP 7001/7002) with matching start lines, no server needed.
 5. **Leaderboard**: top 100 by Elo, or by Respect Points (on a server with King of the Hill), with each rank's badge.
 6. **Build game** (`BuildPage`, `X360.cpp`, PROTOCOL.md 3.7): (1) the disc image (`.iso`, XGD2/XGD3 or XISO),
-   (2) the title update package (`TU_174Q21T_...`), (3) optionally the player's own DLC packages, then *CHECK AND
-   BUILD*. The launcher reads the disc's file system and the Xbox Live packages itself (no Python): the disc's
-   `default.xex` must be the World release's (SHA-1 `dfe4d5e1...`, version 0.0.0.2), the update must be a `LIVE`
-   title update of title `4E4D083D` whose `default.xexp` (SHA-1 `47a09662...`) patches 0.0.0.2 into 0.0.1.2, a DLC
+   (2) title update 3 (`TU_174Q21T_0000008000000.00000000000O2`, the game's last update, docs/TARGET.md), (3)
+   optionally the player's own DLC packages, then *CHECK AND BUILD*. The launcher reads the disc's file system and
+   the Xbox Live packages itself (no Python): the disc's `default.xex` must be the World release's (SHA-1
+   `dfe4d5e1...`, version 0.0.0.2), the update must be a `LIVE` title update of title `4E4D083D` whose
+   `default.xexp` (SHA-1 `e8f8eb26...`) patches 0.0.0.2 into 0.0.3.2 (title update 1, `47a09662...` into 0.0.1.2,
+   which the game was built on until 0.1.5, is named and refused: a large window says it is title update 1, that SCV
+   Online now needs title update 3 and that file's name, and its *Choose title update 3 now* button opens the file
+   picker and builds once a file is chosen; while the update in place is not title update 3, a large notice over the
+   page says the same, and neither the compile step nor the game starts), a DLC
    package must be downloadable content (`00000002`) of the same title (the packages `tools/py/ps3dlc.py` makes from a
    player's PS3 DLC are taken the same way, GAME.md, the costume packs' with their converted data, up to 120 MB and
    60 files each, in STFS hash tables of one to three levels); anything else is named and refused (another
@@ -288,7 +293,10 @@ server's (whose certificate is pinned; the download host is not trusted), unpack
 `<name>.sc5-old` and deleted at the next start); then the new launcher starts with `--updated <old version>`, and
 when the release changed the game (`games\sc5\built.txt`, which `build-game.cmd` copies from `project\VERSION`,
 names another release) it builds the game again on Build game before anything starts it (`GameProcess::needsRebuild`,
-as MK9 Online's launcher). A source build only links to the release page.
+as MK9 Online's launcher; `GameProcess::start` refuses such a game until then). When the title update in place is not
+the one the new release is built on (an install of 0.1.5 or older, built on title update 1), it opens Build game,
+says in its banner that SCV Online now needs title update 3, and the compile step asks for that file instead of
+building from the old one (PROTOCOL.md 3.7). A source build only links to the release page.
 
 ### Without the game
 
@@ -321,7 +329,7 @@ every `SC5_` variable it was given. `SC5_FAKE_RESULT=desync` makes it report a d
 | `--snap-dir <folder>` | save pictures of the window as the lobby changes, of the Create lobby window and of the leaderboard in both orders; with `--page`, a picture of that page |
 | `--page ranked\|casual\|lobby\|single\|leaderboard\|build\|controls\|settings\|support` | start page |
 | `--local-test` | start the two-instance loopback test |
-| `--extract <image>` | open Build game and check and extract that image (the title update and DLC from the settings) |
+| `--extract <image>` | open Build game and check and extract that image (the title update and DLC from the settings, `games/sc5/update_package` and `games/sc5/dlc`), then compile; what it did goes to `sc5-launcher.log` (`build sc5: ...`) |
 | `--auto-update`, `--updated <version>` | install an offered update without asking (tests); started by an update |
 | `--upnp-probe` | find the router and its public address, open nothing |
 

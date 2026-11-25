@@ -506,8 +506,8 @@ players, 2026-11-17 (`SC5_TEST_P2_HUMAN=1`, first round, about 3,300 checks, the
 - n = 1 and n = 4: every battle event on the same frame as without rollback (the round's KO at 9935), and no
   difference in the fight: the players' state, the battle's, the random numbers. What differs is cosmetic, from heap
   objects rollback cannot put back:
-  - **Two leaf bones of each pose** (bytes +3923 to +4083 of 6208; the pose is in three buffers taken in turn, each
-    player's +0x3190, +0xB190, +0x13190, and the snapshot keeps the current one), moved by the forces on cloth and
+  - **Two leaf bones of each pose** (bytes +3923 to +4083 of 6208; the pose is in three buffers taken in turn,
+    0x8000 apart from about +0x3160 of each player's object, and the snapshot keeps the current one), moved by the forces on cloth and
     hair: sub_82193EB0 sums, for each player, a manager's list of forces (heap: the manager 336 bytes, sub_82193DF0;
     an animated wind and a force by the floor under the player, 400 bytes each, sub_821942C0; gusts, 576 bytes,
     sub_821949F8 at random intervals) into the player's +0x1CE30, which the pose's second stage (sub_822CA898) takes
@@ -817,11 +817,14 @@ the next match (CHOICE).
   first check (frame 120), often again at 210 and 300, some three times and then ended; rounds' calls were made alike
   at almost every round; one match failed in the middle of a round. Health was the same in both games every time, and
   the barrier's sync kept finding "1 blocks (2048 bytes)" apart. The game puts each player's pose buffers on round
-  addresses (the pose's three, 6,208 bytes, on a multiple of 0x100; the three the pose fills for the drawing, 0x800
-  bytes, on one of 0x80), so they lie at +0x3190 and +0x1B310 of player 1's object and at +0x3160 and +0x1B360 of
-  player 2's (the snapshot keeps the current one of each: 0x8294DDA0 / 0x82955DA0 / 0x8295DDA0 and 0x82965F20 /
-  0x82966720 / 0x82966F20 for player 1, 0x829AB8A0 / 0x829B38A0 / 0x829BB8A0 and 0x829C3AA0 / 0x829C42A0 /
-  0x829C4AA0 for player 2, `SC5_NET_DUMP_AT` of six frames running). The check left out player 1's offsets in both
+  addresses: the pose's three (6,208 bytes, 0x8000 apart) from the next multiple of 0x80 after +0x3160 of the
+  player's object, the three the pose fills for the drawing (0x800 bytes each) from the next after +0x1B310. Under
+  title update 1 (the objects at 0x82937070 and 0x82994BA0) that was +0x3190 and +0x1B310 of player 1's object and
+  +0x3160 and +0x1B360 of player 2's (`SC5_NET_DUMP_AT` of six frames running; the snapshot keeps the current one of
+  each). Under title update 3 it is +0x3170 and +0x1B370 of player 1's and +0x31C0 and +0x1B340 of player 2's:
+  0x8294DD80 / 0x82955D80 / 0x8295DD80 and 0x82965F80 / 0x82966780 / 0x82966F80 for player 1, 0x829AB900 /
+  0x829B3900 / 0x829BB900 and 0x829C3A80 / 0x829C4280 / 0x829C4A80 for player 2 (`SC5_DBG_SNAP_BLOCKS`), and
+  battle.cpp works them out by that rule. The 0.1.4 check left out player 1's offsets in both
   objects: the first 0x30 bytes of player 2's pose and the last 0x50 of its third buffer for the drawing were hashed
   as the fight. Two games on one PC have those bytes alike, which is why every sweep here passed; two PCs do not for a
   second or so after an intro, a winner's pose or a hitch (cloth and secondary bones, worked out by worker threads),
@@ -898,7 +901,7 @@ the next match (CHOICE).
   a fighter) 1.16 ms, of which their pose (sub_822C9B38) 1.09 ms. Most of the pose's main-thread time is handing its
   bones to worker threads, about 54 jobs a fighter (sub_822CBA00: a 16-slot queue behind a lock and two events); the
   cloth and hair (sub_822CA898) are 0.04 ms. Left out of every frame run again (frame.cpp), the fight stayed byte for
-  byte the same but for the poses and a second buffer the pose fills for the drawing (each player's +0x1B310, three of
+  byte the same but for the poses and a second buffer the pose fills for the drawing (from about each player's +0x1B310, three of
   0x800 bytes taken in turn; now counted as pose, not in the checks' hash), and the KO came on the same frame: a frame
   run again 0.64 ms, a 4-frame rollback 3.1 ms on average (7.4 before). The next tasks (sub_82123400, a fighter's,
   0.15 ms; sub_8213B858, 0.12 ms) change the fight when left out: they stay. That held for Siegfried against

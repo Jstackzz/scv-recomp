@@ -105,14 +105,29 @@ QString dlcName(const QString& package) {
 }  // namespace
 
 BuildPage::BuildPage(QWidget* parent) : Page(parent) {
-    auto* root = new QVBoxLayout(this);
+    // in a scroll area: with the title update notice over it, a small window scrolls rather than crushing the steps
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    outer->addWidget(scroll);
+    auto* content = new QWidget;
+    scroll->setWidget(content);
+    auto* root = new QVBoxLayout(content);
     root->setContentsMargins(28, 20, 28, 16);
     root->setSpacing(14);
     root->addWidget(ui::pageHeader(tr("Build game"),
-                                   tr("The game is built on your PC from your own Xbox 360 disc and its title update: "
+                                   tr("The game is built on your PC from your own Xbox 360 disc and title update 3: "
                                       "the launcher checks both, extracts the disc, puts the update beside it (and "
                                       "your own downloadable content, if you add it), then the game's code is "
                                       "compiled for this PC. Nothing from the game is downloaded.")));
+    updateAlert_ = ui::label(QString(), "Alert");
+    updateAlert_->setWordWrap(true);
+    updateAlert_->setTextFormat(Qt::PlainText);
+    updateAlert_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    updateAlert_->hide();
+    root->addWidget(updateAlert_);
     auto* columns = new QHBoxLayout;
     columns->setSpacing(16);
     root->addLayout(columns);
@@ -140,7 +155,15 @@ BuildPage::BuildPage(QWidget* parent) : Page(parent) {
     image_->setPlaceholderText(tr("path to your disc image (empty: the disc already extracted)"));
     browse_ = new QPushButton(tr("Browse..."));
     steps->addWidget(pathRow(image_, browse_));
-    steps->addWidget(ui::label(tr("2. Its title update (the Xbox Live package, TU_...)"), "Muted"));
+    if (const Game* g = GameData::instance().game(gameId_)) {
+        QString file = g->update.package;
+        if (!g->update.packageNote.isEmpty()) file += QStringLiteral(" (%1)").arg(g->update.packageNote);
+        // in full contrast, not muted as the other steps: which file to pick here changed (title update 1 until 0.1.5)
+        auto* step2 = ui::label(tr("2. Title update %1: the file %2").arg(g->update.number).arg(file));
+        step2->setWordWrap(true);
+        step2->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        steps->addWidget(step2);
+    }
     update_ = new QLineEdit;
     update_->setPlaceholderText(tr("path to the title update package (empty: already in place)"));
     browseUpdate_ = new QPushButton(tr("Browse..."));
@@ -186,14 +209,7 @@ BuildPage::BuildPage(QWidget* parent) : Page(parent) {
             cfg::set(QStringLiteral("games/%1/image").arg(gameId_), f);
         }
     });
-    connect(browseUpdate_, &QPushButton::clicked, this, [this] {
-        const QString f = QFileDialog::getOpenFileName(this, tr("Title update package"), update_->text(),
-                                                       tr("All files (*)"));
-        if (!f.isEmpty()) {
-            update_->setText(native(f));
-            cfg::set(QStringLiteral("games/%1/update_package").arg(gameId_), f);
-        }
-    });
+    connect(browseUpdate_, &QPushButton::clicked, this, [this] { chooseUpdate(false); });
     connect(addDlc_, &QPushButton::clicked, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(this, tr("Downloadable content packages"),
                                                                 dlc_.isEmpty() ? QString() : QFileInfo(dlc_.last()).absolutePath(),
@@ -267,8 +283,20 @@ void BuildPage::refreshInfo() {
                            : tr("Disc: not extracted yet (%1)").arg(native(disc.path())));
     const bool xexp = disc.exists(QStringLiteral("default.xexp"));
     const bool patch = QDir(cfg::gameUpdateDir(gameId_)).exists(QStringLiteral("patch.cpk"));
-    updateInfo_->setText(xexp && patch ? tr("Title update: %1 in place").arg(g->update.name)
-                                       : tr("Title update: not in place yet (%1)").arg(g->update.package));
+    // the update in place checked by its hashes: after an update of SCV Online that moved to another title update,
+    // the old one is still there until the player chooses the new one
+    const QString problem = GameProcess::updateProblem(gameId_);
+    updateInfo_->setText(!problem.isEmpty() ? tr("Title update: not %1 (choose it in step 2)").arg(g->update.name())
+                         : xexp && patch    ? tr("Title update: %1 in place").arg(g->update.name())
+                                            : tr("Title update: not in place yet (%1)").arg(g->update.package));
+    // short, so the steps stay in view: what is there, and which file to choose (the window CHECK AND BUILD or the
+    // compile step opens says the rest)
+    QString file = g->update.package;
+    if (!g->update.packageNote.isEmpty()) file += QStringLiteral(" (%1)").arg(g->update.packageNote);
+    updateAlert_->setText(problem.section(QStringLiteral("\n\n"), 0, 0) + QLatin1Char(' ') +
+                          tr("SCV Online now needs %1: in step 2, choose the file %2, then press CHECK AND BUILD.")
+                              .arg(g->update.name(), file));
+    updateAlert_->setVisible(!problem.isEmpty());
     const QStringList installed = QDir(cfg::gameDlcDir(gameId_)).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     dlcInfo_->setText(installed.isEmpty() ? tr("Downloadable content: none")
                                           : tr("Downloadable content: %n package(s)", nullptr, int(installed.size())));
@@ -373,74 +401,95 @@ void BuildPage::startBuild() {
             }
             c->lines << tr("default.xex: %1 %2, title ID %3, SHA-1 %4: the right one.")
                             .arg(game.title, game.xexVersion, game.titleId, xexSha1);
-            // --- the title update: a LIVE package of this title whose default.xexp patches that version into the next
+            // --- the title update: a LIVE package of this title whose default.xexp patches that version into the
+            // one the build is made from (title update 3; an older one is named and refused)
             const TitleUpdate& tu = game.update;
             if (!update.isEmpty()) {
+                const QString fileName = QFileInfo(update).fileName();
+                const QString chosen = tr("The file you chose, %1, is").arg(fileName);
+                c->wrongUpdate = true;  // until it is the right one: every refusal below asks for the right file
                 x360::Package pkg;
-                if (!pkg.open(update, &c->error)) return;
+                QString why;
+                if (!pkg.open(update, &why)) {
+                    c->error = tr("The file you chose, %1, is not a title update: %2").arg(fileName, why) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
+                    return;
+                }
                 if (pkg.magic() != QLatin1String("LIVE") || pkg.contentType() != x360::kContentTitleUpdate) {
-                    c->error = tr("%1 is not a title update: it is a %2 package of %3. Choose %4's %5 (%6).")
-                                   .arg(QFileInfo(update).fileName(), pkg.magic(), x360::contentTypeName(pkg.contentType()),
-                                        game.title, tu.name, tu.package);
+                    c->error = tr("%1 not a title update: it is a %2 package of %3.")
+                                   .arg(chosen, pkg.magic(), x360::contentTypeName(pkg.contentType())) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
                     return;
                 }
                 if (pkg.titleId() != game.titleIdValue()) {
-                    c->error = tr("%1 is a title update of another game (%2, title ID %3), not of %4.")
-                                   .arg(QFileInfo(update).fileName(), pkg.titleName(), hex8(pkg.titleId()), game.title);
+                    c->error = tr("%1 a title update of another game (%2, title ID %3), not of %4.")
+                                   .arg(chosen, pkg.titleName(), hex8(pkg.titleId()), game.title) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
                     return;
                 }
                 const x360::PackageFile* xexpFile = pkg.find(QStringLiteral("default.xexp"));
-                if (!xexpFile || !pkg.read(*xexpFile, &c->xexp, &c->error)) {
-                    if (c->error.isEmpty()) c->error = tr("The title update has no default.xexp.");
+                if (!xexpFile || !pkg.read(*xexpFile, &c->xexp, &why)) {
+                    c->error = tr("%1 a title update without the game's patch in it (no default.xexp%2).")
+                                   .arg(chosen, why.isEmpty() ? QString() : QStringLiteral(": ") + why) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
                     return;
                 }
                 x360::XexInfo info;
-                QString why;
                 if (!x360::readXex(c->xexp, &info, &why) || !info.hasDelta) {
-                    c->error = tr("The title update's default.xexp is not a patch of the game (%1).")
-                                   .arg(why.isEmpty() ? tr("no delta patch in it") : why);
+                    c->error = tr("%1 a title update whose default.xexp is not a patch of the game (%2).")
+                                   .arg(chosen, why.isEmpty() ? tr("no delta patch in it") : why) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
                     return;
                 }
                 const QString from = x360::versionText(info.deltaSource), to = x360::versionText(info.deltaTarget);
+                c->lines << tr("Title update: \"%1\" (%2), %3 package, title ID %4; default.xexp patches %5 into %6, "
+                               "SHA-1 %7.")
+                                .arg(pkg.displayName(), fileName, pkg.magic(), hex8(pkg.titleId()), from, to,
+                                     sha1Of(c->xexp));
                 if (!sameHash(sha1Of(c->xexp), tu.xexpSha1) || from != tu.fromVersion || to != tu.toVersion) {
-                    c->error = tr("%1 is another update of %2 (it patches version %3 into %4, SHA-1 %5). The build "
-                                  "takes %6 only (%7, %8 into %9): both players of a match must run the same update.")
-                                   .arg(QFileInfo(update).fileName(), game.title, from, to, sha1Of(c->xexp), tu.name,
-                                        tu.package, tu.fromVersion, tu.toVersion);
+                    c->error = game.otherUpdate(chosen, sha1Of(c->xexp), to);
                     return;
                 }
                 for (auto it = tu.files.cbegin(); it != tu.files.cend(); ++it) {
                     if (it.key() == QLatin1String("default.xexp")) continue;
                     const x360::PackageFile* f = pkg.find(it.key());
                     QByteArray data;
-                    if (!f || !pkg.read(*f, &data, &c->error)) {
-                        if (c->error.isEmpty()) c->error = tr("The title update has no %1.").arg(it.key());
-                        return;
-                    }
-                    if (!it.value().isEmpty() && !sameHash(sha1Of(data), it.value())) {
-                        c->error = tr("The title update's %1 is not the one %2 has (SHA-1 %3): a damaged package?")
-                                       .arg(it.key(), tu.name, sha1Of(data));
+                    if (!f || !pkg.read(*f, &data, &why) ||
+                        (!it.value().isEmpty() && !sameHash(sha1Of(data), it.value()))) {
+                        c->error = tr("%1 %2, but its file %3 is missing or changed: a damaged copy. Copy it from "
+                                      "your console again.").arg(chosen, tu.name(), it.key());
                         return;
                     }
                     if (it.key() == QLatin1String("patch.cpk")) c->patchCpk = data;
                 }
-                c->lines << tr("Title update: \"%1\", %2 package, title ID %3; default.xexp patches %4 into %5, SHA-1 %6: "
-                               "the right one.")
-                                .arg(pkg.displayName(), pkg.magic(), hex8(pkg.titleId()), from, to, tu.xexpSha1);
+                c->wrongUpdate = false;
+                c->lines << tr("Title update: %1, the right one.").arg(tu.name());
             } else {
                 const QByteArray xexp = readFile(QDir(dataDir).filePath(QStringLiteral("default.xexp")));
                 const QByteArray patch = readFile(QDir(updateDir).filePath(QStringLiteral("patch.cpk")));
                 if (xexp.isEmpty() || patch.isEmpty()) {
-                    c->error = tr("Choose the title update package (step 2): %1 (%2) is not in place yet.")
-                                   .arg(tu.name, tu.package);
+                    c->error = tr("Choose %1 in step 2: it is not in place yet.").arg(tu.name()) +
+                               QStringLiteral("\n\n") + game.updateNeeded();
+                    c->wrongUpdate = true;
                     return;
                 }
                 if (!sameHash(sha1Of(xexp), tu.xexpSha1)) {
-                    c->error = tr("The default.xexp beside the disc is not %1's: choose the title update package "
-                                  "(step 2) to put the right one there.").arg(tu.name);
+                    x360::XexInfo info;
+                    QString why;
+                    const QString to = x360::readXex(xexp, &info, &why) && info.hasDelta
+                                           ? x360::versionText(info.deltaTarget) : QString();
+                    c->error = game.otherUpdate(tr("The title update on this PC is"), sha1Of(xexp), to);
+                    c->wrongUpdate = true;
                     return;
                 }
-                c->lines << tr("Title update: %1 already in place.").arg(tu.name);
+                if (const QString want = tu.files.value(QStringLiteral("patch.cpk"));
+                    !want.isEmpty() && !sameHash(sha1Of(patch), want)) {
+                    c->error = tr("The title update on this PC is not complete: its file patch.cpk is not %1's.")
+                                   .arg(tu.name()) + QStringLiteral("\n\n") + game.updateNeeded();
+                    c->wrongUpdate = true;
+                    return;
+                }
+                c->lines << tr("Title update: %1 already in place.").arg(tu.name());
             }
             // --- the player's own DLC: packages of this title's downloadable content, nothing else
             for (const QString& path : dlc) {
@@ -476,10 +525,11 @@ void BuildPage::onChecked(const std::shared_ptr<x360::Disc>& disc, const std::sh
     }
     if (!c->ok) {
         log_->line(c->error);
-        applog::write(QStringLiteral("build %1: refused: %2").arg(gameId_, c->error));
+        applog::write(QStringLiteral("build %1: refused: %2").arg(gameId_, QString(c->error).replace(u'\n', u' ')));
         finishStep();
         refreshInfo();
-        QMessageBox::warning(this, tr("Cannot build the game"), c->error);
+        if (c->wrongUpdate) askForUpdate(c->error);
+        else QMessageBox::warning(this, tr("Cannot build the game"), c->error);
         return;
     }
     // the space it takes: what is not extracted yet, the DLC, and room for the game's code
@@ -563,8 +613,42 @@ void BuildPage::updateProgress() {
 
 void BuildPage::rebuild() { compileGame(); }
 
+void BuildPage::chooseUpdate(bool buildAfter) {
+    const QString f = QFileDialog::getOpenFileName(this, tr("Title update package"), update_->text(), tr("All files (*)"));
+    if (f.isEmpty()) return;
+    update_->setText(native(f));
+    cfg::set(QStringLiteral("games/%1/update_package").arg(gameId_), f);
+    if (buildAfter) startBuild();
+}
+
+void BuildPage::askForUpdate(const QString& text) {
+    const Game* g = GameData::instance().game(gameId_);
+    const QString name = g ? g->update.name() : tr("the title update");
+    // large, plain and high contrast: the one thing a player must do before playing again
+    QMessageBox box(QMessageBox::Warning, tr("SCV Online needs %1").arg(name), text, QMessageBox::NoButton, this);
+    box.setTextFormat(Qt::PlainText);
+    box.setStyleSheet(QStringLiteral("QLabel { font-size: 14pt; color: #FFFFFF; }"
+                                     "QPushButton { font-family: \"Bahnschrift\"; font-size: 13pt; font-weight: 700; "
+                                     "padding: 10px 22px; }"));
+    QPushButton* choose = box.addButton(tr("Choose %1 now").arg(name), QMessageBox::AcceptRole);
+    box.addButton(tr("Not now"), QMessageBox::RejectRole);
+    box.setDefaultButton(choose);
+    box.exec();
+    if (box.clickedButton() == choose) chooseUpdate(true);
+}
+
 void BuildPage::compileGame() {
     if (compiler_ || step_ != Step::Idle) return;
+    // never a build from another title update than the one this release takes (after an update of SCV Online that
+    // moved to another one, the old one is still in place until the player chooses the new one)
+    if (const QString problem = GameProcess::updateProblem(gameId_); !problem.isEmpty()) {
+        log_->line(problem);
+        log_->line(GameProcess::updateFix(gameId_));
+        applog::write(QStringLiteral("build %1: not compiled: %2").arg(gameId_, QString(problem).replace(u'\n', u' ')));
+        refreshInfo();
+        askForUpdate(problem);
+        return;
+    }
     const QString script = cfg::buildScript(gameId_);
     if (!QFileInfo::exists(script)) {
         // the game's side of the build (recompiling the patched executable for this PC) is not part of the launcher

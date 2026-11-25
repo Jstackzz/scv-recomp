@@ -1,6 +1,7 @@
 #include "GameProcess.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -14,6 +15,7 @@
 #include "Controls.h"
 #include "GameData.h"
 #include "WinUtil.h"
+#include "X360.h"
 
 namespace {
 
@@ -101,6 +103,43 @@ bool GameProcess::needsRebuild(const QString& gameId) {
     return !built.open(QIODevice::ReadOnly) || built.readAll().trimmed() != w;
 }
 
+QString GameProcess::updateProblem(const QString& gameId) {
+    const Game* g = GameData::instance().game(gameId);
+    if (!g || g->update.xexpSha1.isEmpty()) return {};
+    QFile xexpFile(QDir(cfg::gameDataDir(gameId)).filePath(QStringLiteral("default.xexp")));
+    if (!xexpFile.exists()) return {};
+    const QByteArray xexp = xexpFile.open(QIODevice::ReadOnly) && xexpFile.size() < (qint64(64) << 20) ? xexpFile.readAll()
+                                                                                                     : QByteArray();
+    const QString sha1 = QString::fromLatin1(QCryptographicHash::hash(xexp, QCryptographicHash::Sha1).toHex());
+    if (sha1.compare(g->update.xexpSha1, Qt::CaseInsensitive) != 0) {
+        x360::XexInfo info;
+        QString why;
+        const QString to = x360::readXex(xexp, &info, &why) && info.hasDelta ? x360::versionText(info.deltaTarget)
+                                                                             : QString();
+        return g->otherUpdate(tr("The title update on this PC is"), sha1, to);
+    }
+    // the update's other files, as Build game put them beside it
+    for (auto it = g->update.files.cbegin(); it != g->update.files.cend(); ++it) {
+        if (it.key() == QLatin1String("default.xexp")) continue;
+        QFile f(QDir(cfg::gameUpdateDir(gameId)).filePath(it.key()));
+        const bool same = f.open(QIODevice::ReadOnly) &&
+                          (it.value().isEmpty() ||
+                           QString::fromLatin1(QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha1).toHex())
+                                   .compare(it.value(), Qt::CaseInsensitive) == 0);
+        if (!same)
+            return tr("The title update on this PC is not complete: its file %1 is missing or is not %2's.")
+                       .arg(it.key(), g->update.name()) +
+                   QStringLiteral("\n\n") + g->updateNeeded();
+    }
+    return {};
+}
+
+QString GameProcess::updateFix(const QString& gameId) {
+    const Game* g = GameData::instance().game(gameId);
+    return tr("Open Build game, choose %1 in step 2, then press CHECK AND BUILD.")
+        .arg(g ? g->update.name() : tr("the title update"));
+}
+
 QString GameProcess::xexFile(const QString& gameId) {
     const QString xex = QDir(cfg::gameDataDir(gameId)).filePath(QStringLiteral("default.xex"));
     return QFileInfo::exists(xex) ? xex : QString();
@@ -122,6 +161,20 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
             *error = tr("The game's files are not there yet: open Build game and extract your disc and its title "
                         "update first (%1).").arg(QDir::toNativeSeparators(cfg::gameDataDir(gameId_)));
         return false;
+    }
+    // a game built from another title update or another release than this launcher's is never started: it would not
+    // be the game the other player of a match runs (after an update the launcher builds it again first)
+    if (fi.suffix().compare(QLatin1String("exe"), Qt::CaseInsensitive) == 0) {
+        if (const QString problem = updateProblem(gameId_); !problem.isEmpty()) {
+            if (error) *error = problem + QStringLiteral("\n\n") + updateFix(gameId_);
+            return false;
+        }
+        if (paths::isPackage() && needsRebuild(gameId_)) {
+            if (error)
+                *error = tr("This version of SCV Online changed the game, so it must be built again before it starts. "
+                            "Open Build game and press CHECK AND BUILD (a few minutes at most).");
+            return false;
+        }
     }
     // the newest sessions are kept (an online match's netplay log is about a megabyte)
     constexpr int kKeepSessions = 30;
