@@ -751,7 +751,7 @@ the next match (CHOICE).
 - **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
   that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
   is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that
-  frame's snapshot as the check hashes it (DSUMS; the layout by the blocks' sizes and static addresses), then their
+  frame's snapshot as the check hashes it (DSUMS, each page by its guest address since 0.1.5), then their
   bytes of the first 16 pages that differ (DBYTES), and each game's log names up to 48 words with both values (lines
   with `sc5 desync:`, which the launcher's report carries whole, PROTOCOL.md 1.13.1): the match frame, the battle's
   state, the rounds won, both players' health, the rounds fought so far with each one's end and health (a ring out:
@@ -786,6 +786,27 @@ the next match (CHOICE).
   7 matches started after a desync on 2026-11-20, each time until both players closed their games). `Open` now
   starts it empty. linktest.py `--park-after 25 --again`: frame 120 apart before, 4 blocks (1,816 bytes) taken and
   the match in step to its result after.
+- **Player 2's pose in the check** (0.1.5; battle.cpp `KindOf`). The first day of 0.1.4 (2026-11-24: two pairs of
+  players, 29 matches finished, 7 ended as desyncs, 170 reports) every match went back to its round's start at its
+  first check (frame 120), often again at 210 and 300, some three times and then ended; rounds' calls were made alike
+  at almost every round; one match failed in the middle of a round. Health was the same in both games every time, and
+  the barrier's sync kept finding "1 blocks (2048 bytes)" apart. The game puts each player's pose buffers on round
+  addresses (the pose's three, 6,208 bytes, on a multiple of 0x100; the three the pose fills for the drawing, 0x800
+  bytes, on one of 0x80), so they lie at +0x3190 and +0x1B310 of player 1's object and at +0x3160 and +0x1B360 of
+  player 2's (the snapshot keeps the current one of each: 0x8293A200 / 0x82942200 / 0x8294A200 and 0x82952380 /
+  0x82952B80 / 0x82953380 for player 1, 0x82997D00 / 0x8299FD00 / 0x829A7D00 and 0x829AFF00 / 0x829B0700 /
+  0x829B0F00 for player 2, `SC5_NET_DUMP_AT` of six frames running). The check left out player 1's offsets in both
+  objects: the first 0x30 bytes of player 2's pose and the last 0x50 of its third buffer for the drawing were hashed
+  as the fight. Two games on one PC have those bytes alike, which is why every sweep here passed; two PCs do not for a
+  second or so after an intro, a winner's pose or a hitch (cloth and secondary bones, worked out by worker threads),
+  and 0.1.4 plays the intros that 0.1.3 skipped on one frame in both games. Each player's buffers are now left out by
+  their own addresses. `SC5_TEST_POSE_NOISE=<side>` (tests) writes the frame's number into the end of player 2's three
+  buffers for the drawing in that player's game, every frame: on 0.1.4's check the first check failed (frame 120,
+  P2+0x1CB50 apart), now a whole match's checks are alike, and the 14 pairs of `tools/pairsweep.sh` with that noise on.
+  The reports of that day said only that the snapshots were "laid out apart": the detail's layout hash took the
+  blocks' addresses from 0x80000000 on, and a pose's block is whichever buffer is current in that game. The detail
+  now goes by guest address (DSUMS: address and hash of every page of the static memory in the check; a page only one
+  game has differs too), whatever each game's snapshot holds beside them.
 - **Rollback over a throw** (battle.cpp `Restore`): the game's own restore makes a throw's heap object again and
   sets its owner's +0x5BE90 to it; the raw copy of the players' objects put back after it held the address from when
   the frame was kept, freed since, and a call through it crashed the game (Aeon Calcos's back throw: "invalid call ...

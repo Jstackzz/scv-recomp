@@ -91,8 +91,9 @@ again by itself before you play.
 ## Not done yet
 
 - Few matches have been played between two PCs yet (the first ones found the throws' desync, fixed in 0.1.2; a first
-  to 30 on 0.1.3 found the stages' effects and the match after a park, fixed in 0.1.4); most tests ran on one PC with
-  lag added, one game's memory moved to stand in for a second PC.
+  to 30 on 0.1.3 found the stages' effects and the match after a park, fixed in 0.1.4; 0.1.4's first day found player
+  2's pose in the check, fixed in 0.1.5); most tests ran on one PC with lag added, one game's memory moved to stand in
+  for a second PC.
 - A spectator's view of a match ends when its players' games play a round again after going out of step.
 - Screens can hitch for 70-210 ms while they load. Only tested on a fast PC so far.
 - More in [docs/LAUNCHER.md](docs/LAUNCHER.md#known-limitations).
