@@ -1,6 +1,9 @@
 #pragma once
 // The player's own downloadable content, see dlc.cpp.
+#include <cstdint>
 #include <filesystem>
+
+#include <rex/ppc/context.h>
 
 namespace sc5::dlc {
 
@@ -12,5 +15,12 @@ void Install(const std::filesystem::path& dlc_dir, const std::filesystem::path& 
 // record at guest address `record` wears, at any break level, has its data installed (the game's DLC manager: the
 // package's entry has a file); false while the manager has not read the packages yet
 bool ModelsInstalled(uint32_t record);
+
+// the game asks for a file of an archive (its size, before it reads it): the patch text tells the game's language
+void OnFileAsked(int archive, int file);
+
+// before the game gives a string of text table `table`: the downloadable parts' names (table 55, which title update 1
+// never registers) from the installed packages' patch text, the first time it is asked for
+void BeforeText(PPCContext& ctx, uint8_t* base, uint32_t table);
 
 }  // namespace sc5::dlc

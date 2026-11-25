@@ -196,15 +196,39 @@ in the highest group it writes, the 13 replacing ones; converts each chosen entr
 (below), names it in the index (`NNN.dat`, the slot) and puts it in the package. Packages up to 120 MB need STFS
 hash tables of more than one level (the tool writes up to three, the file table over several blocks, the hashes as a
 console's); the launcher and `x360.py` read them (a test package of 150 MB and 71 files read back byte for byte). The
-CRILAYLA decompression is plain Python (about 10 MB/s): with the owner's packs, 590 MB in 68 s. **Not done: the
-names** of the parts the DLC adds (Creation shows them with an empty name row). They are in the replacing patch 8 to
-15 (a text file per language, as patch 0 to 7 and text 96 to 103 are: English first; the PS3 disc has no patch
-archive, so there only the DLC has them), which this game never reads: a trace of every file request from boot into
-Creation's equipment found text 424 and patch 0 at boot (frame 6, 12, before the DLC manager's file map is there),
-text 192 and 40 for the menus, text 96 at Creation (its names), the DLC's tables and icons (read from the package),
-and no patch 8 to 15 by id or by path. The text files are scrambled with the same scheme on both platforms (text 16
-and 17 identical, text 290 two bytes apart where the wording is). How the 360's own compatibility packs named the
-parts is not known yet.
+CRILAYLA decompression is plain Python (about 10 MB/s): with the owner's packs, 590 MB in 68 s.
+
+**The parts' names** (dlc.cpp, 2026-11-24). The game's texts are tables of strings by number: `sub_8233A5D0` (r3 the
+table, r4 its data) puts a table in a std::map at [0x82927940] and unscrambles the data in place (`sub_8233BB98`: the
+11 bytes before an FFFFFFFF end mark hold the key, a 16-bit word rotated 3 and xored with 0xEB7D; each byte xored with
+the key's low byte, the key then rotated right 1, times 5, plus 1; a sum of 15 x each byte from 0xA21F must give the
+key back; the same scheme on both platforms), `sub_82339600` (r3 the table, r4 the string, 1 on) gives a string, an
+empty one for a table it does not have. A table: u32 0, u32 count, count offsets, the strings (UTF-8). Title update 1
+registers 0 to 53 (the 54 sections of text 424, at boot) and 54 (patch 0 + the language: its own additions,
+`sub_8215C820`). Creation names a part the DLC adds from **table 55**, which only a later title update registers:
+patch 8 + the language (patch 8 to 15, 8 languages, English first). Title update 1's own patch 8 to 15 are empty
+(23 bytes, no strings); the owner's later 360 title update (`TU_174Q21T_0000008000000.00000000000O2`, xexp 0.0.0.2 ->
+0.0.3.2, patch.cpk 268 KB) has them with 421 strings, some still placeholders (`arm_201`), as the PS3 1.03 update's
+patch.cpk does; the PS3 catalog pack DLC13's copy names every part of the 8 costume groups, and ends with each pack's
+description ("Maid Costumes 1 contains ... (usable by female characters only)"). With `SC5_DBG_TEXT=1` the game asked
+for table 55 strings 114, 115, 119, 129 at Creation's head parts (Tennis Cap, Student's Cap, Dark Warrior Helm,
+Corinthian Helm). So the game now registers table 55 itself, the first time it asks for it without having it: the
+installed packages' copy of patch 8 + the language (the lowest group's, as the game keeps for any file the packages
+replace; the language is the patch file the game read for table 54, `sub_82355988`), copied as it is into guest
+memory and handed to `sub_8233A5D0`. Display only: nothing a match checks changes. Seen: "Corinthian Helm", "Bronze
+Armor" in Creation's lists and on the parts worn (2026-11-24). Without costume packages nothing asks for table 55.
+
+**Where the DLC is in the game** (the owner's 38 packs in 12 packages, 2026-11-24, `SC5_DBG_DLC=1` with
+`SC5_DBG_RELEASE_OUT`): every one of the packages' 348 release ids is in state 3 (downloadable) in a fresh save's
+table, granted by its package and released (answer 2); the other 4032 ids in state 3 are content none of the
+owner's packs has. Dampierre: the select screen (third row, a "!" on him) and Creation's styles. The 26 tracks
+(Soul Blade to Soulcalibur IV, Broken Destiny): the BGM list of VS Battle's stage select (Y and X there are the
+character's and the stage's own music), each with its game's logo. The costume parts: Creation, a new character,
+Equipment, each kind of equipment at the end of its grid (a "!" until seen); none is in Change All. Many packs are for
+one sex only, which the game decides (the packs' own descriptions, table 55's strings 392 to 420): Maid Costumes 1,
+Active Wear 1, Modern Costumes 1, Valkyrie Armor 1, Sexy Costumes 1, Tekken Costumes 2, Classic Costumes 1 female
+only; Dark Warrior Armor 1 male only; the SCV Character Equipment, Hairstyles, Bridal, School Uniforms, Sexy Costumes
+2 packs split by sex; Classic Headgears' Clown Mask only for the regular character Voldo.
 
 **PS3 data on the 360.** The PS3 and 360 discs have the same files by id (CREATION.CPK and creation.cpk: 1850), so each
 rule was read off the pairs and checked on all of them (creation, cdata, text, weapon): the PS3 file converted must be
