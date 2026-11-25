@@ -1,7 +1,8 @@
-"""Save a picture of a window (by title prefix): python tools/py/winshot.py <title prefix> <out.png> [--screen]
+"""Save a picture of a window (by title prefix): python tools/py/winshot.py <title prefix> <out.png> [--screen] [--pid <n>]
 
 PrintWindow with PW_RENDERFULLCONTENT (DWM renders the window's DirectX content even when Windows shows the
-swap chain directly); --screen grabs that part of the screen instead. For looking at the game during bring-up."""
+swap chain directly); --screen grabs that part of the screen instead; --pid takes only that process's window (one game of
+several). For looking at the game during bring-up."""
 import ctypes
 import ctypes.wintypes as wt
 import sys
@@ -11,6 +12,7 @@ from PIL import Image, ImageGrab
 user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
 user32.SetProcessDPIAware()
 found = []
+pid = int(sys.argv[sys.argv.index("--pid") + 1]) if "--pid" in sys.argv else None
 
 
 @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
@@ -19,7 +21,9 @@ def enum(hwnd, _):
     if n and user32.IsWindowVisible(hwnd):
         buf = ctypes.create_unicode_buffer(n + 1)
         user32.GetWindowTextW(hwnd, buf, n + 1)
-        if buf.value.startswith(sys.argv[1]):
+        owner = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if buf.value.startswith(sys.argv[1]) and (pid is None or owner.value == pid):
             found.append(hwnd)
     return True
 

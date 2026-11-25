@@ -6,6 +6,10 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -130,8 +134,40 @@ Pad ScriptAt(const std::vector<Step>& script, uint32_t user, uint64_t now) {
   return pad;
 }
 
+// SC5_INPUT_LIVE_Pn=<file>: a script read again whenever the file changes, its frames counted from when it is read
+// ("0:A,+6:-" presses A for 6 frames now): someone (a tool) driving the menus as they go
+std::array<std::string, 4> g_live_path;
+std::array<std::vector<Step>, 4> g_live;
+std::array<uint64_t, 4> g_live_checked{};
+std::array<std::filesystem::file_time_type, 4> g_live_time{};
+std::mutex g_live_lock;
+
+Pad Live(uint32_t user) {
+  std::lock_guard<std::mutex> lock(g_live_lock);
+  const uint64_t now = frame::Count();
+  if (now != g_live_checked[user]) {
+    g_live_checked[user] = now;
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(g_live_path[user], ec);
+    if (!ec && t != g_live_time[user]) {
+      g_live_time[user] = t;
+      std::ifstream in(g_live_path[user]);
+      std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+      std::vector<Step> steps;
+      if (!text.empty() && ParseScript(text.c_str(), steps)) {
+        for (Step& s : steps) s.frame += now;
+        g_live[user] = std::move(steps);
+        REXLOG_INFO("sc5: user {} live script at frame {}: {}", user, now, text);
+      }
+    }
+  }
+  return ScriptAt(g_live[user], user, now);
+}
+
 // a scripted user's pad now: its fight script in a fight, its select script at a select screen, else its menu script
 Pad Scripted(uint32_t user) {
+  if (!g_live_path[user].empty()) return Live(user);
   const int64_t fight = game::FightFrame();
   if (fight >= 0 && !g_fight_script[user].empty()) return ScriptAt(g_fight_script[user], user, uint64_t(fight));
   if (!g_select_script[user].empty() && select::Object())
@@ -177,6 +213,16 @@ void Init() {
       g_active = true;
       REXLOG_INFO("sc5: user {} plays a script of {} steps{}", u, script.size(),
                   fight == 2 ? " at select screens" : fight ? " in fights" : "");
+    }
+  }
+  for (int u = 0; u < 4; u++) {
+    char name[24];
+    std::snprintf(name, sizeof name, "SC5_INPUT_LIVE_P%d", u + 1);
+    if (const char* p = std::getenv(name); p && *p) {
+      g_live_path[u] = p;
+      g_scripted[u] = true;
+      g_active = true;
+      REXLOG_INFO("sc5: user {} plays what {} says as it changes", u, p);
     }
   }
   if (const char* p = std::getenv("SC5_PADS"); p && *p) {

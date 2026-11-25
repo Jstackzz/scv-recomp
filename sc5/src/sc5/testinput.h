@@ -7,7 +7,9 @@
 //                     clock has started; the menus before it keep the SC5_INPUT_Pn script
 //   SC5_SELECT_INPUT_P1..P4  the same timed in the select screen's frames (select::Age, 0 = the screen set up), used
 //                     while a select screen is up: a player's picks however long the way there took
-//   SC5_PADS=<n>      users 0..n-1 connected even without a controller
+//   SC5_INPUT_LIVE_P1..P4=<file>  a script read again whenever the file changes, its frames counted from then
+//                     ("0:A,+6:-"): a tool driving the menus as it looks at them (tools\py\winshot.py)
+//   SC5_PADS=<n>     users 0..n-1 connected even without a controller
 //   SC5_NO_PHYSICAL=1 the PC's own controllers are not read at all
 #include <cstdint>
 
