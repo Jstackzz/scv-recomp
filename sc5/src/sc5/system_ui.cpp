@@ -22,8 +22,9 @@ struct Known {
 constexpr Known kKnown[] = {
     // the save task finding no save data at the first START (title 14, text 18): "No save data found for
     // SOULCALIBUR V. You must create save data in order to save your progress." [Create Save Data] [Select Storage
-    // Device]; the saves live in the user folder, there is no storage device to pick
-    {0x824911C8, 0, "no save data: Create Save Data"},
+    // Device]; the saves live in the user folder, there is no storage device to pick (title update 3: the same call,
+    // li r6,18 / li r5,14 / li r4,2 / bl sub_8249FA48, at 0x824A0550 in sub_824A0390)
+    {0x824A0554, 0, "no save data: Create Save Data"},
 };
 
 std::optional<uint32_t> Answer(const rex::kernel::xam::MessageBoxRequest& r) {

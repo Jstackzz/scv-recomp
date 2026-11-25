@@ -93,7 +93,8 @@ main menu (`ready`) in 41 s.
   offline (flag 2) XUIDs; the SDK returned the same XUID for both, so a local profile looked like it had changed and
   the countdown restarted for ever. The SDK now returns no online XUID for a profile not signed in to LIVE.
 - **The first START asks to create save data** (a system message box, "No save data found ... [Create Save Data]
-  [Select Storage Device]", raised by `sub_8249FA48(task, 2, 14, 18)` from 0x824911C4 in the save task): answered
+  [Select Storage Device]", raised by `sub_8249FA48(task, 2, 14, 18)` from 0x824A0550 in the save task
+  `sub_824A0390`; title update 1 had it at 0x824911C4): answered
   with Create Save Data (system_ui.cpp, by the call site, so in every language). The save lives in
   `<user>\B13EBABEBABEBABE\4E4D083D\00000001\SC5SaveData`.
 - **Quit with a bad disc screen at the main menu**: the game looks up XamMediaVerification* by ordinal and checks
@@ -331,8 +332,9 @@ whose slot 1 is its update. The ids and creators:
 The Title sequence (vtable 0x820CF930, update sub_8233C920) keeps its state at +0xD4: 4 waits for START, 5 waits
 for the user manager to settle, 6-7 open the save, then AstralHome. It returns to Attract after 1800 frames idle.
 
-Menu paths with a fresh save (the autopilot will follow them): Title, START; AstralHome opens on Story with a
-first-visit window (A closes it); Offline Play is two up; in it VS Battle is one down from Quick Battle; then the
+Menu paths with a fresh save (the autopilot follows them): Title, START; AstralHome shows title update 3's notice of
+its changes, then the first-visit window (A closes each), then opens on Story; Offline Play is two up; in it VS Battle
+is one down from Quick Battle; then the
 character select (each player picks with A, then a costume), the stage select (A on Random) and the fight.
 
 ## The battle (what rollback will build on)
@@ -1164,7 +1166,17 @@ and `error` go to status.txt. `SC5_LOG` names the game's log, `SC5_CACHE_DIR` th
 without `SC5_NET`, `SC5_TRAINING=1` and `SC5_VERSUS=1` make a plain game for practice or the offline versus (below).
 
 **The menus** (an empty save, as every online session has): Title, START (the logos and the opening movie skip on
-START too); AstralHome opens with a first-visit window that A closes (15 s in), the cursor on Story: the hold point.
+START too); AstralHome shows two windows that A closes, title update 3's notice of its changes ("The following changes
+and additions have been made with the title update: Added Cepheus Store ... Character balance ...") and then the
+first-visit window, and opens its menu with the cursor on Story: the hold point. Each window takes A only some seconds
+after it comes (the notice once its text has scrolled and "Close" shows: an A 2 s after it came was not taken, one at
+6 s was), so the autopilot goes by the main menu's own state, not by time: AstralHome's update (sub_82333088, slot 1
+of its vtable 0x820CF990) switches on the object's +0x438. A fresh save goes 2, 3, 4 as it comes in, 21 (the notice
+made), 22 (the notice up, until A), 23 (the notice's flag set in the save; without the first visit's flag, 18), 18
+(the first-visit window made), 19 (up, until A), 20, then 6, the menu itself; a save that has seen both goes from 4
+to 6, and a save from title update 1 days shows the notice alone. The autopilot presses A on 22 and 19 once they
+have been up 2 s and every 2 s after until they go, and takes the menu once 6 has lasted a second (with a fresh save
+about 10 s after AstralHome came, 2026-11-25). Title update 1 had no 21 to 23 (its 21 to 29 are 24 to 32 now).
 AstralHome's creator (sub_82335A68) makes a 1088-byte object; its menu (at +8, vtable 0x820BF47C) keeps the depth at
 +0x88 (0 the top level, 1 Offline Play's submenu), the top level's cursor at +0x94 (Offline Play 0, Story 2) and the
 submenu's at +0x98 (Quick Battle 2, VS Battle 3); UP lowers them. Back from VS Battle the game opens the submenu again,
@@ -1310,9 +1322,9 @@ player leaving for the main menu in the game is the hold point again (`ready`).
 screen and `SC5_VERSUS=1` to VS Battle's with "Player VS Player", and the autopilot stops there: the players pick.
 VS Battle's Player setting (Player VS CPU, CPU VS Player, CPU VS CPU, Player VS Player: RIGHT three times) offers
 Player VS Player only with a second user signed in, which users.cpp then signs in (a local profile, user 1); the
-select screen asks the second player to press START on their controller. With the player's own save (its
-`SC5SaveData\savedata.bin` there at start) the autopilot sets off at once; with a fresh one it waits for the main
-menu's first-visit window and closes it first. Should it get lost on the way, it stops and the game is the player's.
+select screen asks the second player to press START on their controller. Whatever the save, the autopilot closes the
+main menu's windows as they come (above, "The menus": none with the player's own save once it has seen them) and sets
+off once its menu is up. Should it get lost on the way, it stops and the game is the player's.
 
 **Online Practice** (`mode=sparring`, sparring.cpp): VS Battle has no endless clock (Round Time 30, 45 or 60), so at
 the top of every frame of the match in sync, reruns included, the round's clock (0x82949D3C: +0 the round's time, +0xC

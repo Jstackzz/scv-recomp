@@ -3,7 +3,8 @@
 // Where the game is comes from its sequence (game::SequenceId: Title, AstralHome the main menu, VSStandard VS
 // Battle), the battle's state machine (game::BattleState) and the select screen (sc5/select.h). The menus, with the
 // fresh save every online session has (docs\GAME.md, "Sequences"):
-//   Title: START. AstralHome: a first-visit window that A closes, the cursor on Story: the hold point.
+//   Title: START. AstralHome: title update 3's notice of its changes, then the first-visit window, each closed with A
+//   (by the main menu's own state, HomeStep), then its menu with the cursor on Story: the hold point.
 //   From there, by the main menu's cursors (ReadHome): Offline Play, A; VS Battle, A: VSStandard, its settings menu on
 //   Start Match: A. The select screen: player 1's side picks a character (A) and a costume (A), then player 2's side,
 //   both with the first pad ("Player VS CPU": the battle setup makes player 2 the second pad's, sc5/versus.cpp). Then
@@ -28,9 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <filesystem>
 #include <mutex>
-#include <system_error>
 #include <vector>
 
 #include <fmt/format.h>
@@ -122,7 +121,8 @@ uint64_t g_stage_up_at = 0;   // the frame the stage select came up (0: not yet)
 uint64_t g_stage_gone_at = 0; // the frame it went (0: up, or not yet)
 int g_stage_taken = -1;       // the place the stage select's pick took (the VS settings went into the battle setup)
 uint64_t g_stage_a_at = 0;    // the frame the chooser's own A went through on a stage (their moves wait 3 s after)
-bool g_fresh_save = true;     // the save has never seen the main menu (its first-visit window comes)
+int g_home_step = -1;         // the main menu's own state (HomeStep) and the frame it last changed
+uint64_t g_home_step_at = 0;
 bool g_practice_script = false;  // tests: SC5_TEST_PRACTICE_SCRIPT plays
 // The result screen's menu (Rematch, Character Select, Return to Astral Home) as the autopilot has pressed it: Next
 // taken on the Results screen and where its cursor is (0 Rematch); and, when the match's loser chooses the next match
@@ -188,6 +188,37 @@ void Tap(uint16_t buttons) {
 }
 
 bool InHome(int seq) { return seq == game::kSeqAstralHome || seq == 18; }
+
+// The main menu's own state machine: AstralHome's object keeps its state at +0x438, which its update (sub_82333088,
+// slot 1 of vtable 0x820CF990) switches on. With a fresh save (title update 3; seen 2026-11-25): 2, 3, 4 as it comes
+// in, then 21 (the update's notice is made), 22 (the notice "The following changes and additions have been made with
+// the title update ..." is up, until A), 23 (its flag in the save set; the first visit's flag unset: 18), 18 (the
+// first-visit window is made), 19 (it is up, until A), 20, then 6: the menu itself, the top level's cursor on Story.
+// A save that has seen both goes from 4 to 6; one that has seen only the first visit (a save from before title update
+// 3) shows the notice and then goes to 6. Title update 1 had neither 21 to 23 (its 21 to 29 are 24 to 32 now). The
+// state is -1 off the main menu.
+constexpr uint32_t kHomeStateAt = 0x438;
+constexpr int kHomeMenu = 6, kHomeFirstVisit = 19, kHomeUpdateNotice = 22;
+int HomeStep(int seq) {
+  const uint32_t home = game::HomeObject();
+  return home && InHome(seq) ? int(game::ReadU32(home + kHomeStateAt)) : -1;
+}
+bool HomeWindow(int step) { return step == kHomeFirstVisit || step == kHomeUpdateNotice; }
+
+// A window of the main menu's that waits for A: A once it has been up 2 s, and again every 2 s until it takes one
+// (true: one is up). The windows take A only some seconds after they come (the notice once its text has scrolled and
+// "Close" shows: the A at 2 s was not taken, the one at 6 s was, 2026-11-25).
+bool CloseHomeWindow() {
+  if (!HomeWindow(g_home_step)) return false;
+  const uint64_t up = Now() - g_home_step_at;
+  if (g_steps.empty() && up >= 120 && up % 120 == 0) {
+    REXLOG_INFO("sc5 autopilot: A on the main menu's {} at frame {}",
+                g_home_step == kHomeUpdateNotice ? "notice of the title update's changes" : "first-visit window", Now());
+    Push(input::kA, 10, 30);
+  }
+  RunSteps();
+  return true;
+}
 
 // Tests: SC5_TEST_HOLD_SCRIPT=<press>,... is pressed from the hold point on, once: a press is a button name (UP DOWN
 // LEFT RIGHT A B X Y START BACK LB RB, or WAIT), *n for n times, /f for the frames after it (default 30).
@@ -927,19 +958,10 @@ void InitPlain(const Plan& plan) {
   g_plan = plan;
   g_plan.hand_over = true;
   NewMatch();
-  // The first-visit window comes 15 s into the main menu with a save that has never been there: with the player's
-  // own save, which has, the way to the plan's screen starts at once
-  const char* user = std::getenv("SC5_USER_DIR");
-  bool fresh = true;
-  if (user && *user) {
-    std::error_code ec;
-    for (const auto& profile : std::filesystem::directory_iterator(user, ec))
-      if (std::filesystem::exists(profile.path() / "4E4D083D" / "00000001" / "SC5SaveData" / "savedata.bin", ec))
-        fresh = false;
-  }
-  g_fresh_save = fresh;
-  REXLOG_INFO("sc5 autopilot: a plain game for {}: to its select screen ({} save)",
-              plan.mode == Mode::Practice ? "practice" : "the offline versus", fresh ? "a fresh" : "the player's");
+  // the main menu's windows (a fresh save's, or the player's own save's first sight of title update 3's notice) are
+  // closed by the main menu's own state (HomeStep), whatever save it is
+  REXLOG_INFO("sc5 autopilot: a plain game for {}: to its select screen",
+              plan.mode == Mode::Practice ? "practice" : "the offline versus");
   Enter(Phase::Boot);
   input::SetOverride(&Override);
   frame::SetMenuHook(&OnFrame);
@@ -1167,6 +1189,12 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
     if (battle == game::kBattleFighting) g_fought = true;
     g_last_battle = battle;
   }
+  if (const int step = HomeStep(seq); step != g_home_step) {
+    if (step >= 0 || g_home_step >= 0)
+      REXLOG_INFO("sc5 autopilot: the main menu's state {} -> {} at frame {}", g_home_step, step, Now());
+    g_home_step = step;
+    g_home_step_at = Now();
+  }
   g_pad = input::Pad{};
   g_local = false;
   g_allow = 0;
@@ -1192,21 +1220,23 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
         Enter(Phase::Boot);
         return;
       }
-      // a plain game with the player's own save: no first-visit window, on to the plan's screen once the menu takes
-      // presses
-      if (!g_launcher && !g_fresh_save) {
-        if (In() > 120) Enter(Phase::ToVersus);
-        return;
-      }
-      // the first-visit window: A once it is up and takes it (15 s in), then the hold point (a plain game: on)
-      if (In() == 900) Push(input::kA, 10, 120);
-      if (!RunSteps() && In() > 900) {
+      // the main menu's windows, each closed with A as it comes (a fresh save: title update 3's notice, then the
+      // first-visit window); then its menu, once it has been up a second: the hold point (a plain game: on)
+      if (CloseHomeWindow()) return;
+      if (RunSteps()) return;
+      if (g_home_step == kHomeMenu && Now() - g_home_step_at >= 60 && ReadHome().ok) {
         if (!g_launcher) {
           Enter(Phase::ToVersus);
           return;
         }
         Enter(Phase::Hold);
         REXLOG_INFO("sc5 autopilot: at the hold point (the main menu) at frame {}; {}", Now(), HomeState());
+        return;
+      }
+      if (In() > 3600) {
+        g_lost_why = fmt::format("the main menu did not come to its menu (its state {})", g_home_step);
+        REXLOG_WARN("sc5 autopilot: {} at frame {}", g_lost_why, Now());
+        Enter(Phase::Lost);
       }
       return;
     case Phase::Hold: {
@@ -1259,8 +1289,9 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
         Enter(Phase::Lost);
         return;
       }
+      if (CloseHomeWindow()) return;  // (none should come here; the menu would not take the presses below)
       const Home h = ReadHome();
-      if (!InHome(seq) || !h.ok) return;
+      if (!InHome(seq) || !h.ok || g_home_step != kHomeMenu) return;
       const int target = g_plan.mode == Mode::Practice ? kOfflineTraining : kOfflineVersus;
       if (h.depth == 0) {
         if (h.top != kHomeOffline) Push(h.top > kHomeOffline ? input::kDpadUp : input::kDpadDown, 6, 30);
