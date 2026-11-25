@@ -220,13 +220,18 @@ def formed(A, B, paired):
     displacement differs without being half of an address (a structure's offset that moved)."""
     votes = defaultdict(Counter)
     moved = []
+    big = defaultdict(Counter)      # an offset of more than 16 bits (addis rD,rA,hi + a low half): old -> new
     for ba, bb, same, runs in paired:
         hia = {}
         hib = {}
+        ofa = {}
+        ofb = {}
         for xa, xb, size in runs:
             if not same:
                 hia = {}
                 hib = {}
+                ofa = {}
+                ofb = {}
             for k in range(size):
                 aa = ba + 4 * (xa + k)
                 ab = bb + 4 * (xb + k)
@@ -238,9 +243,13 @@ def formed(A, B, paired):
                     if (wa >> 16) & 31 == 0:
                         hia[r] = (wa & 0xFFFF) << 16
                         hib[r] = (wb & 0xFFFF) << 16
+                        ofa.pop(r, None)
+                        ofb.pop(r, None)
                     else:
                         hia.pop(r, None)
                         hib.pop(r, None)
+                        ofa[r] = sext(wa & 0xFFFF) << 16
+                        ofb[r] = sext(wb & 0xFFFF) << 16
                 elif op in DFORM:
                     wb = B.w(ab)
                     ra = (wa >> 16) & 31
@@ -255,25 +264,37 @@ def formed(A, B, paired):
                             vb = (hib[src] + sext(wb & 0xFFFF)) & 0xFFFFFFFF
                         if BASE <= va < A.end and BASE <= vb < B.end:
                             votes[va][vb] += 1
+                    elif src in ofa and op not in (24, 25):
+                        big[ofa[src] + sext(wa & 0xFFFF)][ofb[src] + sext(wb & 0xFFFF)] += 1
                     elif (wa & 0xFFFF) != (wb & 0xFFFF):
                         moved.append((aa, ab))
                     if op == 14 or (32 <= op <= 35) or (40 <= op <= 43) or op == 58:
                         hia.pop(rd, None)
                         hib.pop(rd, None)
+                        ofa.pop(rd, None)
+                        ofb.pop(rd, None)
                     elif op in (24, 25):
                         hia.pop(ra, None)
                         hib.pop(ra, None)
+                        ofa.pop(ra, None)
+                        ofb.pop(ra, None)
                 elif op == 31 or op == 7 or op == 8 or op == 12 or op == 13:
                     for r in ((wa >> 21) & 31, (wa >> 16) & 31):
                         hia.pop(r, None)
                         hib.pop(r, None)
+                        ofa.pop(r, None)
+                        ofb.pop(r, None)
                 elif op == 18 or op == 16 or op == 19:
                     if wa & 1 or op == 19:
                         for r in list(hia):
                             if r <= 12:
                                 hia.pop(r, None)
                                 hib.pop(r, None)
-    return votes, moved
+                        for r in list(ofa):
+                            if r <= 12:
+                                ofa.pop(r, None)
+                                ofb.pop(r, None)
+    return votes, moved, big
 
 
 def build(path_a, path_b, out):
@@ -342,7 +363,7 @@ def build(path_a, path_b, out):
                 # a call in a block that did not change says more than one difflib placed in a changed block
                 votes[aa + rel(wa)][ab + rel(B.w(ab))] += 4 if aa in sure else 1
         # and the tables of code pointers whose address the code forms
-        data, _ = formed(A, B, paired)
+        data, _, _ = formed(A, B, paired)
         for da, c in data.items():
             db = c.most_common(1)[0][0]
             if da & 3 or db & 3 or not in_data(da):
@@ -399,7 +420,7 @@ def build(path_a, path_b, out):
         new, n = c.most_common(1)[0]
         if target in text and text[target] != new:
             wrong.append((target, text[target], dict(c)))
-    data_votes, moved = formed(A, B, paired)
+    data_votes, moved, big = formed(A, B, paired)
     data = {}
     odd = {}
     for va, c in data_votes.items():
@@ -420,6 +441,7 @@ def build(path_a, path_b, out):
     print('paired instructions whose displacement differs %d' % len(moved))
     m = {
         'text': text, 'fn': fn, 'data': data, 'odd': odd, 'moved': moved, 'wrong': wrong,
+        'big': {k: dict(v) for k, v in big.items()},
         'blocks_a': A.blocks, 'blocks_b': B.blocks, 'secs_a': A.secs, 'secs_b': B.secs,
         'path_a': os.path.abspath(path_a), 'path_b': os.path.abspath(path_b),
     }
@@ -490,6 +512,14 @@ class Map:
             note = 'data, formed by code'
             if addr in self.m['odd']:
                 note += ' (answers: %s)' % ', '.join('%08X x%d' % kv for kv in self.m['odd'][addr].items())
+            # The code may form a base and add the rest in the instruction that uses it, and split the two
+            # differently in the new image: such a pair is not an object's old and new place. It shows as a pair
+            # that moved unlike the pairs on both sides of it.
+            i = bisect.bisect_left(self.keys, addr)
+            d = self.data[addr] - addr
+            near = [self.data[k] - k for k in self.keys[max(0, i - 3):i] + self.keys[i + 1:i + 4]]
+            if near and d not in near:
+                note += ', UNSURE: its neighbours moved %s' % ', '.join('%+X' % x for x in sorted(set(near)))
             return self.data[addr], note
         i = bisect.bisect_right(self.keys, addr)
         below = self.keys[i - 1] if i > 0 else None
@@ -575,6 +605,14 @@ def show_diff(m, addr, everything):
 
 
 def show_offset(m, offset, fn):
+    if not -0x8000 <= offset < 0x8000:
+        # more than 16 bits: what the paired code forms with addis + a low half (anywhere; no function filter)
+        got = m.m['big'].get(offset)
+        if not got:
+            print('%X: no paired code forms it (addis + low half)' % offset)
+        for new, n in sorted((got or {}).items(), key=lambda kv: -kv[1]):
+            print('%6X -> %-8X x%d' % (offset, new, n))
+        return
     A, B = m.A, m.B
     blk = m.block(fn) if fn is not None else None
     became = Counter()

@@ -332,7 +332,7 @@ void Sc5DlcFighterModels(PPCRegister& r4, PPCRegister& r11) {
   if (r11.u32 && r4.u32 && sc5::dlc::ModelsInstalled(r4.u32)) r11.u64 = 0;
 }
 
-// The game's file requests (sub_82363FC8 the size of a file, asked before it is read; sub_82355DF8 the read: r3 the
+// The game's file requests (sub_82363FC8 the size of a file, asked before it is read; sub_82364500 the read: r3 the
 // archive, r4 the file): the patch text's language for the parts' names. SC5_DBG_FILES=1 logs each with its callers.
 namespace {
 uint32_t Rd32(uint32_t a) { return sc5::game::ReadU32(a); }
@@ -354,10 +354,10 @@ REX_HOOK_RAW(sub_82363FC8) {
   if (FileDebug()) LogFile("size", ctx);
   __imp__sub_82363FC8(ctx, base);
 }
-REX_EXTERN(__imp__sub_82355DF8);
-REX_HOOK_RAW(sub_82355DF8) {
+REX_EXTERN(__imp__sub_82364500);
+REX_HOOK_RAW(sub_82364500) {
   if (FileDebug()) LogFile("read", ctx);
-  __imp__sub_82355DF8(ctx, base);
+  __imp__sub_82364500(ctx, base);
 }
 
 // A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on): the downloadable parts' names registered

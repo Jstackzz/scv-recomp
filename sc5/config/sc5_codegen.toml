@@ -150,7 +150,9 @@ registers = ["r1", "r3", "r4", "r5"]
 # A fight's setup of a created character (sub_82148400): r11 its "wears downloadable models" flag, just loaded from the
 # creation manager's entry (r4), with which the game swaps the character for a plain template of its style; cleared
 # when every downloadable model it wears has its data on this PC (src/sc5/dlc.cpp), so costume pack parts show in fights.
-[[midasm_hook]]
-name = "Sc5DlcFighterModels"
-address = 0x82147C94          # lis r25,0x8292, after lwz r11,0x34D8(r4) and before cmplwi cr6,r11,0
-registers = ["r4", "r11"]
+# TU3-TODO: title update 3 took that swap out of this function (the old 0x82147C94 has no partner): the hook is off
+# until the place it moved to, if any, is known.
+#[[midasm_hook]]
+#name = "Sc5DlcFighterModels"
+#address = 0x82147C94
+#registers = ["r4", "r11"]

@@ -178,7 +178,7 @@ REX_HOOK_RAW(sub_824AAC38) {
 // taken it. Left out in a frame run again, the request was never taken and the game waited for good (Elysium against
 // Edge Master with 40 ms each way, fight frame 160 in a frame run again: sub_82361C70's task through sub_82363FC8 and
 // sub_824ADF60, the main thread asleep in sub_824D8008 from then on, 2026-11-18).
-constexpr uint32_t kDrawRequestWait = 0x8249E12C;  // where sub_824AD5B0's call of phase 0x400 returns
+constexpr uint32_t kDrawRequestWait = 0x824AD5F8;  // where sub_824AD5B0's call of phase 0x400 returns
 REX_HOOK_RAW(sub_824AD398) {
   if (sc5::frame::Replaying() && !ReplayDraws() && uint32_t(ctx.lr) != kDrawRequestWait) return;
   sc5::rng::EnterVisual(ctx, base);
