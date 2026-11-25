@@ -276,7 +276,11 @@ both games load levels 0 and 1, and a character with downloadable parts is still
 downloadable parts are the same (the fingerprint; it counts parts sets the tables list and the packages grant, so a
 package without its data passes it, which the file rule covers). Title update 3 also asks each package for
 `DLCnn:\dat.cpk` (the PS3 catalog packs' archive; not found in ours, which the game shrugs off: the files the index
-names load as before).
+names load as before). Two linked games (tools\linktest.py, 2026-11-25): with the costume data on both, player 1's
+character in DLC13's Tennis Cap and Bronze Armor against player 2's made under title update 1 fought to the result
+in sync, the parts on both screens; with no packages on player 2's PC, player 1's A on that character was held back
+(the fingerprints differ) and Siegfried against player 2's created character fought in sync; a test pick that skips
+that gate had player 2's check refuse the record (`parts set 00030644 is not on this PC`), ending the match.
 
 The game keeps a release state for each of 7426 unlockable things (characters, stages, music, creation parts,
 titles) in a table of 4 bits each at `[[0x8274EF10]] + 0x22C248` (just past the 2.2 MB save image in the save object),
