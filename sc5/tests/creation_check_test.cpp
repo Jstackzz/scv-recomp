@@ -138,6 +138,8 @@ int main(int argc, char** argv) {
       {"original base type", [](Record& r) { r[dna::kType] = 32; r[dna::kBaseType] = 2; }, "base type"},
       {"customized fighter", [](Record& r) { r[dna::kType] = 18; r[dna::kBaseType] = 9; }, "customized fighter"},
       {"attack rate", [](Record& r) { r[dna::kAttackRate] = 201; }, "attack rate"},
+      {"attack rate past title update 3's top", [](Record& r) { r[dna::kAttackRate] = 112; }, "attack rate"},
+      {"attack rate low", [](Record& r) { r[dna::kAttackRate] = 79; }, "attack rate"},
       {"pitch", [](Record& r) { r[dna::kPitch] = 51; }, "pitch"},
       {"formant", [](Record& r) { r[dna::kFormant] = uint8_t(-51); }, "formant"},
       {"flanger", [](Record& r) { r[dna::kFlanger] = 3; }, "flanger"},
@@ -397,6 +399,24 @@ int main(int argc, char** argv) {
         const std::string why = CheckRecord(r.data(), r.size(), real);
         Expect(n == 20 ? why.empty() : why.find("more than 20 models") != std::string::npos,
                std::format("{} models in break level 0: \"{}\"", n, why));
+        // break level 2, which title update 3 shows in place of 0 when the models of 0 cannot be loaded
+        Record r2 = female;
+        for (size_t i = 0; i < 34; i++) {
+          const uint32_t at = dna::kBreakLevels + 2 * dna::kBreakLevelSize + uint32_t(i) * 8;
+          Put32(r2, at, i < n ? files[i] : 0xFF0000FF);
+          r2[at + 4] = i < n ? uint8_t(i % 32) : 0xFF;
+        }
+        Seal(r2);
+        const std::string why2 = CheckRecord(r2.data(), r2.size(), real);
+        Expect(n == 20 ? why2.empty() : why2.find("more than 20 models in break level 2") != std::string::npos,
+               std::format("{} models in break level 2: \"{}\"", n, why2));
+      }
+      // the top attack rate title update 3 keeps passes
+      {
+        Record r = female;
+        r[dna::kAttackRate] = dna::kMaxAttackRate;
+        Seal(r);
+        Expect(CheckRecord(r.data(), r.size(), real).empty(), "attack rate 111: " + CheckRecord(r.data(), r.size(), real));
       }
       // the same model's segments count once
       Record r = female;

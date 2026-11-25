@@ -87,11 +87,13 @@ bool PlaceRemote(int side, const Record& r);
 // both remote slots empty again (a new match), or one side's (its player took the pick back)
 void ClearRemote(int only = -1);
 
-// The creation manager (the select screen's [object + 1256]; vtable 0x820BF BDC) keeps its own copy of each slot, 50
-// entries of 13,544 bytes from +4: the record, then what it works out from it (a count of break-level parts at +13476
-// that its lists take as "used", the type at +13480, the DLC flag at +13528). It copies the save's slots as a VS
-// Battle's menus come, so a record placed during the select screen needs its entry filled too: the game's own
-// sub_82221978 does it from the record (main thread, from a frame's top). False without a manager.
+// The creation manager (the select screen's [object + 1256]; vtable 0x820BFC54) keeps its own copy of each slot, 50
+// entries of 13,544 bytes from +4 (the same in title updates 1 and 3): the record, then what it works out from it (the
+// models of the break level it shows at +13340 with their count at +13476, which its lists take as "used", the type at
+// +13480, at +13528 which break levels it shows: title update 1 kept the record's DLC flag there, title update 3 a 1
+// when it shows levels 2 and 3, sub_82221C00). It copies the save's slots as a VS Battle's menus come, so a record
+// placed during the select screen needs its entry filled too: the game's own sub_82221978 does it from the record
+// (main thread, from a frame's top). False without a manager.
 bool FillEntry(PPCContext& ctx, uint8_t* base, uint32_t manager, uint32_t n);
 // a remote slot's entry that its save slot no longer backs (an earlier match's), and a refused own one, listed no
 // more: each frame of the select screen, before any pick

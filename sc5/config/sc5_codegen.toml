@@ -147,12 +147,7 @@ name = "Sc5DbgSnapWrite"
 address = 0x8211CB84          # the stream's write after its frame: r3 stream, r4 source, r5 size
 registers = ["r1", "r3", "r4", "r5"]
 
-# A fight's setup of a created character (sub_82148400): r11 its "wears downloadable models" flag, just loaded from the
-# creation manager's entry (r4), with which the game swaps the character for a plain template of its style; cleared
-# when every downloadable model it wears has its data on this PC (src/sc5/dlc.cpp), so costume pack parts show in fights.
-# TU3-TODO: title update 3 took that swap out of this function (the old 0x82147C94 has no partner): the hook is off
-# until the place it moved to, if any, is known.
-#[[midasm_hook]]
-#name = "Sc5DlcFighterModels"
-#address = 0x82147C94
-#registers = ["r4", "r11"]
+# (Title update 1 swapped a created character wearing downloadable parts for a plain template of its style in every
+# fight, and the midasm hook Sc5DlcFighterModels kept it as created when this PC had the parts. Title update 3 took that
+# swap out: it loads the parts and shows the record's plain body only when they cannot be loaded. docs/GAME.md,
+# "Downloadable parts in a fight"; src/sc5/dlc.cpp.)

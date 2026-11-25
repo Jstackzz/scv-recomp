@@ -34,6 +34,7 @@
 #include <rex/system/xmemory.h>
 
 #include "sc5/creation_check.h"
+#include "sc5/dlc.h"
 #include "sc5/game.h"
 #include "sc5/select.h"
 
@@ -110,9 +111,11 @@ constexpr Sticker kStickers[] = {
 constexpr uint32_t kContextAt = 1264, kContextTables = 12, kContextBuilder = 28;
 constexpr uint32_t kBuilderTables = 14788, kBuilderWeaponCount = 14860, kBuilderWeapons = 14864;
 constexpr uint32_t kTableCount = 6, kTableSize = 12;
-// a parts set (CCreationPartsSetInfo_st): its id, its release, its members (count, then 14 of 9 models: the
-// default, 8 variations; each a ModelData and its slot, 8 bytes, none when the first byte is negative)
-constexpr uint32_t kSetSize = 2496, kSetRelease = 16, kSetMemberCount = 20, kSetMembers = 24, kMemberSize = 72;
+// a parts set (CCreationPartsSetInfo_st, 2,660 bytes in title update 3, which added 164 after the members: its loader
+// sub_8221E848 steps 2,660 where title update 1's sub_8221E190 stepped 2,496): its id, its release, its members
+// (count, then 14 of 9 models: the default, 8 variations; each a ModelData and its slot, 8 bytes, none when the first
+// byte is negative)
+constexpr uint32_t kSetSize = 2660, kSetRelease = 16, kSetMemberCount = 20, kSetMembers = 24, kMemberSize = 72;
 constexpr uint32_t kMaxMembers = 14, kModelsPerMember = 9;
 // a weapon (CWeaponInfo_st): its style, variation, release
 constexpr uint32_t kWeaponSize = 160, kWeaponRelease = 12;
@@ -341,7 +344,16 @@ std::string Check(const Record& r) {
     return r.size() == kRecordSize ? "" : "not a record";
   }
   if (!g_known_read) return "this PC has not read its own tables yet";
-  return CheckRecord(r.data(), r.size(), g_known);
+  if (std::string why = CheckRecord(r.data(), r.size(), g_known); !why.empty()) return why;
+  // every downloadable model's file on this PC: title update 3 shows a character whose models it cannot load in its
+  // plain body (break levels 2 and 3, dlc.cpp), and both games of a match must show the same
+  for (uint32_t level = 0; level < dna::kBreakLevelCount; level++)
+    for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
+      const uint32_t model = Be32(&r[dna::kBreakLevels + level * dna::kBreakLevelSize + p * 8]);
+      if (!(model & 0x80000000u) && !dlc::ModelFileInstalled(model))
+        return fmt::format("model {:08X} is downloadable and its file is not on this PC", model);
+    }
+  return {};
 }
 
 bool KnownRead() { return g_known_read && g_dropped; }
@@ -511,9 +523,10 @@ void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager) {
 namespace {
 
 // The card the VS screen shows for a created character from the other PC. The VS screen (from its copy of the slot's
-// picture, 0x82909C60 for player 2's) and Creation's list draw a character's card from the picture in its slot: a file
-// from +13,576 (16 bytes: its kind, a byte the kind uses, its size, width and height, a checksum of its data checked
-// when the kind has 0x80; then its data), which sub_8218B998 loads when its size is not 0 and sub_8218BA70 uploads.
+// picture, 0x8291D7E8 for player 2's in title update 3, 16,388 bytes after player 1's; sub_8218D570) and Creation's
+// list draw a character's card from the picture in its slot: a file from +13,576 (16 bytes: its kind, a byte the kind
+// uses, its size, width and height, a checksum of its data checked when the kind has 0x80; then its data), which
+// sub_8218B998 loads when its size is not 0 and sub_8218BA70 uploads.
 // Creation keeps the character it shot there as kind 0x80 (172x256, a compressed "PTC+MSHM" file of up to 16,240
 // bytes), which does not come with the record, so the card was black. In its place a picture of our own: SCV Online's
 // navy and gold, a figure with a question mark, made once.

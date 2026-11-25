@@ -260,8 +260,10 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
   if (type != kOriginal && !KnownVoice(r[kVoice]))
     return std::format("a customized fighter with voice {}, which the game does not know", r[kVoice]);
 
-  // what the game's own repair pass keeps to (sub_82222B28): it would change a record outside these
-  if (r[kAttackRate] < 80 || r[kAttackRate] > 200) return std::format("attack rate {}", r[kAttackRate]);
+  // what the game's own repair pass keeps to (sub_82222B28): it would change a record outside these. Title update 3
+  // lowered the attack rate's top from 200 to 111 (title update 1's pass, sub_82221D88, kept 80 to 200).
+  if (r[kAttackRate] < kMinAttackRate || r[kAttackRate] > kMaxAttackRate)
+    return std::format("attack rate {}", r[kAttackRate]);
   if (int8_t(r[kPitch]) < -50 || int8_t(r[kPitch]) > 50) return std::format("voice pitch {}", int8_t(r[kPitch]));
   if (int8_t(r[kFormant]) < -50 || int8_t(r[kFormant]) > 50)
     return std::format("voice formant {}", int8_t(r[kFormant]));
@@ -299,17 +301,20 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
       if (!KnownModel(models->second, model)) return std::format("model {:08X} is not on this PC", model);
     }
   }
-  // the fight loads break level 0's models into a list of 20 (sub_82245CD0 from sub_82147F48 and Creation's
-  // sub_821D0E28, a model once however many segments it wears): a 21st would write over the list's count
-  {
+  // the fight and Creation list the models of break level 0 (2 when the game shows the record's plain body: title
+  // update 3's fallback, creation_check.h) in a list of 20 (sub_82221548 from sub_82221828, which the fight's
+  // sub_821485E0 and Creation's sub_821D1728 call; a model once however many segments it wears): a 21st would write
+  // over the list's count
+  for (const uint32_t level : {0u, 2u}) {
     uint32_t files[kMaxModelFiles];
     uint32_t n = 0;
     for (uint32_t k = 0; k < kPartsPerLevel; k++) {
-      const uint32_t at = kBreakLevels + k * 8;
+      const uint32_t at = kBreakLevels + level * kBreakLevelSize + k * 8;
       if (r[at] & 0x80) continue;
       const uint32_t file = U32(r, at) & kModelFile;
       if (std::find(files, files + n, file) != files + n) continue;
-      if (n == kMaxModelFiles) return std::format("it wears more than {} models", kMaxModelFiles);
+      if (n == kMaxModelFiles)
+        return std::format("it wears more than {} models{}", kMaxModelFiles, level ? " in break level 2" : "");
       files[n++] = file;
     }
   }

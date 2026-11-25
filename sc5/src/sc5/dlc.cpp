@@ -8,6 +8,11 @@
 // A package's files go there as hard links to the ones in <dlc> (a costume pack's data is a hundred megabytes, and every
 // online game starts from fresh saves of its own), copies only where the two folders are on different drives.
 // Nothing here unlocks paid content any other way.
+//
+// The names of the parts the costume packs add (text table 55) need nothing from here under title update 3: Creation's
+// loader (sub_8224A5F8) registers the table itself from patch 8 + the language, a file the installed packages replace
+// (the lowest group's copy, which names every part; the update's own copy still has 145 placeholders such as arm_201).
+// Title update 1 never registered it, and this file used to.
 
 #include "sc5/dlc.h"
 
@@ -34,7 +39,6 @@
 #include "sc5/frame.h"
 #include "sc5/game.h"
 
-REX_EXTERN(sub_82348660);  // registers a text table (r3 its number, r4 its data, unscrambled in place)
 REX_EXTERN(sub_82348780);  // a text table's data (r3 its number): 0 when the game does not have it
 
 namespace sc5::dlc {
@@ -45,14 +49,13 @@ namespace {
 constexpr uint32_t kTitleId = 0x4E4D083D;
 constexpr uint32_t kMarketplaceContent = 0x00000002;
 
-// the game's DLC manager (docs\GAME.md, "Unlocks and downloadable content"): its state at +8 (7 to 11 once the
-// packages are read), at +0x28 its 30 package objects of 344 bytes (+2 the entries' count, +0x1C the entries, 48
-// bytes each, +0xD their flags: 0x80 the entry's file is there), their count at +0x2C
+// the game's DLC manager's table (docs\GAME.md, "Unlocks and downloadable content"; title update 3's, seen with
+// SC5_DBG_DLC=1: the manager 0x82782F94 keeps it at +8): its state at +8 (7 to 11 once the packages are read), at +0x28
+// its 30 package objects of 344 bytes (+2 the entries' count, +0x1C the entries, 48 bytes each, +0xD their flags: 0x80
+// the entry's file is there), their count at +0x2C
 constexpr uint32_t kDlcManager = 0x82782F30;
 constexpr uint32_t kPackageSize = 344, kEntrySize = 48;
 constexpr uint8_t kEntryHasFile = 0x80;
-// a created character's record: 4 break levels from +1128, 288 bytes each, 34 parts of 8 bytes (ModelData first)
-constexpr uint32_t kBreakLevels = 1128, kBreakLevelSize = 288, kBreakLevelCount = 4, kPartsPerLevel = 34;
 
 uint8_t ReadU8(uint32_t a) { return uint8_t(game::ReadU32(a & ~3u) >> (24 - 8 * (a & 3))); }
 uint16_t ReadU16(uint32_t a) { return uint16_t(ReadU8(a) << 8 | ReadU8(a + 1)); }
@@ -106,73 +109,6 @@ bool Place(const fs::path& from, const fs::path& to, bool* copied) {
   return true;
 }
 
-// --- the names of the parts the DLC adds (text table 55) ---
-// The game's texts are tables of strings by number (sub_82348660 registers one: r3 its number, r4 its data, which it
-// unscrambles in place; sub_82347670 gives string r4 of table r3, an empty one for a table it does not have). Title
-// update 1 registers 0 to 53 (the sections of text 424) and 54 (patch 0 to 7 by language, sub_8215CCC8); the parts the
-// costume packs add are named in table 55, which only a later title update registers: patch 8 to 15 by language,
-// which the packages replace (the highest costume group's carries them: docs\GAME.md). So, the first time the game
-// asks for table 55 without having it, the packages' copy of patch 8 + the language is registered as 55.
-constexpr int kArchivePatch = 11, kArchiveDlc = 14;
-constexpr uint32_t kDlcNamesTable = 55;
-constexpr int kNamesFirstFile = 8;
-std::mutex g_names_lock;
-std::map<int, fs::path> g_names_files;  // patch file (8..15) -> the installed package's file that replaces it
-int g_language = 0;                     // the patch file the game took for table 54 (0 to 7)
-std::vector<uint8_t> g_names_data;      // the file as it is (scrambled), read once
-uint32_t g_names_guest = 0;             // its copy in guest memory (the game unscrambles it in place)
-bool g_names_failed = false;
-
-uint16_t Be16(const std::vector<uint8_t>& d, size_t at) { return uint16_t(d[at] << 8 | d[at + 1]); }
-uint32_t Be32At(const std::vector<uint8_t>& d, size_t at) {
-  return uint32_t(d[at]) << 24 | uint32_t(d[at + 1]) << 16 | uint32_t(d[at + 2]) << 8 | d[at + 3];
-}
-
-// a package's group, as the game's DLC manager takes it: the first "DLCnn" in its display name; -1 none
-int GroupOf(const std::string& display) {
-  for (size_t i = 0; i + 5 <= display.size(); i++)
-    if (display.compare(i, 3, "DLC") == 0 && std::isdigit(uint8_t(display[i + 3])) &&
-        std::isdigit(uint8_t(display[i + 4])))
-      return (display[i + 3] - '0') * 10 + (display[i + 4] - '0');
-  return -1;
-}
-
-// the files of the patch archive (8 to 15) that an installed package's index replaces: file -> the package's file
-std::map<int, std::string> PatchFilesOf(const fs::path& package, int group) {
-  std::map<int, std::string> out;
-  char index_name[32];
-  std::snprintf(index_name, sizeof index_name, "index_%02d_X360.dat", group);
-  std::ifstream in(package / index_name, std::ios::binary);
-  const std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  // u32 version, u32 ids, u32 strings size, the strings, u16 slots, u16 entries; each entry (sub_82397F28): u16 group,
-  // u16 slot, u8, u16 n1 + n1 u16, u16 archive, u16 file, u16 n2 + n2 u16, u32 its file's name, u8, u64 offer, u32
-  // license bits
-  if (d.size() < 12) return out;
-  const uint32_t strings = Be32At(d, 8);
-  size_t p = 12 + size_t(strings);
-  if (p + 4 > d.size()) return out;
-  const uint16_t entries = Be16(d, p + 2);
-  p += 4;
-  for (uint16_t e = 0; e < entries; e++) {
-    if (p + 7 > d.size()) return out;
-    p += 5;
-    p += 2 + 2 * size_t(Be16(d, p));
-    if (p + 6 > d.size()) return out;
-    const int archive = Be16(d, p), file = Be16(d, p + 2);
-    p += 4;
-    p += 2 + 2 * size_t(Be16(d, p));
-    if (p + 17 > d.size()) return out;
-    const uint32_t name = Be32At(d, p);
-    p += 17;
-    if (archive != kArchivePatch || file < kNamesFirstFile || file >= kNamesFirstFile + 8 || !name || name >= strings)
-      continue;
-    std::string s;
-    for (size_t i = 12 + name; i < 12 + size_t(strings) && d[i]; i++) s += char(d[i]);
-    if (!s.empty()) out.emplace(file, s);
-  }
-  return out;
-}
-
 }  // namespace
 
 void Install(const fs::path& dlc_dir, const fs::path& saves) {
@@ -180,7 +116,6 @@ void Install(const fs::path& dlc_dir, const fs::path& saves) {
   const fs::path content = saves / "0000000000000000" / "4E4D083D" / "00000002";
   const fs::path headers = saves / "0000000000000000" / "4E4D083D" / "Headers" / "00000002";
   std::vector<std::string> mine;
-  std::map<std::pair<int, int>, fs::path> names_by_group;  // (group, patch file) -> the file in the saves
   if (!dlc_dir.empty() && fs::is_directory(dlc_dir, ec)) {
     for (const auto& entry : fs::directory_iterator(dlc_dir, ec)) {
       if (!entry.is_directory()) continue;
@@ -229,11 +164,6 @@ void Install(const fs::path& dlc_dir, const fs::path& saves) {
       }
       REXLOG_INFO("sc5 dlc: {} ({}), {} files", display, name, files);
       mine.push_back(name);
-      // the parts' names it carries (the game keeps the lowest group's copy of a file the packages replace)
-      if (const int group = GroupOf(display); group >= 0) {
-        for (const auto& [file, at] : PatchFilesOf(entry.path(), group))
-          names_by_group[{group, file}] = content / name / at;
-      }
     }
   }
   // what is not among the player's packages (any more) goes
@@ -245,95 +175,51 @@ void Install(const fs::path& dlc_dir, const fs::path& saves) {
       fs::remove(headers / (name + ".header"), ec);
       REXLOG_INFO("sc5 dlc: {} is not among the player's packages: taken out", name);
     }
-  std::lock_guard<std::mutex> lock(g_names_lock);
-  g_names_files.clear();
-  for (const auto& [key, path] : names_by_group) g_names_files.emplace(key.second, path);  // the lowest group first
-  if (!g_names_files.empty())
-    REXLOG_INFO("sc5 dlc: the names of the downloadable parts (patch {} to {}) from {}", g_names_files.begin()->first,
-                g_names_files.rbegin()->first, g_names_files.begin()->second.parent_path().filename().string());
 }
 
-void OnFileAsked(int archive, int file) {
-  // the game's patch text for table 54 (patch 0 to 7, one per language) tells the language
-  if (archive == kArchivePatch && file >= 0 && file < kNamesFirstFile) g_language = file;
-}
+uint8_t ReadByte(uint32_t a) { return ReadU8(a); }
 
-void BeforeText(PPCContext& ctx, uint8_t* base, uint32_t table) {
-  if (table != kDlcNamesTable) return;
-  std::lock_guard<std::mutex> lock(g_names_lock);
-  if (g_names_failed || g_names_files.empty()) return;
-  {
-    PPCContext c = ctx;
-    c.r3.u64 = table;
-    sub_82348780(c, base);
-    if (c.r3.u32) return;  // the game has it
-  }
-  if (g_names_data.empty()) {
-    const auto it = g_names_files.find(kNamesFirstFile + g_language);
-    if (it == g_names_files.end()) {
-      REXLOG_WARN("sc5 dlc: the packages carry no names of their parts for language {}", g_language);
-      g_names_failed = true;
-      return;
-    }
-    std::ifstream in(it->second, std::ios::binary);
-    g_names_data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    g_names_guest = g_names_data.size() >= 16 && g_names_data.size() < (4u << 20)
-                        ? REX_KERNEL_STATE()->memory()->SystemHeapAlloc(uint32_t(g_names_data.size()) + 16, 0x20)
-                        : 0;
-    if (!g_names_guest) {
-      REXLOG_WARN("sc5 dlc: the names of the downloadable parts ({}) could not be read", it->second.string());
-      g_names_failed = true;
-      return;
-    }
-  }
-  // the file as it is (the game unscrambles it in place), registered as the table
-  uint8_t* at = REX_KERNEL_STATE()->memory()->TranslateVirtual<uint8_t*>(g_names_guest);
-  std::memcpy(at, g_names_data.data(), g_names_data.size());
-  std::memset(at + g_names_data.size(), 0, 16);
-  PPCContext c = ctx;
-  c.r3.u64 = table;
-  c.r4.u64 = g_names_guest;
-  c.lr = 0x82189A40;  // as from main's loop
-  sub_82348660(c, base);
-  const uint32_t strings = game::ReadU32(g_names_guest + 4);
-  REXLOG_INFO("sc5 dlc: the names of the downloadable parts: table {}, {} strings (patch {})", table, strings,
-              kNamesFirstFile + g_language);
-}
-
-bool ModelsInstalled(uint32_t record) {
+bool ModelFileInstalled(uint32_t model) {
+  if (model >> 24 != 0x7F) return true;
   const uint32_t state = game::ReadU32(kDlcManager + 8);
   const uint32_t packages = game::ReadU32(kDlcManager + 0x28), count = game::ReadU32(kDlcManager + 0x2C);
   if (state < 7 || state > 11 || !packages || count > 30) return false;
-  for (uint32_t level = 0; level < kBreakLevelCount; level++)
-    for (uint32_t p = 0; p < kPartsPerLevel; p++) {
-      const uint32_t model = game::ReadU32(record + kBreakLevels + level * kBreakLevelSize + p * 8);
-      if (model >> 24 != 0x7F) continue;
-      const uint32_t group = (model >> 16) & 0xFF, slot = (model >> 8) & 0xFF;
-      if (group >= count) return false;
-      const uint32_t package = packages + group * kPackageSize;
-      const uint32_t entries = game::ReadU32(package + 0x1C);
-      if (!entries || slot >= ReadU16(package + 2) || !(ReadU8(entries + slot * kEntrySize + 0xD) & kEntryHasFile))
-        return false;
-    }
-  return true;
+  const uint32_t group = (model >> 16) & 0xFF, slot = (model >> 8) & 0xFF;
+  if (group >= count) return false;
+  const uint32_t package = packages + group * kPackageSize;
+  const uint32_t entries = game::ReadU32(package + 0x1C);
+  return entries && slot < ReadU16(package + 2) && (ReadU8(entries + slot * kEntrySize + 0xD) & kEntryHasFile);
 }
 
 }  // namespace sc5::dlc
 
-// [[midasm_hook]] Sc5DlcFighterModels (config\sc5_codegen.toml), in sub_82148400, which sets up a fighter for a fight
-// from a creation manager entry (r4; the record first): r11 is the entry's "wears downloadable models" flag (+0x34D8,
-// the record's byte 15, which Creation sets for any 0x7F model), and with it set the game swaps the character for a
-// template of its style in plain clothes (sub_8229EF18 mode 1), its own way out when such a model cannot be loaded. It
-// did so for every such character, the costume packs' data installed or not; so when every downloadable model the
-// character wears has its data on this PC the flag is taken as clear and the character fights as created. Both games
-// of a match decide alike: a created character with downloadable parts is picked only when the two games' downloadable
-// parts are the same (creation.cpp's fingerprint).
-void Sc5DlcFighterModels(PPCRegister& r4, PPCRegister& r11) {
-  if (r11.u32 && r4.u32 && sc5::dlc::ModelsInstalled(r4.u32)) r11.u64 = 0;
+// Title update 3's fallback for a created character whose models cannot be loaded (docs\GAME.md, "Downloadable parts
+// in a fight"). The character model loader's state machine (sub_82360E18; its object: +0x80 the state, +0x84 the
+// fighter's part after the creation manager's entry, +0x88 the entry's holder, +0x120 which break levels) loads break
+// levels 0 and 1 (sub_823616A8 with r4 = 0); when that load fails (sub_82361750) it starts again with r4 = 1, the
+// record's levels 2 and 3 in their place (sub_82221C00 sets the entry's +0x34D8 and lists that level's models),
+// which Creation fills with the plain body, and the fight shows them (the fighter's byte +0x2246A, which the fight's
+// setup sub_82148400 passes on). Logged: online both games must show the same levels, which the check makes sure of
+// (creation.cpp: a downloadable model whose file this PC lacks is refused), so this line in a match's log is a fault.
+REX_EXTERN(__imp__sub_823616A8);
+REX_HOOK_RAW(sub_823616A8) {
+  const uint32_t flag = ctx.r4.u32, holder = ctx.r3.u32 + 0x88;
+  __imp__sub_823616A8(ctx, base);
+  if (flag) {
+    const uint32_t entry = sc5::game::ReadU32(holder);
+    std::string name;
+    for (uint32_t i = 0; entry && i < 44; i++) {
+      const uint8_t c = sc5::dlc::ReadByte(entry + 13245 + i);
+      if (!c) break;
+      name += char(c);
+    }
+    REXLOG_WARN("sc5 dlc: the models of the created character {} could not be loaded: the game shows its plain body "
+                "(break levels 2 and 3)", name);
+  }
 }
 
 // The game's file requests (sub_82363FC8 the size of a file, asked before it is read; sub_82364500 the read: r3 the
-// archive, r4 the file): the patch text's language for the parts' names. SC5_DBG_FILES=1 logs each with its callers.
+// archive, r4 the file): SC5_DBG_FILES=1 logs each with its callers.
 namespace {
 uint32_t Rd32(uint32_t a) { return sc5::game::ReadU32(a); }
 bool FileDebug() {
@@ -350,7 +236,6 @@ void LogFile(const char* what, PPCContext& ctx) {
 
 REX_EXTERN(__imp__sub_82363FC8);
 REX_HOOK_RAW(sub_82363FC8) {
-  sc5::dlc::OnFileAsked(ctx.r3.s32, ctx.r4.s32);
   if (FileDebug()) LogFile("size", ctx);
   __imp__sub_82363FC8(ctx, base);
 }
@@ -360,12 +245,10 @@ REX_HOOK_RAW(sub_82364500) {
   __imp__sub_82364500(ctx, base);
 }
 
-// A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on): the downloadable parts' names registered
-// the first time the game asks for their table (above). SC5_DBG_TEXT=1 logs each string the game asks for and does not
-// have (no such table, or not that many strings), once each, with the caller.
+// A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on): SC5_DBG_TEXT=1 logs each string the game
+// asks for and does not have (no such table, or not that many strings), once each, with the caller.
 REX_EXTERN(__imp__sub_82347670);
 REX_HOOK_RAW(sub_82347670) {
-  sc5::dlc::BeforeText(ctx, base, ctx.r3.u32);
   static const bool debug = [] { const char* v = std::getenv("SC5_DBG_TEXT"); return v && v[0] == '1'; }();
   if (!debug) {
     __imp__sub_82347670(ctx, base);

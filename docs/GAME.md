@@ -63,7 +63,7 @@ main menu (`ready`) in 41 s.
 | `rng.cpp` | the game's random number generators; the visual systems' draws kept apart from the fight's (below) |
 | `net/netplay.cpp` | online play for two games over UDP with rollback (below, "Netplay") |
 | `sound.cpp` | a rollback's sounds reconciled with the first run's: none started twice, a wrong guess's stopped (below, "Netplay"); the launcher's music, effects and voices levels (below, "Sound levels") |
-| `dlc.cpp` | the player's own downloadable content where the SDK finds it; costume packs' parts in fights (below, "Unlocks and downloadable content") |
+| `dlc.cpp` | the player's own downloadable content where the SDK finds it; whether a downloadable model's file is here; title update 3's fallback logged (below, "Unlocks and downloadable content") |
 | `link.cpp` | the launcher's side of docs\PROTOCOL.md 3: cmd.txt, status.txt (below, "The launcher's game") |
 | `autopilot.cpp` | the menus from boot to the hold point, to a VS fight with the match's picks or to Training, and back; the plain games' way to their select screen |
 | `sparring.cpp` | Online Practice: the round's clock held, health back up, at the top of every frame in sync (below) |
@@ -143,7 +143,8 @@ and one the package no longer has goes. Dampierre's package (LIVE, "DLC01:DAMPIE
     n2 u16 (release ids), u32 the offset of the name of the entry's file in the package (0: none), u8 flag, u64 offer
     (0), u32 license bits (1: bit 0 of the package's license mask)
 
-The DLC manager (table 0x82782F30, vtable 0x820D2394: state at +8, at +40 an array of 30 package objects of 344 bytes,
+The DLC manager (table 0x82782F30, which the manager object 0x82782F94 keeps at +8: title update 3's, seen with
+`SC5_DBG_DLC=1`; vtable 0x820D2394: state at +8, at +40 an array of 30 package objects of 344 bytes,
 their count at +44) names its objects DLC00 to DLC29 and takes an installed package into the object whose name its
 display name contains (`wcsstr`): "DLC01:DAMPIERRE" is DLC01. It mounts the first package of each object as `DLCnn:`
 (any other of the same group only for its license mask, as `licence_drive`), reads `DLCnn:index_nn_X360.dat`, and for
@@ -198,25 +199,25 @@ hash tables of more than one level (the tool writes up to three, the file table 
 console's); the launcher and `x360.py` read them (a test package of 150 MB and 71 files read back byte for byte). The
 CRILAYLA decompression is plain Python (about 10 MB/s): with the owner's packs, 590 MB in 68 s.
 
-**The parts' names** (dlc.cpp, 2026-11-24). The game's texts are tables of strings by number: `sub_82348660` (r3 the
-table, r4 its data) puts a table in a std::map at [0x8293B4D4] and unscrambles the data in place (`sub_82349C28`: the
-11 bytes before an FFFFFFFF end mark hold the key, a 16-bit word rotated 3 and xored with 0xEB7D; each byte xored with
-the key's low byte, the key then rotated right 1, times 5, plus 1; a sum of 15 x each byte from 0xA21F must give the
-key back; the same scheme on both platforms), `sub_82347670` (r3 the table, r4 the string, 1 on) gives a string, an
-empty one for a table it does not have. A table: u32 0, u32 count, count offsets, the strings (UTF-8). Title update 1
-registers 0 to 53 (the 54 sections of text 424, at boot) and 54 (patch 0 + the language: its own additions,
-`sub_8215CCC8`). Creation names a part the DLC adds from **table 55**, which only a later title update registers:
-patch 8 + the language (patch 8 to 15, 8 languages, English first). Title update 1's own patch 8 to 15 are empty
-(23 bytes, no strings); the owner's later 360 title update (`TU_174Q21T_0000008000000.00000000000O2`, xexp 0.0.0.2 ->
-0.0.3.2, patch.cpk 268 KB) has them with 421 strings, some still placeholders (`arm_201`), as the PS3 1.03 update's
-patch.cpk does; the PS3 catalog pack DLC13's copy names every part of the 8 costume groups, and ends with each pack's
-description ("Maid Costumes 1 contains ... (usable by female characters only)"). With `SC5_DBG_TEXT=1` the game asked
-for table 55 strings 114, 115, 119, 129 at Creation's head parts (Tennis Cap, Student's Cap, Dark Warrior Helm,
-Corinthian Helm). So the game now registers table 55 itself, the first time it asks for it without having it: the
-installed packages' copy of patch 8 + the language (the lowest group's, as the game keeps for any file the packages
-replace; the language is the patch file the game read for table 54, `sub_82363FC8`), copied as it is into guest
-memory and handed to `sub_82348660`. Display only: nothing a match checks changes. Seen: "Corinthian Helm", "Bronze
-Armor" in Creation's lists and on the parts worn (2026-11-24). Without costume packages nothing asks for table 55.
+**The parts' names** (2026-11-24; title update 3, 2026-11-25). The game's texts are tables of strings by number:
+`sub_82348660` (r3 the table, r4 its data) puts a table in a std::map at [0x8293B4D4] and unscrambles the data in place
+(`sub_82349C28`: the 11 bytes before the first FFFFFFFF hold the key, a little-endian 16-bit word turned right 3 and
+xored with 0xEB7D; each byte is xored with the key's low byte, the key then turned right 1, times 5, plus 1; a sum of
+the bytes from 0xA21F must give the key back; the same scheme on both platforms), `sub_82347670` (r3 the table, r4 the
+string, 1 on) gives a string, an empty one for a table it does not have. A table: u32 0, u32 count, count offsets
+(from the end of the offsets), the strings (UTF-8). The game registers 0 to 53 (the 54 sections of text 424, at boot)
+and 54 (patch 0 + the language: its own additions, `sub_8215CCC8`). Creation names a part the DLC adds from **table
+55**, patch 8 + the language (patch 8 to 15, 8 languages, English first). Title update 1 never registered it (its
+own patch 8 to 15 are empty), so dlc.cpp used to register the packages' copy the first time the game asked for it.
+**Title update 3 registers it itself**: Creation's loader (`sub_8224A5F8`) takes table 55 out (`sub_82348660` with
+no data), reads patch 8 + the language and registers it as 55. The update's own copy has 421 strings, 145 of them
+placeholders (`arm_201`, `head_644`...); the installed packages replace the file (the lowest group's copy wins, and
+the copy the highest costume group's package carries, the PS3 catalog pack DLC13's, names every part and ends with
+each pack's description: "Maid Costumes 1 contains ... (usable by female characters only)"), so Creation shows every
+part's real name ("Tennis Cap", "Bronze Armor", seen 2026-11-25 with the owner's 12 packages). dlc.cpp no longer
+touches the table: registering a copy of ours would have the update's loader free a block it did not allocate. Without
+costume packages no downloadable part is listed, so the placeholders never show. `SC5_DBG_TEXT=1` still logs each
+string the game asks for and does not have.
 
 **Where the DLC is in the game** (the owner's 38 packs in 12 packages, 2026-11-24, `SC5_DBG_DLC=1` with
 `SC5_DBG_RELEASE_OUT`): every one of the packages' 348 release ids is in state 3 (downloadable) in a fresh save's
@@ -249,15 +250,31 @@ else rather than guess. cdata and text also differ by platform (the UI's tables 
 none of which the DLC replaces but the icon atlases, which convert byte for byte.
 
 **Downloadable parts in a fight.** Creation marks a record whose parts sets use a 0x7F model (record byte 15,
-`isDLCModelUsedFlag`, `sub_82231620`); `sub_82221978` copies the mark into the creation manager's entry (+0x34D8),
-and a fight's setup of the character (`sub_82148400`, 28 callers) then swaps it for a template of its style in plain
-clothes (`sub_8229EF18` mode 1: the style, body, colours, names and weapon kept). The game does that for every such
-character, the data installed or not, offline and online (seen: the costume on the select screen's card, plain
-clothes in the fight). A midasm hook (`Sc5DlcFighterModels`, dlc.cpp) takes the mark as clear when every 0x7F model
-the record wears at any break level has its file on this PC (the manager's entry, bit 0x80): the character fights as
-created. Online both games decide alike, since such a character is only picked when the two games' downloadable parts
-are the same (creation.cpp's fingerprint): a created character in Dark Warrior and Skeleton parts fought in sync in
-two games, its costume on both screens (2026-11-20).
+`isDLCModelUsedFlag`, `sub_82231620`). Title update 1 copied the mark into the creation manager's entry (+0x34D8) and
+a fight's setup of the character (its `sub_82147C70`, 28 callers) then swapped it for a template of its style in
+plain clothes (`sub_8229EF18` mode 1), the data installed or not; a midasm hook (`Sc5DlcFighterModels`) took the mark
+as clear when the record's downloadable files were all on the PC. **Title update 3 took that swap out** and gave the
+entry's +0x34D8 another meaning: which break levels the game shows. A record's 4 break levels (288 bytes each from
++1128) are, as title update 3's Creation fills them, 0 the character whole, 1 its armour broken, 2 and 3 the plain
+body (no equipment, the base hair). The fight's setup (`sub_82148400`) now copies the manager's entry (13,544 bytes,
+as title update 1 did after its swap) and calls `sub_82221C00(entry, flag)`, which stores the flag at +0x34D8 and lists
+the models of break level 0, or 2 with the flag, at +13340 (count +13476). `sub_822213F0` gives a part list for a break
+level: with the flag, 0 shows 2 and 1 shows 3. The flag comes from the character model loader (`sub_82360E18`, a state
+machine: +0x80 the state, +0x84 the fighter's part right after the entry, whose +0x8A is the fighter's byte +0x2246A,
++0x88 the entry's holder, +0x120 the flag): it loads levels 0 and 1 (`sub_823616A8` with 0) and when that load fails
+(`sub_82361750`, a file it cannot read) loads again with 1. Seen 2026-11-25 (one game, VS Battle, a character in the
+Tennis Cap and Bronze Armor of DLC13): with the costume packs' data installed it fights in them; with the owner's
+packages as `game\dlc` holds them (each only its index, no data) the select screen's model falls back and the fight
+shows the plain body; with every package's data but DLC09's and the character wearing one DLC09 model, the whole
+outfit falls back (the one model is enough). dlc.cpp logs the fallback (`the models of the created character ... could
+not be loaded`). Online both games must show the same levels (the levels' tails, hit material and equipment weight
+among them, differ): the check refuses a record any of whose downloadable models has no file on this PC (the DLC
+manager's entry, bit 0x80; creation.cpp), on each PC for its player's own characters and for the other player's, so
+both games load levels 0 and 1, and a character with downloadable parts is still picked only when the two games'
+downloadable parts are the same (the fingerprint; it counts parts sets the tables list and the packages grant, so a
+package without its data passes it, which the file rule covers). Title update 3 also asks each package for
+`DLCnn:\dat.cpk` (the PS3 catalog packs' archive; not found in ours, which the game shrugs off: the files the index
+names load as before).
 
 The game keeps a release state for each of 7426 unlockable things (characters, stages, music, creation parts,
 titles) in a table of 4 bits each at `[[0x8274EF10]] + 0x22C248` (just past the 2.2 MB save image in the save object),
@@ -945,46 +962,53 @@ bake type, colour categories, guide region and id, OLT key +14, OLT index +16, O
 floats of placement, 4 colours at +60); height 13224; facial motion name 13225 (5); a short name 13230 (15, empty in
 Creation's); the name 13245 and as typed 13290 (45 each, UTF-8: the game turns `%`, `#`, `$` into their full-width
 forms, sub_82349AE0); checksum 13336 (sub_822470B0: each word turned left by an amount the word before sets, XORed).
-The game's repair pass (sub_82222B28: r3 the record, r4 a byte whose 0x10 makes it check the checksum and refuse a
-wrong one) clamps the attack rate (80-200), pitch and formant (-50 to 50), flanger (0-2) and six body sizes (shoulders
-0.08-0.15, upper 0.9-1.2, lower 0.9-1.1, face 0.9-1.1, hand 0.7-1.1, body 0.8-1.2). A ModelData is four bytes: parts
-set type, table index, variation, segment. The 360 game did not check records from other consoles (sub_8229EF18 only
-replaced one with a template of the same style when its player chose not to see created characters). The check runs
-this pass too, on a copy in a buffer of the SDK's own heap (a save slot would not do: the creation manager copies
-slots as it goes), after its own checks, and refuses a record the pass refuses or would change; its own checks hold
-the same limits, so the pass is a second opinion.
+The game's repair pass (sub_82222B28: r3 the record, r4 a byte whose 0x10 makes it check the checksum and refuse a wrong
+one) clamps the attack rate (80-111 in title update 3, which lowered the top from title update 1's 200; the update's
+game keeps a save's own records as they are, so a character made before it with a higher rate stays out online, the
+check holding the update's limit), pitch and formant (-50 to 50), flanger (0-2) and six body sizes (shoulders 0.08-0.15,
+upper 0.9-1.2, lower 0.9-1.1, face 0.9-1.1, hand 0.7-1.1, body 0.8-1.2). A ModelData is four bytes: parts set type,
+table index, variation, segment. The 360 game did not check records from other consoles (sub_8229EF18 only replaced one
+with a template of the same style when its player chose not to see created characters). The check runs this pass too, on
+a copy in a buffer of the SDK's own heap (a save slot would not do: the creation manager copies slots as it goes), after
+its own checks, and refuses a record the pass refuses or would change; its own checks hold the same limits, so the pass
+is a second opinion.
 
 **What the game has.** At the select screen, its object's [+1264] is the creation context (sub_8223CFE8,
 sub_8223D0D0): +12 the parts sets of each base type (6 x {type, count, entries of 2,496 bytes}: the id at +0, the
-category +4, the release +16, the members +20, a count and 14 of 9 models each; character exclusive +2452, forbidden
-+2460), from its builder [+28] (+14788), whose +14860/+14864 are the weapons (count, entries of 160 bytes: style,
-variation, release +12). In the test PC's game: 645 male and 677 female parts sets, 2,897 models, 203 weapons (189
-released) in 29 styles, the palette (sub_8222D210's [0x8277B418]: +8 the last row, +10 the last column) 65 x 33.
-Creation's illustrations (stickers: CreationIllustrationInfo, 204 bytes) are loaded in Creation mode only (the baking
-guide manager, sub_8222C618, at a Creation object's +15048, its table at +140: count +52, entries +56): 446, each with
-its own texture (OLT index, relation, key, which a record's sticker repeats) and release; the check carries them
-(creation_stickers.inc, tools\py\creation_stickers.py from a dump of that table) and asks the game which of their
-releases this PC has. sub_8246B318 answers whether a release id is released (unlocks.cpp opens everything but
-downloadable content, state 3, and hidden entries). A parts set's models in the record must be among its base type's
-(the body's 0x020000xx included).
+category +4, the release +16, the members +20, a count and 14 of 9 models each; character exclusive +2616, forbidden
++2624: title update 3's parts sets are 2,660 bytes, 164 more than title update 1's after the members, its loader
+sub_8221E848 stepping 2,660), from its builder [+28] (+14788), whose +14860/+14864 are the weapons (count, entries of
+160 bytes: style, variation, release +12). In the test PC's game: 645 male and 677 female parts sets, 2,897 models, 203
+weapons (189 released) in 29 styles, the palette (sub_8222D210's [0x8277B418]: +8 the last row, +10 the last column) 65
+x 33. Title update 3's game has the same tables (SC5_TEST_KNOWN_OUT, 2026-11-25: every id of known.txt, nothing more);
+with the owner's 12 packages and their costume data it adds 275 parts sets and 644 models for original characters (1,597
+sets and 3,541 models in all; 323 downloadable sets, 12 downloadable stickers). Creation's illustrations (stickers:
+CreationIllustrationInfo, 204 bytes) are loaded in Creation mode only (the baking guide manager, sub_8222C618, at a
+Creation object's +15048, its table at +140: count +52, entries +56): 446, each with its own texture (OLT index,
+relation, key, which a record's sticker repeats) and release; the check carries them (creation_stickers.inc,
+tools\py\creation_stickers.py from a dump of that table) and asks the game which of their releases this PC has.
+sub_8246B318 answers whether a release id is released (unlocks.cpp opens everything but downloadable content, state 3,
+and hidden entries). A parts set's models in the record must be among its base type's (the body's 0x020000xx included).
 
 **A model's segment.** Of a ModelData's four bytes the game loads the file the first three name (sub_822A4530, a model loader's
 virtual function, its neighbour at 0x820C83E8 sub_822A46B0 giving the archive, 5 or 14: the model table at
 [0x82A26918 + 80], a block per parts set type, its row the table index and its column the variation, an unknown column
 taken as 0; 0x7F a downloadable model's package group and entry); the fourth is the
-segment of that file a part shows, which the fight (sub_82147F48) and Creation (sub_821D0E28) turn on per break level,
-and a negative one they never show. The parts tables list a file's segments one by one (the innerwear inner_006_f,
-parts set 01050006: 1B080000 to 1B080003 in slots 6 to 9) and never segment 0xFF, yet Creation writes it for a piece
-it keeps worn but shows nowhere: a player's new female characters were held out online for "model 1B0800FF is not on
-this PC" (2026-11-20, 0.1.3; offline he saw and played them), every new one he made and a copy of his working one with
-only its height changed, his own PC refusing what its own Creation had made. So a model passes when the tables list
-it, or when it is one of their files with segment 0xFF (`KnownModel`: only that form, only a file this PC's tables have
-for that character and base type; another negative segment or an unknown segment stays refused). Such a character
-fights as Creation shows it: two games with a female character wearing 1B0800FF from break level 1 on, picked through
-the pad, fought in sync (2026-11-24). The same goes for downloadable parts (UsesDlc takes any segment of a downloadable
-file). The fight's list of break level 0's models (sub_82245CD0, filled by both) has room for 20, a model once however
-many of its segments are worn, with its count right after it: a record whose level 0 wears more than 20 would write
-over it, so the check refuses that too (Creation's own view would break on such a record first).
+segment of that file a part shows, which the fight (sub_821485E0) and Creation (sub_821D1728) turn on per break level
+through one function in title update 3 (sub_82221828), and a negative one they never show. The parts tables list a
+file's segments one by one (the innerwear inner_006_f, parts set 01050006: 1B080000 to 1B080003 in slots 6 to 9) and
+never segment 0xFF, yet Creation writes it for a piece it keeps worn but shows nowhere: a player's new female characters
+were held out online for "model 1B0800FF is not on this PC" (2026-11-20, 0.1.3; offline he saw and played them), every
+new one he made and a copy of his working one with only its height changed, his own PC refusing what its own Creation
+had made. So a model passes when the tables list it, or when it is one of their files with segment 0xFF (`KnownModel`:
+only that form, only a file this PC's tables have for that character and base type; another negative segment or an
+unknown segment stays refused). Such a character fights as Creation shows it: two games with a female character wearing
+1B0800FF from break level 1 on, picked through the pad, fought in sync (2026-11-24). The same goes for downloadable
+parts (UsesDlc takes any segment of a downloadable file). The list of break level 0's models (sub_82221548 in title
+update 3, filled for both; level 2's when the game shows the plain body, "Downloadable parts in a fight") has room for
+20, a model once however many of its segments are worn, with its count right after it: a record whose level 0 wears more
+than 20 would write over it, so the check refuses that too, in break level 2 as well (Creation's own view would break on
+such a record first).
 
 **Held out, said plainly.** A player's own character that fails the check is not only a log line (`slot N (name) stays
 out online: <why>`): at the online select screen the game draws, with the result overlay's drawer (result_overlay.cpp,
@@ -1041,40 +1065,42 @@ another fighter's costume and the other base type.
 ([object + 1256], vtable 0x820BFC54), for that character's entries (sub_82222208, up to 50) and refuses an empty list
 (sub_8230C828). The manager keeps its own copy of each slot (50 x 13,544 bytes from +4: the record, then what it works
 out from it: the parts it loads at +13340 with their count at +13476, which its lists take as "used", the type +13480,
-the DLC flag +13528), filled from the save as a VS Battle's menus come. A record placed during the select screen needs
-its entry filled too: the game's own sub_82221978 (r3: a word holding the entry's address, r4: the record), called
-from the frame's top on the main thread; an earlier match's entry is dropped (+13476 = 0) when its slot is cleared.
-The costume panel lists a fighter's standard costumes first, then its created ones in slot order; the other PC's
-record goes into slot 49 (player 1's) or 50 (player 2's), so each game knows where it is. The player's own records
-that fail the check are taken out at the select screen, once its manager is there: the slot's header cleared and the
-entry emptied. An entry left with parts stays on the costume panel, and the panel then no longer matches the slots: a
-created pick of that fighter would be taken for a standard costume, its record not sent (seen 2026-11-20, the two
-games showing different costumes). The manager is filled from the save again for the next match, the cleared header
-notwithstanding, so SyncEntries empties those entries again each frame of the select screen, before any pick.
+at +13528 title update 1's DLC flag, title update 3's choice of break levels, "Downloadable parts in a fight"), filled
+from the save as a VS Battle's menus come. A record placed during the select screen needs its entry filled too: the
+game's own sub_82221978 (r3: a word holding the entry's address, r4: the record), called from the frame's top on the
+main thread; an earlier match's entry is dropped (+13476 = 0) when its slot is cleared. The costume panel lists a
+fighter's standard costumes first, then its created ones in slot order; the other PC's record goes into slot 49 (player
+1's) or 50 (player 2's), so each game knows where it is. The player's own records that fail the check are taken out at
+the select screen, once its manager is there: the slot's header cleared and the entry emptied. An entry left with parts
+stays on the costume panel, and the panel then no longer matches the slots: a created pick of that fighter would be
+taken for a standard costume, its record not sent (seen 2026-11-20, the two games showing different costumes). The
+manager is filled from the save again for the next match, the cleared header notwithstanding, so SyncEntries empties
+those entries again each frame of the select screen, before any pick.
 
-**The VS screen's card.** The VS screen (from its own copy of the picture, 0x82909C60 for player 2's, loaded by
-sub_8218D570) and Creation's list (sub_82303428) draw a created character's card from the picture in its slot: a file at
-+13,576 whose 16 bytes give its kind (byte 0), a byte the kind uses, then big-endian its size, width and height (+2,
-+4, +6) and a checksum of its data (+8, sub_8218A848, checked only when byte 0 has 0x80 set), its data from +16.
-sub_8218B998 loads it when the size is not 0 and sub_8218BA70 uploads it, by its kind (byte 0 without 0x80): 0 a
-compressed file (`PTC+MSHM`, sub_8218BBB8; Creation's are this with 0x80, 172x256 in 16 KB at most), 1 a GPU texture
-header and its data (sub_8218BE20), 2 the game's own DCT codec and 3 the same LZX-compressed (+12 its size), into a
-texture of the form byte 1 names (sub_8218C038: 0 L8, 1 1:5:5:5, 2 5:6:5, 3 A8R8G8B8; only the forms sub_8218AA10
-lists make one, so 1 and 2 never load). The codec (sub_8250F828): a 10-byte little-endian header (width, row pitch in
-bytes, height, flags: bits 3-4 the channels less one, 0x20 each channel coded on its own, else 0x04 a 1-bit first
-channel, 0x8000 the last two at half size, and a colour transform after unless 0x40), then per channel (sub_8250EE08) a
-64-bit little-endian mask of the coefficients present in the codec's order (the table at 0x82712660: k -> row * 8 +
-column), a byte added after the inverse DCT, 64 quantization multipliers, then each present coefficient's value for
-every 8x8 block in turn (signed bytes, `0x80 n` repeating the last value n times); the inverse DCT is MPEG's reference
-integer one (sub_82513CE8). The other PC's picture is not sent (PROTOCOL.md 3.3), so until 0.1.4 that player's card
-was black (seen by the owner, 2026-11-20). Slots 49 and 50 now get a picture of SCV Online's own (creation.cpp, Card,
-made once at the hold point): kind 2 into an A8R8G8B8 texture, 128x192 (rows of 32 texels), four channels each coded
-on its own (alpha no coefficients and 255 added), navy and gold with a figure and a question mark drawn at 172x256 and
-averaged 16 points a texel, through the standard DCT with JPEG's luminance quantization (14,503 bytes of the 16,256);
-the VS screen stretches it over the card as it does Creation's (seen 2026-11-23: the card in the other PC's game, the
-player's own picture in theirs). `SC5_DBG_PICLOAD=1` logs each picture loaded, where from, and how its upload ended;
-`SC5_DBG_SLOTDUMP=<frame>:<slot>,...` writes those slots (0-based) at those frames to `SC5_TEST_DUMP_DIR` (how
-Creation's own picture was found: shot and saved by a scripted Creation session).
+**The VS screen's card.** The VS screen (from its own copy of the picture, 0x8291D7E8 for player 2's in title update 3,
+16,388 bytes after player 1's, loaded by sub_8218D570) and Creation's list (sub_82303428) draw a created character's
+card from the picture in its slot: a file at +13,576 whose 16 bytes give its kind (byte 0), a byte the kind uses, then
+big-endian its size, width and height (+2, +4, +6) and a checksum of its data (+8, sub_8218A848, checked only when byte
+0 has 0x80 set), its data from +16. sub_8218B998 loads it when the size is not 0 and sub_8218BA70 uploads it, by its
+kind (byte 0 without 0x80): 0 a compressed file (`PTC+MSHM`, sub_8218BBB8; Creation's are this with 0x80, 172x256 in 16
+KB at most), 1 a GPU texture header and its data (sub_8218BE20), 2 the game's own DCT codec and 3 the same
+LZX-compressed (+12 its size), into a texture of the form byte 1 names (sub_8218C038: 0 L8, 1 1:5:5:5, 2 5:6:5, 3
+A8R8G8B8; only the forms sub_8218AA10 lists make one, so 1 and 2 never load). The codec (sub_8250F828): a 10-byte
+little-endian header (width, row pitch in bytes, height, flags: bits 3-4 the channels less one, 0x20 each channel coded
+on its own, else 0x04 a 1-bit first channel, 0x8000 the last two at half size, and a colour transform after unless
+0x40), then per channel (sub_8250EE08) a 64-bit little-endian mask of the coefficients present in the codec's order (the
+table at 0x82712660: k -> row * 8 + column), a byte added after the inverse DCT, 64 quantization multipliers, then each
+present coefficient's value for every 8x8 block in turn (signed bytes, `0x80 n` repeating the last value n times); the
+inverse DCT is MPEG's reference integer one (sub_82513CE8). The other PC's picture is not sent (PROTOCOL.md 3.3), so
+until 0.1.4 that player's card was black (seen by the owner, 2026-11-20). Slots 49 and 50 now get a picture of SCV
+Online's own (creation.cpp, Card, made once at the hold point): kind 2 into an A8R8G8B8 texture, 128x192 (rows of 32
+texels), four channels each coded on its own (alpha no coefficients and 255 added), navy and gold with a figure and a
+question mark drawn at 172x256 and averaged 16 points a texel, through the standard DCT with JPEG's luminance
+quantization (14,503 bytes of the 16,256); the VS screen stretches it over the card as it does Creation's (seen
+2026-11-23: the card in the other PC's game, the player's own picture in theirs). `SC5_DBG_PICLOAD=1` logs each picture
+loaded, where from, and how its upload ended; `SC5_DBG_SLOTDUMP=<frame>:<slot>,...` writes those slots (0-based) at
+those frames to `SC5_TEST_DUMP_DIR` (how Creation's own picture was found: shot and saved by a scripted Creation
+session).
 
 ## Frame data in practice (framemeter.cpp)
 

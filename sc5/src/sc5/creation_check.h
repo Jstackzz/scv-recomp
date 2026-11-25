@@ -21,6 +21,7 @@ constexpr uint32_t kSelectNo = 4, kSelectVariation = 5, kModelIndex = 6, kBaseTy
 constexpr uint32_t kType = 9;  // the character type: 32 an original character, else the fighter it customizes
 constexpr uint32_t kVoice = 10, kPitch = 11, kFormant = 12, kFlanger = 13, kEyebrow = 14, kDlcFlag = 15;
 constexpr uint32_t kStyle = 16, kAttackRate = 17;
+constexpr uint8_t kMinAttackRate = 80, kMaxAttackRate = 111;  // the repair pass's limits (title update 3)
 constexpr uint32_t kPartsSets = 20, kPartsSetCount = 20;  // enCreationPartsSetID[20] (u32, -1 none)
 constexpr uint32_t kBody = 100;                            // TK_CreationBodyFeature_st: 16 floats, 4 bytes
 constexpr uint32_t kColours = 168, kColourCount = 120;     // TK_CreationColorData_st[120], 8 bytes each
@@ -53,12 +54,18 @@ constexpr int kOriginal = 32, kFighterBase = 5;
 
 // A model (ModelData) is the parts set type, the table index, the variation and the segment: the game loads the file
 // the first three name (sub_822A4530: the model table's row and column; 0x7F a downloadable one, its package group and
-// entry) and in each break level shows the segment the last names (sub_82147F48 in a fight, sub_821D0E28 in Creation),
-// or none when it is negative. Creation writes segment 0xFF (as its own "none", FF0000FF) for a piece it keeps worn but
-// does not show: the parts tables never list that form (seen 2026-11-20, a player's new female characters: model
-// 1B0800FF, the innerwear inner_006_f, parts set 01050006, whose four segments the table lists as 1B080000-1B080003).
+// entry) and in each break level shows the segment the last names (sub_82221828, from sub_821485E0 in a fight and
+// sub_821D1728 in Creation), or none when it is negative. Creation writes segment 0xFF (as its own "none", FF0000FF)
+// for a piece it keeps worn but does not show: the parts tables never list that form (seen 2026-11-20, a player's new
+// female characters: model 1B0800FF, the innerwear inner_006_f, parts set 01050006, whose four segments the table
+// lists as 1B080000-1B080003).
+//
+// Title update 3's fallback: a fight shows break levels 0 and 1 (whole, then broken), and when a character's models
+// cannot be loaded (a downloadable part whose data this PC lacks) the game shows levels 2 and 3 in their place, which
+// Creation fills with the plain body (docs\GAME.md, "Downloadable parts in a fight"). So levels 2 and 3 are held to
+// the same rules as 0 and 1.
 constexpr uint32_t kModelFile = 0xFFFFFF00, kNoSegment = 0xFF;
-// the most models (files, whatever their segments) break level 0 may wear: the fight's list of them has room for 20
+// the most models (files, whatever their segments) break level 0 (or 2) may wear: the list of them has room for 20
 constexpr uint32_t kMaxModelFiles = 20;
 
 // What this PC's game has, read from its own tables (creation.cpp). An empty set refuses every id of its kind.
