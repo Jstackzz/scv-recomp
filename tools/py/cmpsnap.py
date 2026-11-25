@@ -20,9 +20,10 @@ POINTERS = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04, 0x5CE
 
 def kind(a):
     for p in (P1, P2):
-        if any(p + b <= a < p + b + 6208 for b in (0x3190, 0xB190, 0x13190)):
+        big, drawn = (0x3190, 0x1B310) if p == P1 else (0x3160, 0x1B360)  # on round addresses: P2's lie apart
+        if any(p + big + k * 0x8000 <= a < p + big + k * 0x8000 + 6208 for k in range(3)):
             return "pose"
-        if any(p + b <= a < p + b + 0x800 for b in (0x1B310, 0x1BB10, 0x1C310)):  # the pose's buffers for the drawing
+        if any(p + drawn + k * 0x800 <= a < p + drawn + k * 0x800 + 0x800 for k in range(3)):  # for the drawing
             return "pose"
         if p + 0x22638 <= a < p + 0x5DAD4 and any(p + o <= a < p + o + 4 for o in POINTERS):
             return "pointer"

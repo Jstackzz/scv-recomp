@@ -386,16 +386,30 @@ bool InKoReplay() {
 constexpr uint32_t kPlayerPointers[] = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04,
                                         0x5CEB4, 0x5D2B4, 0x5D30C, 0x5D364, 0x5D3BC, 0x5DACC, 0x5DAD0};
 
+// Each player's pose buffers by their own addresses: the game puts them on round addresses (the pose's three on a
+// multiple of 0x100, the drawing's three on one of 0x80), so they lie at +0x3190 and +0x1B310 of player 1's object but
+// at +0x3160 and +0x1B360 of player 2's. Until 0.1.4 player 1's offsets were used for both: the first 0x30 bytes of
+// player 2's pose (whichever of the three was current) and the last 0x50 of its third buffer for the drawing were
+// hashed as the fight, and its block of that buffer was the one block in the barrier's sync that only one game had.
+// Two games on one PC had those bytes alike; two PCs did not for a second or so after an intro or a winner's pose
+// (cloth, secondary bones), so the first checks of a round failed: every match of the first two pairs of players on
+// 0.1.4 went back to its round's start at frame 120, some three times and then ended (2026-11-24: 170 reports, each
+// with the snapshots "laid out apart" and "1 blocks (2048 bytes)" differing at the sync).
+constexpr uint32_t kPoseBuffers[2] = {0x8293A200, 0x82997D00};   // + k * 0x8000, 6208 bytes each
+constexpr uint32_t kDrawnBuffers[2] = {0x82952380, 0x829AFF00};  // + k * 0x800, 0x800 bytes each
+
 Kind KindOf(uint32_t source) {
-  for (uint32_t player : {0x82937070u, 0x82994BA0u}) {
+  for (int p = 0; p < 2; p++) {
     for (uint32_t k = 0; k < 3; k++) {
-      const uint32_t lo = player + 0x3190 + k * 0x8000;
+      const uint32_t lo = kPoseBuffers[p] + k * 0x8000;
       if (source >= lo && source < lo + 6208) return Kind::Pose;
       // the three buffers the pose fills for the drawing, taken in turn (0x800 apart): a frame run again leaves the
       // pose out (frame.cpp), so they keep what the frame gone back to had; nothing in the fight reads them
-      const uint32_t drawn = player + 0x1B310 + k * 0x800;
+      const uint32_t drawn = kDrawnBuffers[p] + k * 0x800;
       if (source >= drawn && source < drawn + 0x800) return Kind::Pose;
     }
+  }
+  for (uint32_t player : {0x82937070u, 0x82994BA0u}) {
     if (source >= player + 0x22638 && source < player + 0x5DAD4)
       for (uint32_t o : kPlayerPointers)
         if (source >= player + o && source < player + o + 4) return Kind::Pointer;

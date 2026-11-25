@@ -1416,10 +1416,11 @@ std::vector<DetailPage> PagesOf(const Evidence& e) {
 
 uint64_t LayoutOf(const Evidence& e) {
   uint64_t h = 1469598103934665603ull;
-  // (a heap object's or the stack's block by its size alone: each game has those where its own heap put them)
+  // The blocks' sizes in their order, not their addresses: a heap object's or the stack's block lies where each game's
+  // own heap put it, and a pose's block is whichever of three buffers is current in that game. (Until 0.1.4 the
+  // addresses from 0x80000000 on were hashed too: every report from two PCs said only "laid out apart".)
   for (const battle::Block& b : e.blocks)
-    for (uint32_t v : {b.source >= 0x80000000u && b.source < 0xA0000000u ? b.source : 0u, b.size})
-      for (int i = 0; i < 4; i++) h = (h ^ ((v >> (8 * i)) & 0xFF)) * 1099511628211ull;
+    for (int i = 0; i < 4; i++) h = (h ^ ((b.size >> (8 * i)) & 0xFF)) * 1099511628211ull;
   return h;
 }
 
@@ -1683,6 +1684,12 @@ void SetFrameInputs(uint32_t f) {
     const char* colon = v ? std::strchr(v, ':') : nullptr;
     return colon ? std::atoi(colon + 1) : 0;
   }();
+  // tests: SC5_TEST_POSE_NOISE=<side>: in that player's game, every frame writes its number into the end of player 2's
+  // three buffers for the drawing (nothing in the fight reads them): what two PCs' cloth does to those bytes for a
+  // moment, at every check. The fights stay alike, and so must the checks.
+  static const int pose_noise = std::getenv("SC5_TEST_POSE_NOISE") ? std::atoi(std::getenv("SC5_TEST_POSE_NOISE")) : 0;
+  if (pose_noise && pose_noise == g_slot + 1 && !g_cfg.watch)
+    for (uint32_t k = 0; k < 3; k++) Put32(0x829AFF00u + k * 0x800 + 0x7F0, 0xC0000000u | f);
   if (desync_at && f == desync_at && !g_cfg.watch && (!desync_side || desync_side == g_slot + 1)) {
     const float hp = FighterHealth(0) - 1.0f;
     uint32_t v;
