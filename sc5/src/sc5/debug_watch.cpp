@@ -580,6 +580,41 @@ REX_HOOK_RAW(sub_82388990) {
     REXLOG_INFO("sc5 dbg dlc: index of '{}' read: {} (mask {:08X})", Wide(obj + 40), ctx.r3.u32, Rd(obj + 340));
 }
 
+REX_EXTERN(sub_8245BED0);  // the release state of an id (unlocks.cpp's hook first)
+
+// SC5_DBG_RELEASE_OUT=<file>: once the DLC manager is ready and the save is in, every release id's raw state in the
+// release table ([[0x8273EF10]] + 0x22C248, 4 bits each), the DLC check's answer and what sub_8245BED0 answers (the
+// hook of unlocks.cpp included): "id raw granted answer", one id a line
+namespace {
+void DumpRelease(PPCContext& keep, uint8_t* base) {
+  static bool done = false;
+  const char* path = std::getenv("SC5_DBG_RELEASE_OUT");
+  if (done || !path || !*path) return;
+  const uint32_t save = Rd(0x8273EF10);
+  if (!save || Rd(save + 0x48) != 0x00010000) return;
+  done = true;
+  const uint32_t table = save + 0x22C248;
+  auto* m = REX_KERNEL_STATE()->memory();
+  FILE* f = std::fopen(path, "wb");
+  if (!f) return;
+  for (uint32_t id = 0; id < 0x1D02; id++) {
+    const uint8_t byte = *m->TranslateVirtual<const uint8_t*>(table + (id >> 1));
+    const uint32_t raw = (id & 1) ? byte >> 4 : byte & 0xF;
+    PPCContext c = keep;
+    c.r4.u64 = id;
+    __imp__sub_82385F48(c, base);
+    const uint32_t granted = c.r3.u32;
+    c = keep;
+    c.r3.u64 = table;
+    c.r4.u64 = id;
+    sub_8245BED0(c, base);
+    std::fprintf(f, "%04X %X %u %X\n", id, raw, granted, c.r3.u32);
+  }
+  std::fclose(f);
+  REXLOG_INFO("sc5 dbg dlc: release table written to {}", path);
+}
+}  // namespace
+
 REX_HOOK_RAW(sub_82385F48) {
   if (!DlcDebug()) {
     __imp__sub_82385F48(ctx, base);
@@ -588,6 +623,7 @@ REX_HOOK_RAW(sub_82385F48) {
   const uint32_t id = ctx.r4.u32 & 0xFFFF, table = ctx.r3.u32;
   PPCContext keep = ctx;
   __imp__sub_82385F48(ctx, base);
+  if (Rd(table + 8) >= 7 && Rd(table + 8) <= 11) DumpRelease(keep, base);
   static int calls = 0;
   if (calls++ < 5) REXLOG_INFO("sc5 dbg dlc: the game asked about id {:X}: {} (state {})", id, ctx.r3.u32, Rd(table + 8));
   // once the manager is ready: the ids asked for
