@@ -25,7 +25,7 @@ The game and its modes (ids are used on every link):
 
 | game id | title | online modes | offline |
 |---|---|---|---|
-| `sc5` | Soulcalibur V (Xbox 360, World, title `4E4D083D`, with Title Update 1) | `versus` (Ranked, Casual, lobbies), `sparring` (Online Practice: lobbies only) | `practice` |
+| `sc5` | Soulcalibur V (Xbox 360, World, title `4E4D083D`, with title update 3; title update 1 until 0.1.5) | `versus` (Ranked, Casual, lobbies), `sparring` (Online Practice: lobbies only) | `practice` |
 
 The display names and the roster live in `launcher/data/sc5.json`; the server's list is `server/protocol.py`
 `GAMES = {"sc5": ("versus", "sparring")}`. The ranked titles by Elo (`server/elo.py`, `welcome.ranks`), lowest
@@ -1499,9 +1499,14 @@ players of a match must run the same code:
 
 - the disc image (`.iso`: an XGD2 or XGD3 dump or an XISO; the GDFX file system): its `default.xex` must have SHA-1
   `dfe4d5e1e9198bc9df6db46ddf2bdf2a5cbf3f80` (title `4E4D083D`, media `165FAD4F`, version 0.0.0.2);
-- the title update package: STFS `LIVE`, content type `000B0000`, title `4E4D083D`; its `default.xexp` must have
-  SHA-1 `47a09662fd3fe376d283208fcd8a31eee819c736` and a delta patch from 0.0.0.2 to 0.0.1.2, its `patch.cpk`
-  SHA-1 `0b2b9d30ce56c02fafa91a0f4fbdaeb23d441a93`;
+- the title update package, title update 3 (`TU_174Q21T_0000008000000.00000000000O2`, the game's last update;
+  docs/TARGET.md): STFS `LIVE`, content type `000B0000`, title `4E4D083D`; its `default.xexp` must have SHA-1
+  `e8f8eb269aed296aec32549a79b689e31cde14dc` and a delta patch from 0.0.0.2 to 0.0.3.2, its `patch.cpk` SHA-1
+  `c41ceee22a4bea04d8508f34df15039450e34f02`. Title update 1 (`default.xexp` SHA-1 `47a09662...`, 0.0.0.2 to
+  0.0.1.2), which the game was built on until 0.1.5, is recognised by its hash (`older_title_updates` in
+  `launcher/data/sc5.json`) and refused by name: the player is told that this is title update 1, that SCV Online
+  now needs title update 3, and that update's file name, in a large window whose button opens the file picker for
+  step 2 (and builds once a file is chosen). Any other update is refused with the version it makes the game;
 - optionally the player's own downloadable content packages: STFS (`LIVE`, `PIRS` or `CON`), content type
   `00000002`, title `4E4D083D`.
 
@@ -1520,10 +1525,21 @@ Then one more step compiles the game's code for this PC (`BuildPage::compileGame
 `build-game.cmd` (Settings, *Build script*) with `SC5_GAME_DIR`, `SC5_UPDATE_DIR` and `SC5_GAME_EXE` (where the
 built `sc5.exe` goes) in its environment, and takes exit code 0 with `sc5.exe` there as built. A player package has
 that script (`tools/player/build-game.cmd`; sc5/player/README.md): with nothing installed on the PC it translates
-`SC5_GAME_DIR`'s `default.xex`, patched by the `default.xexp` beside it (no `default.xexp`: it stops, exit code 1),
-compiles that code into `sc5game.dll` with the package's own clang, and puts the package's ready-made `sc5.exe`,
+`SC5_GAME_DIR`'s `default.xex`, patched by the `default.xexp` beside it (no `default.xexp`, or one whose SHA-1 is not
+the one in the package's `project\title-update.txt`, which `tools/package.ps1` writes from `sc5.json`: it says which
+update is needed and stops, exit code 1), compiles that code into `sc5game.dll` with the package's own clang, and puts the package's ready-made `sc5.exe`,
 `sc5game.dll` and the runtime's DLLs in `SC5_GAME_EXE`'s folder; `SC5_GAME_EXE` must name `sc5.exe`. It prints one
 line per step for the page's log, and `BUILD OK` at the end; the first build takes a minute or a few, a build with
 nothing changed seconds. In a package `SC5_GAME_EXE` is `games\sc5\sc5.exe` also before the first build. A source
 build has no `build-game.cmd` in its game folder (`sc5\build.cmd` builds the game there), so the page stops after the
 files, saying the compile step is not ready.
+
+The title update in place is checked again by its hashes (`GameProcess::updateProblem`: `disc\default.xexp` and
+`update\patch.cpk`) before the compile step runs, on the Build game page (a large notice over it while it is not
+title update 3), and before the launcher starts the game: a game whose files are from another update is never
+compiled or started, and neither is a packaged game built from another release (`built.txt` against
+`project\VERSION`) until it is built again. An install of 0.1.5 or older that updates itself therefore goes this way:
+the new launcher starts, finds `built.txt` from the old release and title update 1 in place, opens Build game and
+asks for title update 3 (the player's saved step 2 still names title update 1's file, and choosing it again is
+refused by name); once title update 3 is chosen, CHECK AND BUILD puts its `default.xexp` and `patch.cpk` in place
+(the disc already extracted is kept, its files checked by size) and builds the game again.

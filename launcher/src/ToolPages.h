@@ -44,6 +44,7 @@ private:
         bool ok = false;
         QString error;      // why the build cannot go on (shown, nothing extracted)
         QStringList lines;  // what was found, for the log
+        bool wrongUpdate = false;  // the error is about the title update: the player is asked to choose the right one
         bool extractDisc = false;  // a disc image was given (else the disc folder already holds the right one)
         qint64 discBytes = 0, discMissingBytes = 0;
         int discFiles = 0;
@@ -58,12 +59,17 @@ private:
     // the one step after extraction: compiles the game's code for this PC (cfg::buildScript), or says it is not
     // there yet; also the "Compile the game's code" button
     void compileGame();
+    // the title update the player has is not the one the build takes (`text` says which it is and which is needed):
+    // a large window says so, with a button that opens the file picker for step 2 and builds once a file is chosen
+    void askForUpdate(const QString& text);
+    void chooseUpdate(bool buildAfter);  // step 2's Browse...: the package picked, saved, and built when buildAfter
     void runWorker(std::function<void()> work, std::function<void()> done);
     void finishStep();
     void updateProgress();
     void setBusy(bool busy);
     void showDlc();
 
+    QLabel* updateAlert_;  // over the page while the title update in place is not the one the build takes
     QLabel* gameTitle_;
     QLabel* folderInfo_;
     QLabel* discInfo_;
