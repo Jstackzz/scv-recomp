@@ -47,9 +47,11 @@ void Put(uint32_t a, uint32_t v) {
 constexpr uint32_t kSide = 88, kRounds = 8, kRoundTime = 176, kStage = 208;
 
 // What both games must have alike from the battle setup on, which player 2's game takes from player 1's: the random
-// number generators the setup does not seed (Park-Miller and TT800, 0x82938574-0x82924A87, sc5/rng.cpp) and the
-// counters that started at boot (as the netplay's barrier agrees them again: the loading in between draws from them),
-// but the three that count frames presented to the GPU, which each game's own GPU waits by (battle.cpp's kRaw).
+// number generators the setup does not seed (0x82938574-0x8293860B, sc5/rng.cpp: the last two words of a three-word
+// Tausworthe generator's at 0x82938570, Park-Miller at 0x8293857C, TT800 at 0x82938580 and a block of 0x24 bytes at
+// 0x829385E8; title update 1 had the same variables in the same 0x98 bytes, the block before TT800, at 0x829249F0) and
+// the counters that started at boot (as the netplay's barrier agrees them again: the loading in between draws from
+// them), but the three that count frames presented to the GPU, which each game's own GPU waits by (battle.cpp's kRaw).
 // The C library's rand() and the Mersenne Twister both games seed with the match's seed (sub_824B2EA0).
 std::vector<uint32_t> SetupAddresses() {
   std::vector<uint32_t> out;
