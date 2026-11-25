@@ -2,6 +2,7 @@
 
   python tools/py/tumap.py build <old.bin> <new.bin> <map>   match the two images, write the map, print a summary
   python tools/py/tumap.py q <map> <address> [...]           where an old address is in the new image
+  python tools/py/tumap.py r <map> <address> [...]           the other way: the old address of a new one
   python tools/py/tumap.py diff <map> <address> [--all]      the old function at <address> beside its new partner
                                                            (only what differs and a little around it; --all: all)
   python tools/py/tumap.py callers <map> <address>           who branches to an old address, and where each one's
@@ -651,6 +652,21 @@ def main():
     elif cmd == 'diff':
         m.moved_set = set(m.m['moved'])
         show_diff(m, int(sys.argv[3], 16), '--all' in sys.argv)
+    elif cmd == 'r':
+        back = {}
+        for old, new in m.text.items():
+            back[new] = old
+        data_back = defaultdict(list)
+        for old, new in m.data.items():
+            data_back[new].append(old)
+        for s in sys.argv[3:]:
+            a = int(s, 16)
+            if a in back:
+                print('%08X <- %08X  code' % (a, back[a]))
+            elif a in data_back:
+                print('%08X <- %s  data, formed by code' % (a, ', '.join('%08X' % x for x in data_back[a])))
+            else:
+                print('%08X <- --------  (no old instruction or formed address is its partner)' % a)
     elif cmd == 'callers':
         target = int(sys.argv[3], 16)
         A, B = m.A, m.B
