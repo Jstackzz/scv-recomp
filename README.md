@@ -14,7 +14,11 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 - **Soulcalibur V, Xbox 360**, as a disc image (`.iso`; Redump SHA-1 `43dbb40b9ef4e5a651623ada40ed4eb2066017d5`).
   Every Xbox 360 copy, from any region, is this same World disc. A modified copy is refused, since both players of a
   match must run the same code.
-- **Title update 1**: the Xbox Live package `TU_174Q21T_0000008000000.0000000000082` (from your console).
+- **Title update 3**, the game's last update: the Xbox Live package `TU_174Q21T_0000008000000.00000000000O2` (it ends
+  in the capital letter O and the number 2). Your Xbox 360 downloads it when it starts the game online and keeps it
+  on its hard drive, usually in `Content\0000000000000000\4E4D083D\000B0000\`; copy it from there. Title update 1
+  (`...0000000000082`), which SCV Online used until 0.1.5, is no longer taken: both players of a match must have the
+  same update.
 - **Your own DLC**, if you have it: your Xbox 360 DLC packages. Paid DLC is only ever yours: nothing here unlocks it
   for anyone else. If you bought the DLC on PS3, `tools/py/ps3dlc.py` turns your own packs and licenses into Xbox 360
   packages, which you add on Build game with any 360 ones (docs/GAME.md, "Unlocks and downloadable content"). For the
@@ -30,7 +34,7 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 1. Download `SC5-Online-<version>-windows.zip` from [Releases](../../releases) and unpack it somewhere you can write
    to (Documents, say). It has everything: the launcher, the ReXGlue runtime and the compiler that builds the game.
    Nothing else gets installed.
-2. Start `SC5Launcher.exe` and open **Build game**: pick your disc image, the title update and (optionally) your DLC
+2. Start `SC5Launcher.exe` and open **Build game**: pick your disc image, title update 3 and (optionally) your DLC
    packages, then **CHECK AND BUILD**. The launcher checks each one, extracts the disc and compiles the game's code
    for your PC. That happens once and takes a few minutes.
 3. Sign in (top right) and play: **Ranked** or **Casual**, **Lobby** (1, 2 or 3 rounds to win, King of the Hill, Online
@@ -38,7 +42,9 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
    versus on one PC).
 
 The launcher updates itself from this repository's releases; when an update changes the game, it builds the game
-again by itself before you play.
+again by itself before you play. If you played SCV Online 0.1.5 or older, your game was built on title update 1: after
+the update the launcher opens Build game and asks for title update 3 (a button there opens the file picker), then
+builds the game again. It does not start the old game meanwhile.
 
 ## What works
 
@@ -111,8 +117,8 @@ git -C external\rexglue-sdk submodule update --init
 git -C external\rexglue-sdk apply ..\..\patches\rexglue-sdk-v0.10.0.patch
 tools\build-sdk.cmd
 
-rem 2. Your game files: the extracted disc in game\disc with the update's default.xexp beside default.xex,
-rem    and patch.cpk in game\update (the launcher's Build game lays them out too)
+rem 2. Your game files: the extracted disc in game\disc with title update 3's default.xexp beside default.xex,
+rem    and its patch.cpk in game\update (the launcher's Build game lays them out too)
 sc5\codegen.cmd
 sc5\build.cmd release
 
@@ -136,7 +142,7 @@ hosting).
 | [docs/LAUNCHER.md](docs/LAUNCHER.md) | the launcher and the server: building, running, testing, hosting |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | the server's protocol, the UDP formats, and the launcher <-> game contract |
 | [docs/SDK.md](docs/SDK.md) | the ReXGlue SDK and this project's changes to it |
-| [docs/TARGET.md](docs/TARGET.md) | the exact disc and title update |
+| [docs/TARGET.md](docs/TARGET.md) | the exact disc and title update (3; title update 1 until 0.1.5) |
 | [docs/PLAN.md](docs/PLAN.md) | the plan and its milestones |
 | [sc5/player/README.md](sc5/player/README.md) | how a player's PC builds the game |
 

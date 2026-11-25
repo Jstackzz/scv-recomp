@@ -1,7 +1,8 @@
 # What a player's PC needs to build the game: nothing but the package
 
-Nobody ships the game's code: every PC translates its own copy from its own disc and title update, and that translated
-C++ has to be compiled there. The package holds everything for that, so the launcher's Build game page works on a PC
+Nobody ships the game's code: every PC translates its own copy from its own disc and title update 3 (the game's last
+update, `TU_174Q21T_0000008000000.00000000000O2`, from the player's own Xbox 360; docs\TARGET.md; title update 1 until
+0.1.5), and that translated C++ has to be compiled there. The package holds everything for that, so the launcher's Build game page works on a PC
 with no developer tools at all: no Visual Studio, no CMake, no Python. MK9 Online's way (mk9-rollback `mk9\player`),
 with the same SDK.
 
@@ -18,7 +19,12 @@ The game is two parts:
 `SC5_UPDATE_DIR` and `SC5_GAME_EXE`, docs\PROTOCOL.md 3.7):
 
 1. copies `default.xex` and the title update's `default.xexp` from `SC5_GAME_DIR` (the launcher's `disc\`) into
-   `project\xex`, where the package's manifest reads them, and runs the package's `rexglue.exe codegen`;
+   `project\xex`, where the package's manifest reads them, checks that `default.xexp` is the update this release is
+   built on (its SHA-1 against `project\title-update.txt`, which `tools\package.ps1` writes from the launcher's
+   `sc5.json`: "<SHA-1> <the update's number>"; Windows' `certutil` hashes it), and runs the package's `rexglue.exe
+   codegen`. Another update (title update 1, left in place by an install of 0.1.5 or older) stops it with exit code 1
+   and a line saying which update to choose on Build game: the launcher refuses it before that, this is for a run by
+   hand;
 2. compiles the translated code with the package's clang and links `sc5game.dll` with its lld (`build.ninja`, run by
    its ninja);
 3. puts `host\sc5.exe`, `sc5game.dll` and the runtime's DLLs (the SDK's, Microsoft's C++ runtime) where
@@ -79,7 +85,8 @@ When the SDK or the codegen changes, redo this.
 
 - `tools\player\test-clean-build.ps1 -Game <package>\games\sc5 -Disc <folder with default.xex and default.xexp>` builds
   it as a PC with nothing installed would, as the launcher runs it; add `-March x86-64-v2` for what a CPU without AVX2
-  builds (the libcalls differ).
+  builds (the libcalls differ). A `-Disc` folder with title update 1's `default.xexp` (`orig\x360\tu1`) must stop at
+  once with the line naming title update 3.
 - `tools\player\check_package.py <package>` fails if anything needs a DLL outside the package and Windows, or if a built
   `sc5game.dll` left a hook out.
 - `tools\player\test-boot.ps1 -Exe <package>\games\sc5\sc5.exe -Work <empty folder> -Disc <disc> -Update <update>`
@@ -99,8 +106,10 @@ letter outside the system's code page (a Windows account's name, say) stops code
 
 `build-game.cmd` costs a second when nothing changed: codegen sees its inputs are the same, ninja has no work, and the
 new `sc5.exe` is copied in. A release that changes only `sc5.exe`'s code does not make anyone compile the game: running
-the script again puts it in place (`built.txt` names the release a game was built from, for the launcher to build again
-after an update; it does not look yet). A new hook is a relink. A change to the headers here compiles everything again,
+the script again puts it in place (`built.txt` names the release a game was built from: after an update the launcher
+builds the game again when it differs, and starts no game until then). A release that moves to another title update
+(0.1.5's title update 1 to title update 3) makes every player choose the new package on Build game first: the
+launcher asks for it, and the compile that follows translates the whole game again. A new hook is a relink. A change to the headers here compiles everything again,
 a change to the codegen's config the files whose functions changed.
 
 On this PC (Ryzen 7 9800X3D, 16 threads): codegen 6 s, the whole compile 25-30 s, about 190 MB per clang, 2.4 GB for 16
