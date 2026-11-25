@@ -20,7 +20,8 @@ POINTERS = {0x22638, 0x5BE90, 0x5CB44, 0x5CBF4, 0x5CCA4, 0x5CD54, 0x5CE04, 0x5CE
 
 def kind(a):
     for p in (P1, P2):
-        big, drawn = (0x3190, 0x1B310) if p == P1 else (0x3160, 0x1B360)  # on round addresses: P2's lie apart
+        # on round addresses (battle.cpp's kPoseBuffers): the next multiple of 0x80 from +0x3160 and +0x1B310
+        big, drawn = ((p + 0x3160 + 0x7F) & ~0x7F) - p, ((p + 0x1B310 + 0x7F) & ~0x7F) - p
         if any(p + big + k * 0x8000 <= a < p + big + k * 0x8000 + 6208 for k in range(3)):
             return "pose"
         if any(p + drawn + k * 0x800 <= a < p + drawn + k * 0x800 + 0x800 for k in range(3)):  # for the drawing

@@ -23,11 +23,11 @@ def counted(a):
     for base in PLAYERS:
         if base <= a < base + PSIZE:
             o = a - base
-            for k in range(3):  # each player's buffers lie on round addresses: P2's 0x30 lower and 0x50 higher
-                lo = (0x3190 if base == 0x8294AC10 else 0x3160) + k * 0x8000
+            for k in range(3):  # each player's buffers lie on round addresses (battle.cpp's kPoseBuffers)
+                lo = ((base + 0x3160 + 0x7F) & ~0x7F) - base + k * 0x8000
                 if lo <= o < lo + 6208:
                     return False
-                dr = (0x1B310 if base == 0x8294AC10 else 0x1B360) + k * 0x800
+                dr = ((base + 0x1B310 + 0x7F) & ~0x7F) - base + k * 0x800
                 if dr <= o < dr + 0x800:
                     return False
             return not (0x22638 <= o < 0x5DAD4 and any(p <= o < p + 4 for p in PTRS))
