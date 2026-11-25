@@ -1297,6 +1297,12 @@ to the result, also with 60 ms each way (rollbacks of at most 2 frames, 4.5 ms o
 over 20 ms); Rematch in sync; park from the result back to `ready` in 20 s, from a fight in 7 s; a second match after
 a park; quit. Elysium against Dampierre, and Xiba against Voldo with 60 ms each way and picks on the select screen: the first
 match, a rematch and the next match after a park all in sync.
+With title update 3 (2026-11-25): boot to `ready` in 32 s (the main menu's two windows closed by its state);
+picks on the select screen (`-`, the tests' players picking Siegfried in costume 2 and Mitsurugi), a lobby's choices
+(REMATCH: the game's own Rematch on the same stage; then CHARACTER SELECT: both pick again, the loser picks the stage)
+and park; Xiba against Voldo in costume 2, best of 3 (a drawn round, then between rounds), a rematch through Character
+Select, park and a second match; Online Practice (the clock held at 60, the health refilled) to its BACK; and
+`mode=practice` twice to Training's fight and back through its pause menu: all to their end, every match in sync.
 
 **The second player.** The VS menus ignore the second pad: the select (sub_82164BB8, at P1's first pick) makes the
 other side the CPU (VS settings: type 2 at +88/+92 of the select's record; the battle's player then has input mode 2,
