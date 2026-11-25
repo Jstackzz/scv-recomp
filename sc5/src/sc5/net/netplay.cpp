@@ -41,10 +41,11 @@
 //  17 GOAT   u32 frames   the next match from the result screen: this game had the launcher's `rematch` that many frames
 //            after the match's end; both games take the result screen's menu from the same frame counted from there
 //            (RematchAt); repeated while connecting
-//  18 DSUMS  u32 frame, u32 layout low, u32 layout high, u16 blocks, u32 bytes, u16 chunk, u16 chunks, u16 n, n x u32
-//            after a check of that frame failed: a hash of every 256 bytes of the sender's snapshot of it (what the
-//            check hashes), with a hash of the snapshot's layout (its blocks' addresses and sizes); repeated
-//  19 DBYTES u32 frame, u16 index, u16 count, u16 page, u16 len, len bytes
+//  18 DSUMS  u32 frame, u16 chunk, u16 chunks, u16 n, n x (u32 address, u32 hash)
+//            after a check of that frame failed: a hash of every page (256 bytes at most) of the fight in the
+//            sender's snapshot of it, each by its guest address (the static memory only: what the check hashes);
+//            repeated
+//  19 DBYTES u32 frame, u16 index, u16 count, u32 address, u16 len, len bytes
 //            the sender's bytes of one of the first pages that differ (count of them in all); repeated
 //  20 AGAIN  u32 round, u32 from
 //            after a failed check: "the round again from its start" (RoundAgain): the match frame the sender's present
@@ -424,22 +425,23 @@ struct Evidence {
   bool normalized = false;
 };
 struct DetailPage {
-  uint32_t source, pos, len;  // the guest address of its first byte, its place in the snapshot
+  uint32_t pos, len;  // its place in the snapshot
 };
 struct Detail {
   bool active = false, compared = false, done = false, ended = false;
   uint32_t frame = 0;
   Clock::time_point deadline, last_send, linger;
-  std::vector<DetailPage> pages;     // ours of that frame
-  std::vector<uint16_t> differing;   // page numbers, once compared
+  // ours of that frame: the pages of the fight by the guest address of their first byte (static memory, the same
+  // place in both games; a heap object's block or the stack's is not in the check and lies elsewhere in each game)
+  std::map<uint32_t, DetailPage> pages;
+  std::vector<uint32_t> differing;  // their addresses, once compared
   // the other game's, as they come (kept from before this game's own check failed, should theirs fail first)
   uint32_t their_frame = 0;
-  uint64_t their_layout = 0;
-  uint32_t their_blocks = 0, their_bytes = 0;
   int their_chunks = -1;
-  std::map<uint16_t, std::vector<uint32_t>> their_sums;
+  std::set<uint16_t> their_chunks_in;
+  std::map<uint32_t, uint32_t> their_sums;               // address -> hash
   int their_count = -1;                                  // pages of bytes they pass
-  std::map<uint16_t, std::vector<uint8_t>> their_pages;  // page number -> bytes
+  std::map<uint32_t, std::vector<uint8_t>> their_pages;  // address -> bytes
 };
 std::map<uint32_t, Evidence> g_evidence;
 Detail g_detail;
@@ -964,6 +966,29 @@ void HandlePacket(const uint8_t* b, int n) {
     while (p.inputs.count(p.contiguous)) p.contiguous++;
   } else if (type == kCheck && n >= 20 && match == g_match) {
     p.checks[u32(8)] = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
+  } else if (type == kDetailSums && n >= 18 && match == g_match) {
+    Detail& d = g_detail;
+    const uint32_t frame = u32(8);
+    if (d.active ? frame != d.frame : (d.their_chunks >= 0 && frame != d.their_frame)) return;
+    uint16_t chunk, chunks, count;
+    std::memcpy(&chunk, b + 12, 2);
+    std::memcpy(&chunks, b + 14, 2);
+    std::memcpy(&count, b + 16, 2);
+    if (chunks > 64 || chunk >= chunks || 18 + int(count) * 8 > n) return;
+    d.their_frame = frame;
+    d.their_chunks = chunks;
+    d.their_chunks_in.insert(chunk);
+    for (int i = 0; i < count; i++) d.their_sums[u32(18 + i * 8)] = u32(22 + i * 8);
+  } else if (type == kDetailBytes && n >= 22 && match == g_match) {
+    Detail& d = g_detail;
+    if (!d.active || u32(8) != d.frame) return;
+    uint16_t index, count, len;
+    std::memcpy(&index, b + 12, 2);
+    std::memcpy(&count, b + 14, 2);
+    std::memcpy(&len, b + 20, 2);
+    if (count > kDetailPages || index >= count || len > kPage || 22 + int(len) > n) return;
+    d.their_count = count;
+    d.their_pages[u32(16)].assign(b + 22, b + 22 + len);
   } else if (type == kCall && n >= 16 && match == g_match) {
     // of the round call this game is in, and not one made alike already
     if (g_call.frame && u32(8) == g_call.frame && g_call.done != g_call.frame) {
@@ -973,34 +998,6 @@ void HandlePacket(const uint8_t* b, int n) {
   } else if (type == kAgain && n >= 16 && match == g_match) {
     // of the round this game is in (a late one of a round both went back to already says nothing)
     if (g_round.kept && u32(8) == g_round.frame) g_again_peer = AgainPeer{true, u32(12)};
-  } else if (type == kDetailSums && n >= 32 && match == g_match) {
-    Detail& d = g_detail;
-    const uint32_t frame = u32(8);
-    if (d.active ? frame != d.frame : (d.their_chunks >= 0 && frame != d.their_frame)) return;
-    uint16_t chunk, chunks, count;
-    std::memcpy(&chunk, b + 26, 2);
-    std::memcpy(&chunks, b + 28, 2);
-    std::memcpy(&count, b + 30, 2);
-    if (chunks > 64 || chunk >= chunks || 32 + int(count) * 4 > n) return;
-    d.their_frame = frame;
-    d.their_layout = uint64_t(u32(12)) | uint64_t(u32(16)) << 32;
-    std::memcpy(&d.their_blocks, b + 20, 2);
-    d.their_bytes = u32(22);
-    d.their_chunks = chunks;
-    std::vector<uint32_t>& sums = d.their_sums[chunk];
-    sums.resize(count);
-    if (count) std::memcpy(sums.data(), b + 32, size_t(count) * 4);
-  } else if (type == kDetailBytes && n >= 20 && match == g_match) {
-    Detail& d = g_detail;
-    if (!d.active || u32(8) != d.frame) return;
-    uint16_t index, count, page, len;
-    std::memcpy(&index, b + 12, 2);
-    std::memcpy(&count, b + 14, 2);
-    std::memcpy(&page, b + 16, 2);
-    std::memcpy(&len, b + 18, 2);
-    if (count > kDetailPages || index >= count || len > kPage || 20 + int(len) > n) return;
-    d.their_count = count;
-    d.their_pages[page].assign(b + 20, b + 20 + len);
   } else if (type == kBye && match == g_match) {
     p.left = true;
     if (g_cfg.sparring) g_back_seen = true;  // Online Practice: the other's leaving ends it as BACK does
@@ -1405,23 +1402,20 @@ void Normalize(Evidence& e) {
   }
 }
 
-std::vector<DetailPage> PagesOf(const Evidence& e) {
-  std::vector<DetailPage> out;
+// the pages of the fight in a snapshot, by guest address: the static memory's blocks (from the game's image on, below
+// the physical addresses), each in pieces of 256 bytes at most, where any byte is in the check
+std::map<uint32_t, DetailPage> PagesOf(const Evidence& e) {
+  std::map<uint32_t, DetailPage> out;
   for (const battle::Block& b : e.blocks) {
-    if (b.pos + b.size > e.data.size()) continue;
-    for (uint32_t off = 0; off < b.size; off += kPage) out.push_back({b.source + off, b.pos + off, std::min(kPage, b.size - off)});
+    if (b.pos + b.size > e.data.size() || b.source < 0x80000000u || b.source >= 0xA0000000u) continue;
+    for (uint32_t off = 0; off < b.size; off += kPage) {
+      const uint32_t len = std::min(kPage, b.size - off);
+      bool fight = false;
+      for (uint32_t i = 0; i < len && !fight; i++) fight = battle::KindOf(b.source + off + i) == battle::Kind::Fight;
+      if (fight) out[b.source + off] = DetailPage{b.pos + off, len};
+    }
   }
   return out;
-}
-
-uint64_t LayoutOf(const Evidence& e) {
-  uint64_t h = 1469598103934665603ull;
-  // The blocks' sizes in their order, not their addresses: a heap object's or the stack's block lies where each game's
-  // own heap put it, and a pose's block is whichever of three buffers is current in that game. (Until 0.1.4 the
-  // addresses from 0x80000000 on were hashed too: every report from two PCs said only "laid out apart".)
-  for (const battle::Block& b : e.blocks)
-    for (int i = 0; i < 4; i++) h = (h ^ ((b.size >> (8 * i)) & 0xFF)) * 1099511628211ull;
-  return h;
 }
 
 uint32_t PageSum(const Evidence& e, const DetailPage& p) {
@@ -1435,21 +1429,20 @@ void SendDetailSums() {
   auto it = g_evidence.find(d.frame);
   if (it == g_evidence.end()) return;
   const Evidence& e = it->second;
-  const uint64_t layout = LayoutOf(e);
-  constexpr size_t kPer = 300;
+  constexpr size_t kPer = 160;
   const uint16_t chunks = uint16_t(std::max<size_t>(1, (d.pages.size() + kPer - 1) / kPer));
+  auto page = d.pages.begin();
   for (uint16_t c = 0; c < chunks; c++) {
     Writer w = Header(kDetailSums);
     w.U32(d.frame);
-    w.U32(uint32_t(layout));
-    w.U32(uint32_t(layout >> 32));
-    w.U16(uint16_t(e.blocks.size()));
-    w.U32(uint32_t(e.data.size()));
     w.U16(c);
     w.U16(chunks);
-    const size_t from = size_t(c) * kPer, to = std::min(d.pages.size(), from + kPer);
-    w.U16(uint16_t(to > from ? to - from : 0));
-    for (size_t i = from; i < to; i++) w.U32(PageSum(e, d.pages[i]));
+    const size_t count = std::min(kPer, d.pages.size() - size_t(c) * kPer);
+    w.U16(uint16_t(count));
+    for (size_t i = 0; i < count; i++, ++page) {
+      w.U32(page->first);
+      w.U32(PageSum(e, page->second));
+    }
     Send(w);
   }
 }
@@ -1458,14 +1451,16 @@ void SendDetailBytes() {
   Detail& d = g_detail;
   auto it = g_evidence.find(d.frame);
   if (it == g_evidence.end() || !d.compared) return;
-  const uint16_t count = uint16_t(std::min(d.differing.size(), kDetailPages));
-  for (uint16_t i = 0; i < count; i++) {
-    const DetailPage& p = d.pages[d.differing[i]];
+  std::vector<uint32_t> mine;  // the differing pages this game has
+  for (uint32_t a : d.differing)
+    if (d.pages.count(a) && mine.size() < kDetailPages) mine.push_back(a);
+  for (size_t i = 0; i < mine.size(); i++) {
+    const DetailPage& p = d.pages[mine[i]];
     Writer w = Header(kDetailBytes);
     w.U32(d.frame);
-    w.U16(i);
-    w.U16(count);
-    w.U16(d.differing[i]);
+    w.U16(uint16_t(i));
+    w.U16(uint16_t(mine.size()));
+    w.U32(mine[i]);
     w.U16(uint16_t(p.len));
     w.Bytes(it->second.data.data() + p.pos, int(p.len));
     Send(w);
@@ -1482,6 +1477,7 @@ void BeginDetail(uint32_t f) {
   d.last_send = Clock::time_point{};
   if (d.their_chunks >= 0 && d.their_frame != f) {  // theirs was of another frame: not this one's
     d.their_chunks = -1;
+    d.their_chunks_in.clear();
     d.their_sums.clear();
   }
   REXLOG_INFO("sc5 desync: match {} frame {} (now {}), battle {}, rounds won {}-{}, health {:.1f} / {:.1f}, input delay "
@@ -1500,33 +1496,39 @@ void BeginDetail(uint32_t f) {
   d.pages = PagesOf(it->second);
 }
 
-// their sums are all here: which pages differ
+// their sums are all here: which pages differ (by address: one a game alone has differs too)
 void CompareDetail() {
   Detail& d = g_detail;
   const Evidence& e = g_evidence[d.frame];
   d.compared = true;
-  if (d.their_layout != LayoutOf(e)) {
-    REXLOG_INFO("sc5 desync: the two snapshots are laid out apart: {} blocks in {} bytes here, {} in {} there", e.blocks.size(),
-                e.data.size(), d.their_blocks, d.their_bytes);
-    d.done = true;
-    return;
+  size_t only_here = 0, only_there = 0;
+  std::map<uint32_t, uint32_t> apart;  // address -> bytes
+  for (const auto& [address, page] : d.pages) {
+    auto theirs = d.their_sums.find(address);
+    if (theirs != d.their_sums.end() && theirs->second == PageSum(e, page)) continue;
+    if (theirs == d.their_sums.end()) only_here++;
+    apart[address] = page.len;
   }
-  std::vector<uint32_t> theirs;
-  for (auto& [chunk, sums] : d.their_sums) theirs.insert(theirs.end(), sums.begin(), sums.end());
+  for (const auto& [address, sum] : d.their_sums)
+    if (!d.pages.count(address)) {
+      only_there++;
+      apart[address] = 0;
+    }
   std::vector<std::pair<uint32_t, uint32_t>> runs;  // the differing pages as stretches of memory: address, bytes
-  for (size_t i = 0; i < d.pages.size() && i < theirs.size(); i++) {
-    if (PageSum(e, d.pages[i]) == theirs[i]) continue;
-    d.differing.push_back(uint16_t(i));
-    const DetailPage& p = d.pages[i];
-    if (!runs.empty() && runs.back().first + runs.back().second == p.source)
-      runs.back().second += p.len;
+  for (const auto& [address, len] : apart) {
+    d.differing.push_back(address);
+    if (!runs.empty() && runs.back().first + runs.back().second == address && len)
+      runs.back().second += len;
     else
-      runs.emplace_back(p.source, p.len);
+      runs.emplace_back(address, len);
   }
   std::string where;
   for (size_t i = 0; i < runs.size() && i < 24; i++) where += fmt::format(" {}({})", PlaceName(runs[i].first), runs[i].second);
   if (runs.size() > 24) where += fmt::format(" and-{}-more-places", runs.size() - 24);
-  LogDetailParts(fmt::format("frame {}: {} of {} pages differ, at (bytes):", d.frame, d.differing.size(), d.pages.size()),
+  LogDetailParts(fmt::format("frame {}: {} of {} pages differ{}, at (bytes):", d.frame, d.differing.size(), d.pages.size(),
+                             only_here || only_there
+                                 ? fmt::format(" ({} only this game's snapshot has, {} only the other's)", only_here, only_there)
+                                 : std::string()),
                  where.empty() ? " nowhere (the hashes differ in what a page's hash does not tell)" : where);
   if (d.differing.empty()) d.done = true;
 }
@@ -1536,27 +1538,28 @@ void LogDetailWords() {
   Detail& d = g_detail;
   const Evidence& e = g_evidence[d.frame];
   size_t named = 0, more = 0;
-  for (auto& [page, bytes] : d.their_pages) {
-    if (page >= d.pages.size()) continue;
-    const DetailPage& p = d.pages[page];
+  for (auto& [address, bytes] : d.their_pages) {
+    auto mine = d.pages.find(address);
+    if (mine == d.pages.end()) continue;
+    const DetailPage& p = mine->second;
     for (uint32_t i = 0; i + 4 <= p.len && i + 4 <= bytes.size(); i += 4) {
-      uint32_t mine, theirs;
-      std::memcpy(&mine, e.data.data() + p.pos + i, 4);
-      std::memcpy(&theirs, bytes.data() + i, 4);
-      if (mine == theirs) continue;
+      uint32_t here, there;
+      std::memcpy(&here, e.data.data() + p.pos + i, 4);
+      std::memcpy(&there, bytes.data() + i, 4);
+      if (here == there) continue;
       if (named >= kDetailWords) {
         more++;
         continue;
       }
       named++;
-      mine = __builtin_bswap32(mine);
-      theirs = __builtin_bswap32(theirs);
-      float fm, ft;
-      std::memcpy(&fm, &mine, 4);
-      std::memcpy(&ft, &theirs, 4);
+      here = __builtin_bswap32(here);
+      there = __builtin_bswap32(there);
+      float fh, ft;
+      std::memcpy(&fh, &here, 4);
+      std::memcpy(&ft, &there, 4);
       auto plain = [](float v) { return v == v && ((v > 1e-4f && v < 1e7f) || (v < -1e-4f && v > -1e7f) || v == 0.0f); };
-      REXLOG_INFO("sc5 desync: {}: {:08X} here, {:08X} there{}", PlaceName(p.source + i), mine, theirs,
-                  plain(fm) && plain(ft) ? fmt::format(" (as floats {:g} and {:g})", fm, ft) : "");
+      REXLOG_INFO("sc5 desync: {}: {:08X} here, {:08X} there{}", PlaceName(address + i), here, there,
+                  plain(fh) && plain(ft) ? fmt::format(" (as floats {:g} and {:g})", fh, ft) : "");
     }
   }
   if (more) REXLOG_INFO("sc5 desync: and {} more words in the pages passed", more);
@@ -1571,9 +1574,9 @@ bool DetailPump() {
   if (!d.active || d.ended) return false;
   const auto now = Clock::now();
   if (!d.done) {
-    if (!d.compared && d.their_chunks >= 0 && int(d.their_sums.size()) >= d.their_chunks) CompareDetail();
-    const size_t want = std::min(d.differing.size(), kDetailPages);
-    if (d.compared && !d.done && d.their_count >= 0 && d.their_pages.size() >= std::min<size_t>(want, size_t(d.their_count))) {
+    if (!d.compared && d.their_chunks >= 0 && int(d.their_chunks_in.size()) >= d.their_chunks) CompareDetail();
+    // (their_count 0: the differing pages are all this game's alone)
+    if (d.compared && !d.done && d.their_count >= 0 && d.their_pages.size() >= size_t(d.their_count)) {
       LogDetailWords();
       d.done = true;
     }
