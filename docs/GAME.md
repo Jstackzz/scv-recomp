@@ -146,7 +146,7 @@ and one the package no longer has goes. Dampierre's package (LIVE, "DLC01:DAMPIE
     (0), u32 license bits (1: bit 0 of the package's license mask)
 
 The DLC manager (table 0x82782F30, which the manager object 0x82782F94 keeps at +8: title update 3's, seen with
-`SC5_DBG_DLC=1`; vtable 0x820D2394: state at +8, at +40 an array of 30 package objects of 344 bytes,
+`SC5_DBG_DLC=1`; vtable 0x820D2D24: state at +8, at +40 an array of 30 package objects of 344 bytes,
 their count at +44) names its objects DLC00 to DLC29 and takes an installed package into the object whose name its
 display name contains (`wcsstr`): "DLC01:DAMPIERRE" is DLC01. It mounts the first package of each object as `DLCnn:`
 (any other of the same group only for its license mask, as `licence_drive`), reads `DLCnn:index_nn_X360.dat`, and for
@@ -155,10 +155,10 @@ from the object's +0x1C, by slot) and marks it (+0xD bit 0x80); an empty name gi
 path='DLCnn:\'` lines of the log. An entry is granted (bit 0x40) when its license bits meet the package's license mask
 (the object's +340; bits 0: always), and `sub_82394D40` (once the table's state is 7 to 11) finds a release id among
 the granted entries' n2 ids. The files: a granted entry with an archive below 15 replaces that file of that archive
-(`sub_823864C8`, slot 9: a std::map per archive at the table's +0x70; a unique insert, objects in order, so **the
+(`sub_82395398`, slot 9: a std::map per archive at the table's +0x70; a unique insert, objects in order, so **the
 lowest group's** copy of a file wins); every file request of the game goes through `sub_823627B0`, which sends a
 replaced one to archive 14 with the entry's handle (group << 16 | slot), whose size (`sub_82394F80`) and path
-(`sub_82386080`, slot 10 `sub_823966E0`: `DLCnn:<name>`) come from the entry; the file is read whole, as it is (no
+(`sub_82394E78`, slot 11 `sub_823966E0`: `DLCnn:<name>`) come from the entry; the file is read whole, as it is (no
 CRI compression). A created character's downloadable models, ModelData 0x7Fggss00, load the same way: group gg's
 entry ss. The archives: 0 cpudata, 1 cdata, 2 stage, 3 motion, 4 weapon, 5 creation, 6 human, 7 voice, 8 dna, 9
 text, 10 demo, 11 patch (title update 1's `patch.cpk`), 14 the DLC (the table at 0x82753438, 24 bytes each).
@@ -915,7 +915,7 @@ the next match (CHOICE).
   nearly every frame is a guess when it runs.
 - **Where a frame run again spends its time** (`SC5_TEST_RERUN_PROFILE=1`: the step, the pads and the tasks phase
   timed, and the game's tasks one by one: rerun_profile.cpp; logged every 2000 frames run again). The step
-  (sub_824A25C0) walks the game's task tree (its manager at [0x835A3850], the first task at +12) and calls each task's
+  (sub_824A25C0) walks the game's task tree (its manager at [0x835B73D0], the first task at +12) and calls each task's
   methods through its vtable, which the recompiled code dispatches through the SDK's function table: the profile
   swaps each found method's entry for a timing wrapper of its own. A function called directly gets timed (and, with
   `SC5_TEST_RERUN_SKIP=<address>`, left out of frames run again) by a hook line (`SC5_RERUN_TIME`). In the
@@ -1305,7 +1305,7 @@ step, as 0.1.3's rematches did). No choice in a minute: the launcher parks the g
 per side 88 bytes: +0 1 a player / 2 the CPU, +4 the input, +8 the rounds to win (Battle Count), +12 and +16 health
 240.0; then +176 the round time, +208 the stage). Online, player 1's game sets the rounds to win from the start line
 (best of N: (N+1)/2) and sends its stage, round time, rounds and its values of the generators the setup does not
-seed (Park-Miller and TT800, 0x82938574-0x82924A87) and of the counters that started at boot; player 2's game waits
+seed (Park-Miller and TT800, 0x82938574-0x8293860B) and of the counters that started at boot; player 2's game waits
 for them and takes them (SETUP). Both then seed the C library's rand and the Mersenne Twister with the match's seed.
 
 **The result.** A match is over when a KO goes on to neither its replay nor "between rounds" (battle state 0xBC,
@@ -1432,3 +1432,56 @@ ids the first time the game asks about one (the select screen asks about Dampier
 (mk9/net/rollback.cpp: every page the simulation writes kept in an undo log, the heap's allocator with it) would also
 put back the cosmetic objects above; nothing in the fight needs it so far.
 
+
+## From title update 1 to title update 3
+
+Until 0.1.5 the game was built on title update 1 (0.0.1.2). The Xbox 360 release has three title updates (2012-02-01,
+2012-03-22, 2012-06-06; the PlayStation 3's last patch is 1.03), and the third (0.0.3.2, docs\TARGET.md) is what the
+game is built on now: the balance changes of the second and third, the Cepheus Store and the compatibility with
+downloadable parts. On entering the main menu it says so itself ("The following changes and additions have been made
+with the title update: Added Cepheus Store ... Character balance ...").
+
+**What moved.** The code grew by 66 KB and the data moved up by 0x10000 and more, so almost no address stayed. Of the
+26,120 blocks of code of title update 1 (the .pdata functions and the leaf functions between them) 25,374 are in title
+update 3 unchanged but for their place, 558 changed, 188 are gone, and 482 are new. Variables moved by +0x13B00 to
++0x13BB0 for the most part, but not as one block: the linker put some in another order (the random number generators'
+variables: Park-Miller is at 0x8293857C and TT800 right behind it at 0x82938580, where title update 1 had 0x24 bytes
+of other variables between them).
+
+**How the addresses were carried over.** `tools/py/tumap.py` matches the two images (`orig\analysis\default_tu1.bin`,
+`default_tu3.bin`; its docstring says how: blocks by a fingerprint without what a relink changes, paired in order and
+then corrected by their callers and by the tables of code pointers; data by the addresses the paired code forms) and
+writes `orig\analysis\tu1_tu3.map`. `tools/py/tuport.py` rewrote, once, every address in the sources and documents
+that the map was sure of (1,295 uses of 552 addresses) and listed 18 it was not, which were looked at by hand
+(`tumap.py diff`, `callers`, `off`, `r`). What the map cannot know: a structure's offsets (`off` shows what the game's
+own code did with one), an address inside a function that changed, an address the game works out as it runs (the pose
+buffers below), and a function only reached through a pointer (`tools/py/find_indirect_funcs.py` finds those again
+from the new image, with `--single`; title update 3 has leaf functions that begin right where a .pdata function ends,
+after a call that never returns, 0x822A6970, which it now takes too).
+
+**What title update 3 changed that this code had to follow.**
+- The frame: the drawing's phase 0x400 (`sub_824AD398`, title update 1's `sub_8249E548`) no longer takes its lock
+  itself; its two callers do (the frame, `sub_82164070`, and the wait for a draw request, `sub_824AD5B0`: critical
+  section 0x835BAC08, `sub_8254C300` / `sub_8254C308`). The return address frame.cpp knows the wait by is 0x824AD5F8.
+- The fight's data is laid out as before: a save writes the same blocks with the same sizes (`SC5_DBG_SNAP_BLOCKS`
+  in both builds), and the fight test (`tools/synctest.sh`, 1 and 4 frames back) gives the same counts, the same
+  cosmetic differences at the same places and no difference in the fight. Each player's object is where the map says
+  (0x8294AC10, 0x829A8740), but the pose buffers inside are placed by a rule, not at fixed offsets ("Player 2's pose
+  in the check"): battle.cpp works them out. The AI's region kept beside a snapshot is 16 bytes longer. The round's
+  call writes a float at each player's +0x3114 that title update 1 did not have, and between rounds raises each
+  player's +0x1864 by 23 (to 240 at most) when the setup's +0xB4 is 2 or more: both in the players' objects, so in
+  every snapshot and in the check.
+- The menus: the main menu's notice of the update and its states, and the "No save data" message box's new caller
+  ("The launcher's game").
+- Created characters and downloadable parts: the fight no longer swaps a character with downloadable parts for a
+  template; it shows the plain body when a part's data cannot be loaded, and the check refuses a record whose
+  downloadable models have no file on this PC, so both games of a match load the same ("Created characters online",
+  "Unlocks and downloadable content"). The game registers the parts' names itself.
+- The launcher and the player's build take title update 3 only and refuse title update 1 by name (docs\LAUNCHER.md).
+
+**Checked with title update 3** (2026-11-25): the fight test as above; two games through the link with 40 ms each
+way; the 14 character pairs of `tools/pairsweep.sh` (a first to 3 each, both players mashing, 60 ms each way with
+jitter and loss): every match in step to the same result, no round played again, no round's call made alike; a match
+with game 2's heap 64 MB higher; a match with a spectator and `SC5_TEST_POSE_NOISE`, the spectator agreeing at every
+check; the 27 stage places of `tools/stagesweep.sh` with ring-outs. Two PCs' games can still differ in ways one PC
+does not show (0.1.4's first day): after a release the server's `DESYNC_PAIR` lines say.
