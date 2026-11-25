@@ -11,16 +11,31 @@
   "disc_name": "Soulcalibur V (World).iso",
   "disc_sha1": "43dbb40b9ef4e5a651623ada40ed4eb2066017d5",
   "title_update": {
-    "name": "Title Update 1",
-    "package": "TU_174Q21T_0000008000000.0000000000082",
-    "xexp_sha1": "47a09662fd3fe376d283208fcd8a31eee819c736",
+    "number": 3,
+    "package": "TU_174Q21T_0000008000000.00000000000O2",
+    "package_note": "it ends in the capital letter O and the number 2",
+    "xexp_sha1": "e8f8eb269aed296aec32549a79b689e31cde14dc",
     "from_version": "0.0.0.2",
-    "to_version": "0.0.1.2",
+    "to_version": "0.0.3.2",
     "files": {
-      "default.xexp": "47a09662fd3fe376d283208fcd8a31eee819c736",
-      "patch.cpk": "0b2b9d30ce56c02fafa91a0f4fbdaeb23d441a93"
+      "default.xexp": "e8f8eb269aed296aec32549a79b689e31cde14dc",
+      "patch.cpk": "c41ceee22a4bea04d8508f34df15039450e34f02"
     }
   },
+  "older_title_updates": [
+    {
+      "number": 1,
+      "package": "TU_174Q21T_0000008000000.0000000000082",
+      "xexp_sha1": "47a09662fd3fe376d283208fcd8a31eee819c736",
+      "from_version": "0.0.0.2",
+      "to_version": "0.0.1.2",
+      "files": {
+        "default.xexp": "47a09662fd3fe376d283208fcd8a31eee819c736",
+        "patch.cpk": "0b2b9d30ce56c02fafa91a0f4fbdaeb23d441a93"
+      },
+      "note": "what SCV Online was built on until 0.1.5"
+    }
+  ],
   "modes": [
     {
       "id": "versus",
