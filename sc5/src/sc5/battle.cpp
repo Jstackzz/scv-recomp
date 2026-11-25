@@ -62,8 +62,10 @@ constexpr uint32_t kThrowObject = 0x5BE90;  // in each player's object: a throw'
 const Region kRaw[] = {
     {0x8294AC10, 0x5DB30}, {0x829A8740, 0x5DB30}, {0x8277B808, 0x200}, {0x82784A80, 0x100},
     {0x82784B80, 0xB40},   {0x828C75C0, 0x6A8},   {0x82910CB0, 0x3E0}, {0x82938574, 0x98},
-    {0x828FC310, 4},       {0x835C79B4, 4},       {0x82A29520, 0x3760},
+    {0x828FC310, 4},       {0x835C79B4, 4},       {0x82A29520, 0x3770},
 };
+// (Title update 3 put 16 bytes more into the AI's region, between what title update 1 had at 0x82A186C0 and at
+// 0x82A187A0: it is 0x3770 bytes now, to where the allocator's control block begins, as before.)
 // (Not the three counters of the game's frames on the GPU, though they too start at boot: 0x8282CE1C, the low word of
 // the frame sync's count of frames presented (0x8282CD80 + 152, sub_82552A28), 0x82821A14 (sub_82560AD8) and
 // 0x8282D49C (sub_82553960). Only the present (sub_824A3988, never in a frame run again) moves them, so each rollback
