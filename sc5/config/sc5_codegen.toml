@@ -1,5 +1,5 @@
-# Codegen configuration for Soulcalibur V (Xbox 360, World), default.xex 0.0.0.2 with title update 1
-# (default.xexp -> 0.0.1.2), title 4E4D083D, media 165FAD4F. Every address below is for that patched
+# Codegen configuration for Soulcalibur V (Xbox 360, World), default.xex 0.0.0.2 with title update 3
+# (default.xexp -> 0.0.3.2), title 4E4D083D, media 165FAD4F. Every address below is for that patched
 # image only (docs/TARGET.md); tools/imagedump writes it, tools/py/disasm.py reads it.
 
 # Leaf functions without .pdata entries that are only reached by tail branches (b), so the

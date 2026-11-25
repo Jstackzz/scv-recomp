@@ -1,9 +1,10 @@
 # SCV on PC: the game side
 
-Soulcalibur V (Xbox 360, title 4E4D083D, `default.xex` 0.0.0.2 with title update 1, docs\TARGET.md) recompiled
+Soulcalibur V (Xbox 360, title 4E4D083D, `default.xex` 0.0.0.2 with title update 3, docs\TARGET.md) recompiled
 to native x64 code with the ReXGlue SDK (docs\SDK.md). This page covers what the game executable (`sc5\`) adds on
-top of the recompiled code, and what the game itself does that matters for it. Every address is for the TU1 image
-(`orig\analysis\default_tu1.bin`, written by `tools\imagedump`).
+top of the recompiled code, and what the game itself does that matters for it. Every address is for the title update 3
+image (`orig\analysis\default_tu3.bin`, written by `tools\imagedump`). Until 0.1.5 the game was built on title update
+1: "From title update 1 to title update 3" at the end says what moved and how the addresses were carried over.
 
 ## Build and run
 
