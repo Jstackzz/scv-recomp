@@ -1660,9 +1660,14 @@ the player's own save was never touched. What a save carries, and what reaches a
 
 Tests: tools\linktest.py `--save1 <user folder> --save2 <user folder>` gives each game its own copy of a save and says
 afterwards which bytes of each file changed. Two saves made to differ (pad 0 on Type B against Type C, pad 1 the
-other way, every display option changed, the sound levels, the play time), 40 ms each way, three matches with the
-loser's choices (CHARACTER SELECT, REMATCH, LEAVE; 2026-11-26): every check alike, the same results in both games, and
-both files unchanged afterwards.
+other way, every display option changed, the sound levels, the play time; 2026-11-26), 40 ms each way, three matches
+with the loser's choices (CHARACTER SELECT, REMATCH, LEAVE) and player 1's controller a script: every check alike, no
+round played again, the same results in both games. Before the write was held: both files got the session's records
+(the play time, VS Battle's counts at +0x4CF and +0x557, the options held at their defaults). With it (one match and
+park): the game's save on its way back wrote the kept image ("the game saves in an online session (1)"), the session's
+7 changed bytes were put back at the hold point, and each file differed from the copy it started from only in what the
+game had before the session began: the play time from boot to the menu (+0x183), and the flags at +0x51C9 and
++0x22C1F8 the game sets as it boots.
 
 ## From title update 1 to title update 3
 

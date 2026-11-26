@@ -15,8 +15,9 @@
 // something fails), each opening savedata.bin and replay.bin with CREATE_ALWAYS and writing them whole through
 // sub_824D83A8 (r3 the file, r4 the buffer, r5 its size; called from 0x8249FFE4 and 0x824A0E98): the game saved on its
 // way back to the main menu after an online match (2026-11-26, the play time, VS Battle's counts, the options as the
-// session had them). Online, savedata.bin's write takes the image as the session found it in place of the image now:
-// the game takes the save as done, and the file gets what it would have got before the session.
+// session had them), savedata.bin from a copy of the image the task makes. Online, savedata.bin's write takes the image
+// as the session found it in place of that copy: the game takes the save as done, and the file gets what it would have
+// got before the session.
 
 #include "sc5/ownsave.h"
 
@@ -113,9 +114,16 @@ bool Online() { return g_online; }
 
 // The buffer savedata.bin is written from: the image the session found in place of the image now (ownsave.cpp)
 uint32_t WriteBuffer(uint32_t lr, uint32_t buffer, uint32_t size) {
-  if (!g_online || (lr != 0x8249FFE8 && lr != 0x824A0E9C) || !g_image || buffer != g_image || size != kImageSize ||
-      g_kept.size() < kImageSize)
+  if (!g_online) return buffer;
+  if (lr != 0x8249FFE8 && lr != 0x824A0E9C) {
+    REXLOG_INFO("sc5 own save: a file write of {} bytes in an online session from {:08X} (not a save)", size, lr);
     return buffer;
+  }
+  // savedata.bin, from the save task's own copy of the image (replay.bin, the other file, as it is)
+  if (size != kImageSize || g_kept.size() < kImageSize) {
+    REXLOG_INFO("sc5 own save: the game writes a file of {} bytes in an online session (as it is)", size);
+    return buffer;
+  }
   if (!g_guest_copy) g_guest_copy = REX_KERNEL_STATE()->memory()->SystemHeapAlloc(kImageSize, 0x1000);
   if (!g_guest_copy) {
     REXLOG_ERROR("sc5 own save: no guest memory for the kept save: this save writes the session's");
