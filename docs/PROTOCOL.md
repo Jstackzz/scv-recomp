@@ -101,7 +101,7 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
     "regions":["na","sa","eu","me","af","as","oc"],"direct_above_ms":100,
     "ranks":[{"title":"Novice","from":null},{"title":"Apprentice","from":575},
              {"title":"Squire","from":675}, ...,{"title":"Eternal Soul","from":2035}],
-    "features":["koth","desync_detail"]}
+    "features":["koth","desync_detail","pick_refused"]}
 ```
 
 - `features` (King of the Hill): what each side has beyond the protocol's
@@ -111,7 +111,9 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   box and the Leaderboard's Respect only when the server lists it.
   `desync_detail` (SCV 0.1.4, the server's alone): desync reports of up to 200
   lines in a message of up to 64 KB (1.13.1); a launcher whose server does not
-  list it sends the 36 lines an older server takes.
+  list it sends the 36 lines an older server takes. `pick_refused` (SCV 0.1.7,
+  the server's alone): it logs the created characters a game held back at the
+  select screen (1.13.3); a launcher sends none to a server without it.
 
 - `proto` must equal the server's `PROTO`, else `error{code:"proto_mismatch"}`.
 - `ranks` (0.1.21): the ranked titles by Elo, lowest first, each held from its
@@ -1006,6 +1008,27 @@ database), and logs `REPORT <name> <game> (launcher <version>): <n> files,
 report, names `[A-Za-z0-9_-]{1,40}` with `.jpg`, `.png`, `.txt` or `.log`, 4 GB
 of reports on disk (`too_many`, `too_large`, `unavailable`, `bad_request`).
 
+### 1.13.3 Refused picks (SCV 0.1.7)
+
+```json
+C: {"type":"pick_refused","game":"sc5","match":"7658cd7bfcd7",
+    "reason":"Hair: it wears downloadable parts the other player's PC does not have, even without its equipment"}
+S: {"type":"pick_refused_ack"}
+```
+
+A player's A on one of their own created characters that the game held back at
+the select screen (3.3, *Created characters*), or the other player's record
+refused by this game (its `error` line): the launcher sends the game's words, the
+character's name and why in plain words (`refused_why=` of the status line, 3.4;
+printable, IP addresses and user folders taken out, 200 characters at most),
+once per character and match, to a server whose welcome lists the
+`pick_refused` feature. The server logs one line, `PICK_REFUSED <name>
+(launcher <version>) vs <other player> (launcher <version>) <game> match <id>:
+<reason>`, the other player from the match it set up (`?` when it knows no such
+match), and keeps nothing. Limits: 40 a connection (the rest are acknowledged
+and not logged); `reason` 1 to 200 printable characters, `match` up to 64
+(`bad_request`).
+
 ---
 
 ## 2. NAT traversal: UDP rendezvous
@@ -1341,47 +1364,63 @@ without changing any save, and the paid downloadable content only when both play
 the other game cannot load is refused at the select screen. Both games compare the stage and the costumes when the
 fight starts.
 
-**Created characters.** At the hold point an online game brings the player's own created characters from their offline
-save (`SC5_CREATION_SAVE`) into its fresh save in memory, slots 1 to 48 as there (49 and 50 stay free), each one whose
-form is wrong (size, version, checksum, names) left out. At the select screen it reads what its own game can load from
-the game's tables (the parts sets of each base type with the models they use, each fighter's own costumes among them,
-the weapons of each style, the stickers with their textures, the palette's size, the characters on its select screen;
-only what the game says is released on this PC: downloadable parts only with their package) and leaves out, before
-anyone can pick it, any of the player's own that would not pass the checks below. The player picks one as on the
-console: an original character on the Creation slot's costume panel, a customized fighter (a regular fighter
-re-dressed in Creation) on its fighter's, after the fighter's own costumes. The game then sends the record (13,340
-bytes: netplay packets 12 and 13, and the spectator feed's type `11`) and its PICK says so (costume `-2`). The other
-game takes exactly the record's bytes from its 12 chunks (`sc5/src/sc5/net/created_transfer.h`, anything else refuses
-it), then checks every field before anything loads it (`sc5/src/sc5/creation_check.h`): the form; the character type
-and style on this PC; the limits the game's own repair pass keeps to (attack rate, voice, the body's sizes); the
-body's rates 0-1; every parts set and every model among this PC's for it (or one of their files with segment 0xFF, a
-piece Creation keeps worn but does not show; at most 20 models in break level 0, the fight's room for them) (an original character: its base type's, male
-or female; a customized fighter: base type 5, one of that fighter's own two costumes in every break level, and the
-hair any fighter may wear); a customized fighter's voice one the game knows; parts coordinates valid or not, with
-finite values (the game checks their parts and bones itself); every sticker one of this PC's, with its own texture and
-finite placement; every colour (the character's, its stickers', the weapon's, its trail's and effect's) none or on one
-of the game's palettes; the weapon's other numbers finite; the weapon one of its style's. On top of that the game's
-own repair pass (what a console runs on a save's records) runs on a copy, and a record it refuses or would change in
-any byte is refused too. A player's own character left out at the select screen is said in the game, over the select
-screen (large text: which one and why, in plain words), and the `starting` status line counts them (`held_out=N`,
-3.4). Then it places the record in slot 49 (player 1's) or 50 (player 2's), and its autopilot picks
-it for that side. As on the console, the picture Creation took is not sent: the select screen draws the other player's
-card from the record itself, and on the VS screen, which shows the picture, that player's card shows SCV Online's own
-(a figure with a question mark, in navy and gold). A record refused, one of another character than the pick, or one
-that does not come within 20 s ends the match there: `error player N's created character from the other PC was
-refused: <why>`. A created character with downloadable parts can be picked only when the other game's downloadable
-parts are the same as this one's (a fingerprint in the PICK packet); else A on it is held back, as for Dampierre.
-Picked, it fights wearing them in both games (GAME.md, "Downloadable parts in a fight"). Every match sends the records
-again; the result line names a created character `c.<checksum>` (the same in both games), which a rematch and a ranked
-set's winner pick again by that checksum. Tests: `SC5_TEST_CREATION_SLOT=<slot file>[,...]` puts whole slots (29,832
-bytes) into the first slots at the hold point, `SC5_TEST_CREATION_RECORD=<record file>` places a record as the other
-PC's would be for player 2, and `SC5_TEST_CREATION_UNCHECKED=1` takes any record of the right size (for fuzzing the
-game's own handling, never in a real match; `=check` skips only the checks above, the game's repair pass still runs);
-`sc5\out\build\win-amd64-release\creation_check_test.exe sc5\tests\data` tests the check and the transfer,
-`tools\creationfuzz.py` what two games do with records garbled one area at a time (`--record patroklos`: the
-customized Patroklos, picked on his costume panel, and the fighter cases); `SC5_TEST_KNOWN_OUT=<file>` writes what the
-game read for the check, as text (`sc5\tests\data\known.txt`, the test PC's, which the test checks the game's records
-against).
+**Created characters.** The rule (SCV 0.1.7): a created character can be picked online whenever both games can load
+it and fight with it without crashing or going out of step, and nothing else holds it back. At the hold point an
+online game brings the player's own created characters from their offline save (`SC5_CREATION_SAVE`) into its fresh
+save in memory, slots 1 to 48 as there (49 and 50 stay free), each one whose form is wrong (size, version, checksum,
+names) left out. At the select screen, once the game's DLC manager has read the packages, it reads what its own game
+can load from the game's tables (the parts sets of each base type with the models they use, each fighter's own
+costumes among them, the weapons of each style, the stickers with their textures, the palette's size, the characters
+on its select screen; the parts and stickers of the packs whose data is on the disc whether their package is there or
+not; the downloadable models' files, those of this PC's packages whose data is installed) and leaves out, before anyone
+can pick it, any of the player's own it could not load at all (the checks below). It sends the other game which
+downloadable model files it has (netplay packet 22). The player picks one as on the console: an original character on
+the Creation slot's costume panel, a customized fighter (a regular fighter re-dressed in Creation) on its fighter's,
+after the fighter's own costumes. With the cursor on one of their own, the game weighs it against the other PC
+(`sc5/src/sc5/creation_check.h`, Decide): as made when both games have the files of its break levels 0 and 1; else
+in its plain body, break levels 2 and 3 (what title update 3 itself shows when a part's data is missing), when both
+have those; else not at all (a downloadable hairstyle the other PC lacks, which the plain body wears too), and a
+customized Dampierre only against a PC with his package. Held back, A does nothing and a panel in the middle of the
+screen says, in large plain words, which character and why ("THIS CHARACTER CANNOT BE PICKED IN THIS MATCH"); in its
+plain body, the panel says so and A picks it. Everything else the check holds is the same on every PC, so the other
+game, checking the same record with the same rules, comes to the same answer. The game then sends the record (13,340
+bytes: netplay packets 12 and 13, and the spectator feed's type `11`) and its PICK says so (costume `-2` as made,
+`-3` in its plain body). The other game takes exactly the record's bytes from its 12 chunks
+(`sc5/src/sc5/net/created_transfer.h`, anything else refuses it), then checks every field before anything loads it,
+for that form: the form; the character type and style on this PC; the voice and the body's sizes within Creation's
+sliders (title updates 1 and 3 alike; the attack rate is not held: the fight takes it as it is in both games, and
+title update 1 made up to 200), with garbage (NaN, huge) refused; the body's rates 0-1; every model among this PC's for
+it (or one of their files with segment 0xFF, a piece Creation keeps worn but does not show; at most 20 models in the
+shown first break level, the fight's room for them) (an original character: its base type's, male or female; a
+customized fighter: base type 5, one of that fighter's own two costumes in every break level, and the hair any fighter
+may wear), a downloadable one in the two levels shown with its file on this PC; a customized fighter's voice one the
+game knows; parts coordinates valid or not, with finite values (the game checks their parts and bones itself); every
+sticker one of the game's, with its own texture and finite placement; every colour (the character's, its stickers', the
+weapon's, its trail's and effect's) none or on one of the game's palettes; the weapon's other numbers finite; the
+weapon one of its style's. The record's list of parts sets is not held to anything (the game loads nothing by it).
+Both games then make the game's own fallback happen for a character in its plain body: its models load with levels 2
+and 3 from the first try (GAME.md, "Downloadable parts in a fight"). A player's own character left out at the select
+screen is said in the game, over the select screen (large text: which one and why, in plain words), and the `starting`
+status line counts them (`held_out=N`, 3.4); a pick held back is counted there too (`refused=N`, with the last one's
+name and why), and the launcher reports each to the server (1.13.3). Then the other game places the record in slot 49
+(player 1's) or 50 (player 2's), and its autopilot picks it for that side. As on the console, the picture Creation
+took is not sent: the select screen draws the other player's card from the record itself, and on the VS screen, which
+shows the picture, that player's card shows SCV Online's own (a figure with a question mark, in navy and gold). A
+record refused, one of another character than the pick, or one that does not come within 20 s ends the match there:
+`error player N's created character from the other PC was refused: <why>` (both games decide alike, so this is a
+fault; the launcher reports it too). Every match sends the records again; the result line names a created character
+`c.<checksum>` (the same in both games), which a rematch and a ranked set's winner pick again by that checksum (VS
+Battle's own Rematch keeps the form, its fight staying loaded). Tests: `SC5_TEST_CREATION_SLOT=<slot file>[,...]` puts
+whole slots (29,832 bytes) into the first slots at the hold point, `SC5_TEST_CREATION_RECORD=<record file>` places a
+record as the other PC's would be for player 2, and `SC5_TEST_CREATION_UNCHECKED=1` takes any record of the right size
+(for fuzzing the game's own handling, never in a real match); `SC5_TEST_LOCAL_PICK=<slot>[.<costume>][,<slot>[.<costume>]]`
+picks for the player, the second when the pick holds the first back; `sc5\out\build\win-amd64-release\creation_check_test.exe
+sc5\tests\data` tests the check, Decide and the transfer, `tools\creationfuzz.py` what two games do with records garbled
+one area at a time (`--record patroklos`: the customized Patroklos, picked on his costume panel, and the fighter
+cases), `tools\creationmatch.py` the players' cases (the same character on both PCs, packages on one or neither, a
+character made under title update 1, a value beyond Creation's limits); `SC5_TEST_KNOWN_OUT=<file>` writes what the game
+read for the check, as text (`sc5\tests\data\known.txt` a PC without packages, `known_dlc.txt` one with the owner's 12,
+which the test checks records against).
 
 **The stage.** After the select screen, one player picks the stage on the game's stage select with their
 own controller (LEFT, RIGHT and A) while the other game follows: player 1 in a match from a `start` line, then the
@@ -1410,7 +1449,7 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 |---|---|
 | `booting` | process started, loading |
 | `ready` | parked at the hold point, able to take `start` |
-| `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match`; `held_out=N` after it (and after `in_match`'s) when N of the player's own created characters cannot be picked in this online game (3.3, *Created characters*; the game's log says which and why) |
+| `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match`; `held_out=N` after it (and after `in_match`'s) when N of the player's own created characters cannot be picked in this online game (3.3, *Created characters*; the game's log says which and why); `refused=N refused_why=<name>: <why>` last (SCV 0.1.7; `refused_why` is the rest of the line) when the player's A on N of their own created characters was held back this match, once each, the last one's name and why in plain words: the launcher sends a `pick_refused` for each (1.13.3) |
 | `in_match match=<id>` | a match (or practice: `match=practice`) is running; `again=N again_frame=F` after it once the two games went out of step and played the round again N times this match (SCV 0.1.4; the check of frame F failed last): the launcher sends a `desync_report` with `again` for each (1.13.1) |
 | `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
 | `sparring_over match=<id>` | Online Practice: the match in sync is over, a player pressed BACK (the launcher reports the outcome `sparring`) |

@@ -30,6 +30,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include <fmt/format.h>
@@ -102,6 +103,45 @@ bool g_created_placed[2] = {false, false};  // the other PC's created character 
 PPCContext* g_ctx = nullptr;  // this frame's (OnFrame): the game's functions called from the autopilot
 uint8_t* g_base = nullptr;
 uint64_t g_created_wait[2] = {0, 0};        // the frame the side's created pick was first seen (the record's wait)
+// How this PC's player's own created characters fight in the coming match (creation_check.h, Decide): the form of
+// each side's pick (this game's player's: chosen here; the other's: from their PICK), and the created character under
+// the costume panel's cursor with what the pick makes of it (for A and the overlay)
+creation::Form g_form[2] = {creation::Form::kWhole, creation::Form::kWhole};
+struct CursorPick {
+  int slot = -1;          // its creation slot (-1: the cursor is not on one of the player's own created characters)
+  uint32_t checksum = 0;
+  std::string name;
+  bool known = false;     // the other game has said what it has (else the pick waits)
+  creation::Decision decision;
+};
+CursorPick g_cursor;
+// the picks the pick refused this match, once each (by checksum), how many, and the last one's name and reason in
+// plain words: the status line's refused=N refused_why=..., which the launcher reports (link.cpp)
+std::set<uint32_t> g_refused_sums;
+int g_refused = 0;
+std::string g_refused_why;
+bool g_own_a_was = true;  // this player's A the frame before (held at first: no press)
+// tests: SC5_TEST_LOCAL_PICK's picks (<slot>[.<costume>], a second after a comma), the one being made, and when the
+// pick held it back
+struct TestPick {
+  int slot = -1, costume = 0;
+};
+std::vector<TestPick> TestPicks() {
+  std::vector<TestPick> out;
+  const char* v = std::getenv("SC5_TEST_LOCAL_PICK");
+  while (v && *v && out.size() < 2) {
+    TestPick t;
+    t.slot = std::atoi(v);
+    const char* comma = std::strchr(v, ',');
+    const char* dot = std::strchr(v, '.');
+    if (dot && (!comma || dot < comma)) t.costume = std::atoi(dot + 1);
+    out.push_back(t);
+    v = comma ? comma + 1 : nullptr;
+  }
+  return out;
+}
+size_t g_test_pick = 0;
+uint64_t g_held_since = 0;
 int g_last_step[2] = {0, 0};
 int g_last_seq = -1;
 uint32_t g_last_battle = 0xFFFFFFFF;
@@ -153,6 +193,13 @@ void Enter(Phase p) {
   if (p != g_phase)
     REXLOG_INFO("sc5 autopilot: {} -> {} at frame {} (sequence {}, battle {:X})", PhaseName(g_phase), PhaseName(p), Now(),
                 game::SequenceName(game::SequenceId()), game::BattleState());
+  // a select screen chooses the created characters' forms again (VS Battle's own Rematch keeps the last match's: its
+  // fight stays loaded)
+  if (p == Phase::Select && g_phase != Phase::Select) {
+    creation::ClearForms();
+    g_form[0] = g_form[1] = creation::Form::kWhole;
+    g_cursor = CursorPick{};
+  }
   g_phase = p;
   g_since = Now();
   if (p != Phase::Result) {
@@ -313,6 +360,7 @@ struct Target {
   int slot = -1, costume = 0;
   bool costume_known = false;
   bool created = false;  // a created character from the other PC (its record in RemoteSlot(side) first)
+  creation::Form form = creation::Form::kWhole;  // and the break levels it shows (its player's game chose)
 };
 
 std::string g_lost_why;  // why the autopilot gave up, when it knows
@@ -326,23 +374,22 @@ bool g_takeback_asked = false, g_takeback_undo = false;
 int g_undone_gen[2] = {0, 0};
 bool g_own_b_was = true;
 
-// The other PC's created character for a side: whole, checked and in its slot (true), or still on its way (false). A
-// record the check refuses, one that is not the picked fighter's, or one that does not come in 20 s ends the match
-// here.
-bool PlaceCreated(int side, int slot) {
+// The other PC's created character for a side: whole, checked for the form its player's game chose (their PICK) and
+// in its slot (true), or still on its way (false). A record the check refuses, one that is not the picked fighter's,
+// or one that does not come in 20 s ends the match here. Both games decide alike (creation_check.h, Decide), so a
+// refusal here is a fault: its words go to the launcher (the error line) and on to the server.
+bool PlaceCreated(int side, int slot, creation::Form form) {
   if (!g_created_wait[side]) g_created_wait[side] = Now();
   creation::Record rec;
   std::string why;
   const int got = net::RemoteCreated(side, rec, why);
   if (got == 0 && Now() <= g_created_wait[side] + 1200) return false;
   if (got == 0) why = "it did not come in 20 s";
-  if (got > 0) why = creation::Check(rec);
+  if (got > 0) why = creation::Check(rec, form);
   if (got > 0 && why.empty() && creation::TypeOf(rec.data()) != select::IdOfSlot(slot))
     why = fmt::format("its character type {} is not the picked {}", creation::TypeOf(rec.data()),
                       select::IdOfSlot(slot));
-  // on top of the check: the game's own repair pass on a copy
-  if (got > 0 && why.empty()) why = g_ctx ? creation::GameRepairCheck(*g_ctx, g_base, rec) : "no game frame";
-  if (why.empty() && !creation::PlaceRemote(side, rec)) why = "it could not be placed";
+  if (why.empty() && !creation::PlaceRemote(side, rec, form)) why = "it could not be placed";
   // the select screen is up: the creation manager's copy of that slot too (its lists read the copies)
   const uint32_t manager = select::Object() ? game::ReadU32(select::Object() + 1256) : 0;
   if (why.empty() && (!g_ctx || !creation::FillEntry(*g_ctx, g_base, manager, creation::RemoteSlot(side))))
@@ -353,8 +400,69 @@ bool PlaceCreated(int side, int slot) {
     Enter(Phase::Lost);
     return false;
   }
+  g_form[side] = form;
+  creation::SetForm(side, creation::ChecksumOf(rec), form);
   g_created_placed[side] = true;
   return true;
+}
+
+bool LocalPicks(int side);
+
+// What the other PC has that the pick weighs (creation_check.h, Other): its select screen's fighters and styles and its
+// downloadable files; false while its game has not said
+bool OtherPc(creation::Other& out) {
+  const uint32_t pickable = net::RemotePickable();
+  if (!pickable || !net::RemoteDlcFiles(out.dlc_files, out.unlisted_styles)) return false;
+  for (int s = 0; s < select::kSlots; s++)
+    if ((pickable >> s & 1) && s != select::kCreationSlot) out.characters.insert(select::IdOfSlot(s));
+  out.characters.insert(creation::kOriginal);
+  return true;
+}
+
+// The pick's answer for this PC's player's own record against the other PC; false while the other game has not said
+// what it has
+bool DecideNow(const creation::Record& rec, creation::Decision& d) {
+  creation::Other other;
+  if (!creation::KnownRead() || !OtherPc(other)) return false;
+  d = creation::DecideOwn(rec, other);
+  return true;
+}
+
+// a pick the pick refused (A on a created character it holds back): once per character and match, logged and counted
+// for the launcher
+void PickRefused(const CursorPick& c) {
+  if (!g_refused_sums.insert(c.checksum).second) return;
+  g_refused++;
+  const std::string plain = creation::PlainWhy(c.decision.why);
+  g_refused_why = fmt::format("{}: {}", c.name.empty() ? "No name" : c.name, plain);
+  REXLOG_WARN("sc5 autopilot: pick refused {}: {} (slot {}): {} ({})", g_refused, c.name, c.slot + 1, plain,
+              c.decision.why);
+}
+
+// the created character under this PC's player's costume panel cursor, and the pick's answer for it (g_cursor)
+void LookAtCursor(int me, int step) {
+  CursorPick c;
+  if (step == 1 && LocalPicks(me) && g_picked_slot[me] >= 0) {
+    const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[me]), select::Costume(me), select::Costumes(me));
+    creation::Record rec;
+    if (n >= 0 && n < int(creation::RemoteSlot(0)) && creation::ReadRecord(uint32_t(n), rec)) {
+      c.slot = n;
+      c.checksum = creation::ChecksumOf(rec);
+      for (uint32_t i = 0; i < creation::dna::kNameLongSize && rec[creation::dna::kNameRelease + i]; i++)
+        c.name += char(rec[creation::dna::kNameRelease + i]);
+      if (g_cursor.slot == n && g_cursor.checksum == c.checksum && g_cursor.known) {
+        c = g_cursor;  // the same answer (the other PC's word does not change within a match)
+      } else {
+        c.known = DecideNow(rec, c.decision);
+        if (c.known)
+          REXLOG_INFO("sc5 autopilot: created character {} (slot {}) against the other PC: {}{}", c.name, n + 1,
+                      !c.decision.ok ? "held back" : c.decision.form == creation::Form::kPlain ? "its plain body"
+                                                                                             : "as made",
+                      c.decision.why.empty() ? "" : " (" + c.decision.why + ")");
+      }
+    }
+  }
+  g_cursor = std::move(c);
 }
 
 Target TargetOf(int side) {
@@ -375,7 +483,8 @@ Target TargetOf(int side) {
   t.pick = p.phase >= 2;
   t.costume_known = p.phase >= 2;
   t.costume = p.costume >= 0 ? p.costume : 0;
-  t.created = p.phase >= 2 && p.costume == -2;
+  t.created = p.phase >= 2 && (p.costume == -2 || p.costume == -3);
+  t.form = p.costume == -3 ? creation::Form::kPlain : creation::Form::kWhole;
   return t;
 }
 
@@ -413,6 +522,7 @@ bool TakeBack(const int step[2]) {
         g_created_wait[s] = 0;
         net::ForgetRemoteCreated(s);
         creation::ClearRemote(s);
+        creation::ClearForms(s);
       }
       if (BackTo(s, step)) return true;
     }
@@ -436,6 +546,8 @@ bool TakeBack(const int step[2]) {
       g_takeback_asked = false;
       g_takeback_undo = true;
       net::SetLocalCreated(me, {});
+      creation::ClearForms(me);
+      g_form[me] = creation::Form::kWhole;
       REXLOG_INFO("sc5 autopilot: the other game took player {}'s pick back: here too", me + 1);
     } else if (net::RemotePick(other).phase >= 2 || step[other] >= 2) {
       g_takeback_asked = false;
@@ -468,6 +580,7 @@ bool TakeBack(const int step[2]) {
     g_created_wait[other] = 0;
     net::ForgetRemoteCreated(other);
     creation::ClearRemote(other);
+    creation::ClearForms(other);
     REXLOG_INFO("sc5 autopilot: player {}'s pick taken back here at frame {} ({}): saying yes", other + 1, Now(),
                 theirs.costume);
     return true;
@@ -486,13 +599,12 @@ void OnSelect() {
     else if (In() > 600) Enter(Phase::Lost);
     return;
   }
-  // this PC's own tables for created characters (once): its player's characters that fail the check out, its
-  // downloadable parts' fingerprint to the other game; the creation manager's copies of the remote slots: none from an
-  // earlier match
+  // this PC's own tables for created characters (once): its player's characters it cannot load out, its downloadable
+  // files to the other game; the creation manager's copies of the remote slots: none from an earlier match
   const uint32_t manager = game::ReadU32(select::Object() + 1256);
   if (g_ctx && creation::ReadKnown(*g_ctx, g_base, select::Object())) {
     creation::DropRefused(*g_ctx, g_base, manager);
-    net::SetLocalDlc(creation::DlcFingerprint());
+    net::SetLocalDlcFiles(creation::DlcFiles(), creation::UnlistedStyles());
   }
   creation::SyncEntries(manager);
   const int step[2] = {select::Step(0), select::Step(1)};
@@ -514,8 +626,30 @@ void OnSelect() {
       g_picked_created[s] = n >= 0 && creation::ReadRecord(uint32_t(n), rec) ? creation::ChecksumOf(rec) : 0;
       REXLOG_INFO("sc5 autopilot: side {} costume {} at frame {}{}", s + 1, g_picked_costume[s] + 1, Now(),
                   g_picked_created[s] ? fmt::format(" (created character {:08X})", g_picked_created[s]) : "");
+      // this PC's player's own created character: the form the pick chose for it, which their PICK tells the other
+      // game (the A was let through only with an answer: LookAtCursor)
+      if (g_plan.online && LocalPicks(s) && g_picked_created[s] && n < int(creation::RemoteSlot(0))) {
+        creation::Decision d;
+        const bool known = DecideNow(rec, d);
+        g_form[s] = known && d.ok ? d.form : creation::Form::kWhole;
+        creation::SetForm(s, g_picked_created[s], g_form[s]);
+        if (known && d.ok)
+          REXLOG_INFO("sc5 autopilot: side {}'s created character fights {}", s + 1,
+                      d.form == creation::Form::kPlain ? "in its plain body (" + d.why + ")" : "as made");
+        else
+          REXLOG_ERROR("sc5 autopilot: side {}'s created character was picked without the pick's yes ({})", s + 1,
+                       known ? d.why : "no word from the other game");
+      }
     }
     g_last_step[s] = step[s];
+  }
+  // the created character under this player's cursor, and their A this frame (a press: down now, not the frame before)
+  bool a_pressed = false;
+  if (g_plan.online && g_plan.side <= 1) {
+    LookAtCursor(g_plan.side, step[g_plan.side]);
+    const bool a_now = (OwnPad().buttons & input::kA) != 0;
+    a_pressed = a_now && !g_own_a_was;
+    g_own_a_was = a_now;
   }
   // this PC's player's pick, for the other game
   if (g_plan.online) {
@@ -526,13 +660,14 @@ void OnSelect() {
       p.slot = step[me] >= 1 ? g_picked_slot[me] : select::CursorOf(me).Slot();
       p.costume = step[me] >= 2 ? g_picked_costume[me] : step[me] >= 1 ? select::Costume(me) : -1;
       if (step[me] >= 2) {
-        // a created character: its record to the other game (creation.h), the pick marked (costume -2)
+        // a created character: its record to the other game (creation.h), the pick marked (costume -2 as made, -3
+        // in its plain body)
         const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[me]), g_picked_costume[me],
                                            g_picked_costumes[me]);
         creation::Record rec;
         if (n >= 0 && creation::ReadRecord(uint32_t(n), rec) && !g_takeback_undo) {
           net::SetLocalCreated(me, rec);
-          p.costume = -2;
+          p.costume = g_form[me] == creation::Form::kPlain ? -3 : -2;
         }
       }
       if (g_takeback_asked || g_takeback_undo) p = {3, g_picked_slot[me], g_takeback_gen};  // taking it back
@@ -549,13 +684,10 @@ void OnSelect() {
   // This PC's player's pick made by the autopilot: their created character picked again (the plan's checksum: a
   // rematch through Character Select, or the launcher's pick for a ranked winner who keeps it; the other game follows
   // it as a pick of the player's own and takes the record again), or a test's (SC5_TEST_LOCAL_PICK=<slot>[.<costume>]
-  // stands in for the player)
-  static const int test_pick = [] { const char* v = std::getenv("SC5_TEST_LOCAL_PICK"); return v ? std::atoi(v) : -1; }();
-  static const int test_costume = [] {
-    const char* v = std::getenv("SC5_TEST_LOCAL_PICK");
-    const char* dot = v ? std::strchr(v, '.') : nullptr;
-    return dot ? std::atoi(dot + 1) : 0;
-  }();
+  // stands in for the player; a second one after a comma is what the player takes instead when the pick holds the
+  // first back, after A on it and 3 s on its panel, as a player reads why)
+  static const std::vector<TestPick> test_picks = TestPicks();
+  const TestPick test = g_test_pick < test_picks.size() ? test_picks[g_test_pick] : TestPick{};
   int auto_slot = -1, auto_costume = 0;
   if (LocalPicks(side) && g_plan.created[side]) {
     const int n = creation::SlotOfChecksum(g_plan.created[side]);
@@ -580,9 +712,9 @@ void OnSelect() {
       g_plan.created[side] = 0;
       auto_slot = -1;
     }
-  } else if (LocalPicks(side) && test_pick >= 0) {
-    auto_slot = test_pick;
-    auto_costume = test_costume;
+  } else if (LocalPicks(side) && test.slot >= 0) {
+    auto_slot = test.slot;
+    auto_costume = test.costume;
   }
   if (auto_slot >= 0) {
     if (!g_steps.empty()) {
@@ -593,12 +725,33 @@ void OnSelect() {
     if (step[side] == 0) {
       const uint16_t move = Toward(select::CursorOf(side), auto_slot);
       if (move || creation::KnownRead() || auto_slot != select::kCreationSlot) Tap(move ? move : uint16_t(input::kA));
+    } else if (step[side] == 1 && g_picked_slot[side] != auto_slot) {
+      Tap(input::kB);  // a test's next pick is another fighter's: back to the characters
     } else if (step[side] == 1 && select::Costume(side) >= 0) {
       const int now = select::Costume(side);
       if (now == auto_costume && g_plan.created[side])
         REXLOG_INFO("sc5 autopilot: side {} takes its created character {:08X} again (costume {})", side + 1,
                     g_plan.created[side], auto_costume + 1);
-      Tap(now < auto_costume ? input::kDpadRight : now > auto_costume ? input::kDpadLeft : input::kA);
+      // A on a created character only as the player's own A would be let through (LookAtCursor): with the other
+      // game's word, and when the pick does not hold it back
+      const bool held = now == auto_costume && g_cursor.slot >= 0 && !(g_cursor.known && g_cursor.decision.ok);
+      if (!held) {
+        Tap(now < auto_costume ? input::kDpadRight : now > auto_costume ? input::kDpadLeft : input::kA);
+      } else if (g_cursor.known) {
+        // held back: the A refused as the player's would be, then (a test's second pick) the other one after 3 s;
+        // a launcher's pick of the character again is the player's then
+        if (!g_refused_sums.count(g_cursor.checksum)) {
+          PickRefused(g_cursor);
+          g_held_since = Now();
+        } else if (g_plan.created[side]) {
+          REXLOG_WARN("sc5 autopilot: side {}'s created character {:08X} is held back: the player picks", side + 1,
+                      g_plan.created[side]);
+          g_plan.created[side] = 0;
+        } else if (Now() >= g_held_since + 180 && g_test_pick + 1 < test_picks.size()) {
+          g_test_pick++;
+          REXLOG_INFO("sc5 autopilot: side {}'s test pick is held back: the next one", side + 1);
+        }
+      }
     }
     RunSteps();
     return;
@@ -615,17 +768,14 @@ void OnSelect() {
           (slot != select::kCreationSlot || creation::KnownRead()))
         g_allow |= input::kA;
     } else if (step[side] == 1) {
-      // a created character once this PC has taken out its own that fail the check, and one with downloadable
-      // parts only when the other PC has the same ones
-      const int n = creation::SlotOfPick(select::IdOfSlot(g_picked_slot[side]), select::Costume(side),
-                                         select::Costumes(side));
-      creation::Record rec;
-      if (n < 0 || !creation::ReadRecord(uint32_t(n), rec) ||
-          (creation::KnownRead() && (!creation::UsesDlc(rec) || net::RemoteDlc() == creation::DlcFingerprint())))
-        g_allow |= input::kA;
+      // A on a standard costume; on the player's own created character once the pick has the other game's word and
+      // both games can load it (LookAtCursor: as made or in its plain body). An A it holds back is a refused pick:
+      // the overlay says why, the log and the launcher get it once (PickRefused).
+      if (g_cursor.slot < 0 || (g_cursor.known && g_cursor.decision.ok)) g_allow |= input::kA;
+      else if (a_pressed && g_cursor.known) PickRefused(g_cursor);
       // B back to the characters, as on the console: the other game follows only a whole pick (a character and its
       // costume), so it sees the cursor again and nothing else. Without it a player on a costume A is held back on
-      // (a created character with downloadable parts the other PC lacks, say) could neither pick nor leave.
+      // could neither pick nor leave.
       g_allow |= input::kB;
     } else {
       g_allow |= input::kA;
@@ -640,7 +790,7 @@ void OnSelect() {
   if (step[side] == 0) {
     const uint16_t move = Toward(select::CursorOf(side), t.slot);
     if (move) Tap(move);
-    else if (t.pick && t.created && !g_created_placed[side] && !PlaceCreated(side, t.slot)) {
+    else if (t.pick && t.created && !g_created_placed[side] && !PlaceCreated(side, t.slot, t.form)) {
       // the record on its way (or refused: Lost)
     } else if (t.pick && select::Pickable(t.slot)) Tap(input::kA);
     else if (t.pick && In() % 600 == 0)
@@ -911,7 +1061,11 @@ void NewMatch() {
   g_picked_costumes[0] = g_picked_costumes[1] = 0;
   g_takeback_asked = g_takeback_undo = false;
   g_undone_gen[0] = g_undone_gen[1] = 0;
-  g_own_b_was = true;
+  g_own_b_was = g_own_a_was = true;
+  g_refused_sums.clear();
+  g_refused = 0;
+  g_refused_why.clear();
+  g_test_pick = 0;
   g_lost_why.clear();
   g_stage_auto = g_stage_last = g_stage_taken = -1;
   g_stage_up_at = g_stage_gone_at = g_stage_a_at = 0;
@@ -998,6 +1152,18 @@ HeldOutView g_held_view;  // under g_view_lock
 void PublishHeldOutView() {
   HeldOutView v;
   const uint32_t obj = g_phase == Phase::Select && g_plan.online && g_plan.side <= 1 ? select::Object() : 0;
+  // the player's own created character under the costume panel's cursor: held back (why), waiting for the other
+  // game's word, or in its plain body (why)
+  if (obj && g_cursor.slot >= 0 && select::Step(g_plan.side) == 1) {
+    const creation::Decision& d = g_cursor.decision;
+    if (!g_cursor.known || !d.ok || d.form == creation::Form::kPlain) {
+      v.pick_shown = true;
+      v.pick_held = !g_cursor.known || !d.ok;
+      v.pick_name = g_cursor.name.empty() ? "No name" : g_cursor.name;
+      v.pick_why = !g_cursor.known ? "waiting for the other player's game to say which parts it has"
+                                   : creation::PlainWhy(d.why);
+    }
+  }
   const std::vector<creation::HeldOut> held = obj ? creation::HeldOutList() : std::vector<creation::HeldOut>{};
   if (!held.empty()) {
     const int me = g_plan.side, step = select::Step(me);
@@ -1022,6 +1188,11 @@ void PublishHeldOutView() {
 HeldOutView HeldOutNow() {
   std::lock_guard<std::mutex> lock(g_view_lock);
   return g_held_view;
+}
+
+int RefusedPicks(std::string& last_why) {
+  last_why = g_refused_why;
+  return g_refused;
 }
 
 bool ResultChosen(std::string& choice) {
@@ -1123,7 +1294,7 @@ void Rematch(const Plan& plan, const bool named[2], bool same_stage) {
       net::Pick p;
       p.phase = 2;
       p.slot = slots[me];
-      p.costume = -2;
+      p.costume = g_form[me] == creation::Form::kPlain ? -3 : -2;  // the form stays: the fight stays loaded
       net::SetLocalCreated(me, rec);
       net::SetLocalPick(me, p, select::PickableMask());
     }

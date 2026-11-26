@@ -43,6 +43,7 @@ param(
     [switch]$Draw,               # every match a draw (SC5_FAKE_RESULT=draw): nobody's win, a set's score stays
     [switch]$Desync,             # every match goes out of step (SC5_FAKE_RESULT=desync): both launchers report it
     [switch]$Stuck,              # the games never take park after a match (SC5_FAKE_STUCK=1): the launchers replace them
+    [switch]$Refused,            # each game holds a created character back at its select screen (SC5_FAKE_REFUSED): PICK_REFUSED
     [switch]$OwnLobbyFirst,      # lobby: B is in a lobby of its own when it joins A's (the server moves it)
     [switch]$SoloB,              # lobby: B has single player open when the lobby's match comes (the launcher closes it)
     [string]$DelayA = '',        # [online] input_delay of A and B: auto (default) or 0-4
@@ -132,12 +133,13 @@ if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pa
 $server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $(if ($ServerRoot) { $ServerRoot } else { $root }) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2
-$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
+$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'SC5_FAKE_REFUSED', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
 $env:SC5_DEV_PASSWORD = 'e2e-password-123'  # throwaway accounts on a throwaway server
 $env:SC5_FAKE_SECONDS = "$MatchSeconds"
 if ($Draw) { $env:SC5_FAKE_RESULT = 'draw' }
 if ($Desync) { $env:SC5_FAKE_RESULT = 'desync' }
 if ($Stuck) { $env:SC5_FAKE_STUCK = '1' }
+if ($Refused) { $env:SC5_FAKE_REFUSED = 'Hair: it wears downloadable parts the other player''s PC does not have, even without its equipment' }
 if (-not $Visible) {
     # the launchers nowhere on the screen: Qt's offscreen platform, which windeployqt leaves out
     $plugin = Join-Path (Split-Path -Parent $Launcher) 'platforms\qoffscreen.dll'
@@ -198,7 +200,7 @@ while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
         }
     }
     $serverLog = @(Get-Content "$work\server\err.txt", "$work\server\out.txt" -ErrorAction SilentlyContinue)
-    foreach ($ln in $serverLog | Select-String -Pattern 'RESULT|DRAW|NO_CONTEST|SET |series|DISPUTE|ABANDONED|DESYNC_PAIR|Traceback') {
+    foreach ($ln in $serverLog | Select-String -Pattern 'RESULT|DRAW|NO_CONTEST|SET |series|DISPUTE|ABANDONED|DESYNC_PAIR|PICK_REFUSED|Traceback') {
         if (-not $seen[$ln.Line]) { $seen[$ln.Line] = 1; "{0,6:N1}s server: {1}" -f ((Get-Date) - $t0).TotalSeconds, ($ln.Line -replace '^\S+ \S+ \S+\s+', '') }
     }
     # the spectator's games' ends (each game logs every status line it wrote: a short one can fall between two polls)

@@ -13,6 +13,11 @@ void Install(const std::filesystem::path& dlc_dir, const std::filesystem::path& 
 // one (0x7Fggss..: package group gg, entry ss) when the game's DLC manager has read that package and the entry's file
 // is there. False while the manager has not read the packages yet.
 bool ModelFileInstalled(uint32_t model);
+// the game's DLC manager has read the installed packages (its table's state 7 to 11): from then on the game's answer
+// for a downloadable release id and ModelFileInstalled say what this PC has
+bool ManagerReady();
+// that state (for the log)
+uint32_t ManagerState();
 
 // a byte of guest memory
 uint8_t ReadByte(uint32_t guest);

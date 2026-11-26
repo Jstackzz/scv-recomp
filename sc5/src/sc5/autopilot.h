@@ -78,11 +78,18 @@ ResultChoiceView ResultChoiceNow();
 // that this game leaves out (creation.h, HeldOut), each its name and slot and why in plain words, during the select
 // screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one of them customizes
 // (or that fighter's costume panel is up). Any thread.
+// And, while the player's costume panel cursor is on one of their own created characters that the pick holds back,
+// waits on, or shows in its plain body (creation_check.h, Decide): its name, whether A takes it, and why in plain words.
 struct HeldOutView {
   bool shown = false;
   std::vector<std::string> names, whys;
+  bool pick_shown = false, pick_held = false;
+  std::string pick_name, pick_why;
 };
 HeldOutView HeldOutNow();
+// The picks of this PC's player that the pick refused in the present match (A on a created character it held back),
+// once each: how many, and the last one's name and why in plain words (the status line's refused=, link.cpp)
+int RefusedPicks(std::string& last_why);
 
 // what the select screen made for each side in the present match (slot and costume; -1 before)
 int PickedSlot(int side);

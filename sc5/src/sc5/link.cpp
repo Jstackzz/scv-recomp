@@ -13,7 +13,8 @@
 //   quit     exit
 //   choose=1 (start, rematch): the match's loser chooses the next one on the result screen (a lobby's match)
 //
-// status.txt: booting, ready, starting match=<id>, in_match match=<id>, result winner=N p1_rounds=N p2_rounds=N
+// status.txt: booting, ready, starting match=<id> [held_out=N] [refused=N refused_why=<name>: <why>, the rest of the
+// line], in_match match=<id> (the same keys, and again=N again_frame=N), result winner=N p1_rounds=N p2_rounds=N
 // p1_char=C.c p2_char=C.c match=<id>, chose choice=rematch|select match=<id> (choose=1: the loser's choice on the
 // result screen), desync frame=N match=<id>, disconnected match=<id>, error <text>.
 
@@ -461,10 +462,17 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   const size_t held = g_plan.side <= 1 ? creation::HeldOutList().size() : 0;  // a spectator's player picks nothing
   // ... and the rounds this match started again after a desync (net/netplay.cpp, RoundAgain): the launcher reports each
   const int again = net::RoundsAgain();
+  // ... and the picks the pick refused (A on a created character it held back, once each): the launcher reports each
+  // to the server with the last one's name and why, the rest of the line (so it stays last)
+  std::string refused_why;
+  const int refused = g_plan.side <= 1 ? autopilot::RefusedPicks(refused_why) : 0;
+  std::string why_text;
+  for (const char c : refused_why) why_text += (c == '\r' || c == '\n') ? ' ' : c;
   WriteStatus((s == net::Status::InSync ? "in_match match=" : "starting match=") + g_match +
               (held ? fmt::format(" held_out={}", held) : std::string()) +
               (again && s == net::Status::InSync ? fmt::format(" again={} again_frame={}", again, net::RoundAgainFrame())
-                                                 : std::string()));
+                                                 : std::string()) +
+              (refused ? fmt::format(" refused={} refused_why={}", refused, why_text) : std::string()));
 }
 
 }  // namespace

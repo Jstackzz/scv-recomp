@@ -31,7 +31,9 @@ Other knobs: SC5_FAKE_BOOT (seconds before "ready", default 1.5), SC5_FAKE_RESUL
 writes them: the start, the picks, the stage, the meeting, the agreed words, the per-10-s statistics, round ends, the
 DESYNC line and SC5_FAKE_DETAIL (default 60) `sc5 desync:` detail lines after it, for the launcher's desync report),
 SC5_FAKE_RESULT=draw for a drawn match (winner=0, a double KO in the last round), SC5_FAKE_STUCK=1 for a game that
-never takes `park` once a match is over (it stays at that match's last status; `quit` still ends it). The game's log
+never takes `park` once a match is over (it stays at that match's last status; `quit` still ends it),
+SC5_FAKE_REFUSED=<name>: <why> for a game whose player's created character was held back at the select screen
+(`starting ... refused=1 refused_why=...`, which the launcher reports to the server). The game's log
 starts with every SC5_ variable it was given (the launcher's side of docs/PROTOCOL.md 3.1, for tests to check).
 """
 
@@ -286,6 +288,9 @@ class FakeGame:
             self.status("in_match match=practice")
             return
         self.status(f"starting match={self.match}")
+        self.watching = keys.get("watch") == "1"
+        if self.refused_keys():  # a pick the real game held back at its select screen, on every line from then on
+            self.status(f"starting match={self.match}{self.refused_keys()}")
         if keys.get("feed"):
             self.feed = Feed(keys["feed"])
         if keys.get("watch") == "1":
@@ -369,6 +374,11 @@ class FakeGame:
             if self.start.get("choose") == "1":
                 self.choose_at = time.monotonic() + float(os.environ.get("SC5_FAKE_CHOOSE_SECONDS", "2"))
 
+    def refused_keys(self) -> str:
+        """SC5_FAKE_REFUSED: the status line's ending for a pick the game held back, as the real game writes it"""
+        refused = os.environ.get("SC5_FAKE_REFUSED", "")
+        return f" refused=1 refused_why={refused}" if refused and not getattr(self, "watching", False) else ""
+
     def result_line(self) -> str:
         seed = int(self.start.get("seed", "0"))
         rounds = int(self.start.get("rounds", "3"))
@@ -391,7 +401,7 @@ class FakeGame:
                 self.seen_left.add(side)
         if self.state == "watching" and self.seen_ready >= {0, 1}:
             self.state = "watching_match"
-            self.status(f"in_match match={self.match}")
+            self.status(f"in_match match={self.match}{self.refused_keys()}")
         if self.state == "watching_match" and self.seen_left >= {0, 1}:
             self.state = "over"
             if self.start.get("mode") == "sparring":
@@ -407,7 +417,7 @@ class FakeGame:
             if self.last_peer:
                 self.state = "playing"
                 self.connected_at = now
-                self.status(f"in_match match={self.match}")
+                self.status(f"in_match match={self.match}{self.refused_keys()}")
                 if self.feed is not None:  # the READY words and the seed at the meeting point
                     seed = int(self.start.get("seed", "0")) & 0xFFFFFFFF
                     self.feed.send(feed_packet(6, self.side - 1, 1, struct.pack("<I", seed)), now)

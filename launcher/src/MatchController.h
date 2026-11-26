@@ -160,6 +160,9 @@ private:
     // the match went out of step: the game's log of it to the server (again: the games played the round again and the
     // match went on)
     void reportDesync(int frame, bool again = false);
+    // the game held back a created character its player tried to pick (its `refused=` and `refused_why=`, or the
+    // other PC's record refused: its error line): why, to the server's log (a server with `pick_refused`)
+    void reportRefusedPick(const QString& why);
     void finishMatch();
     // a match_result: a queue match that ended at its result screen, against a game reached straight, waits there
     // (AtResult) for the series' next match; any other parks (finishMatch)
@@ -240,6 +243,8 @@ private:
     QStringList resultFighters_;  // this match's result line's p1_char, p2_char (the game's ids), for matchFinished
     bool resultSent_ = false;
     int roundsAgain_ = 0;  // the game's `again=` of this match reported so far
+    QString refusedMatch_;  // the match the game's `refused=` below is of (its status line's match=)
+    int refusedSeen_ = 0;   // the game's `refused=` of that match reported so far
     bool wantNext_ = false;  // ready for the series' next match, not sent yet (the game still plays the last one's end)
     QString nextChoice_ = QStringLiteral("rematch");
     QString lastVia_;         // how the last punch reached the other game: lan, public (straight), relay, tunnel

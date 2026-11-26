@@ -1539,6 +1539,21 @@ void MatchController::onGameStatus(const QString& line) {
     const QString goMatch = str(go_, "match");
     const bool forThisMatch = !keys.contains(QStringLiteral("match")) || keys.value(QStringLiteral("match")) == goMatch;
     const bool inOnline = (phase_ == Phase::Starting || phase_ == Phase::Playing) && !go_.isEmpty();
+    // a created character the game held back at the select screen (`refused=<count> refused_why=<name>: <why>`, the
+    // rest of the line): each one the game counts goes to the server once, with the last one's words
+    if (inOnline && forThisMatch && keys.contains(QStringLiteral("refused"))) {
+        const QString match = keys.value(QStringLiteral("match"));
+        if (match != refusedMatch_) {
+            refusedMatch_ = match;
+            refusedSeen_ = 0;
+        }
+        const int refused = keys.value(QStringLiteral("refused")).toInt();
+        const qsizetype at = line.indexOf(QLatin1String(" refused_why="));
+        if (refused > refusedSeen_ && at >= 0) {
+            refusedSeen_ = refused;
+            reportRefusedPick(line.mid(at + 13));
+        }
+    }
     if (st == QLatin1String("ready")) {
         if (showWhenReady_) {  // standby: started for an accepted match, its window is up now
             showWhenReady_ = false;
@@ -1602,8 +1617,15 @@ void MatchController::onGameStatus(const QString& line) {
     } else if (st == QLatin1String("error") && inOnline) {
         // "error exited": GameProcess's word for a game that ended by itself (closed, crashed, asked to leave), which
         // ends the match for both: the player left it (onGameExited)
-        if (line.startsWith(QLatin1String("error exited"))) reportLeft();
-        else reportResult({{QStringLiteral("outcome"), QStringLiteral("error")}});
+        if (line.startsWith(QLatin1String("error exited"))) {
+            reportLeft();
+        } else {
+            // the other player's created character refused by this game (both games decide alike, so a fault): its
+            // words to the server's log too
+            if (line.contains(QLatin1String("created character from the other PC was refused")))
+                reportRefusedPick(line.mid(6));
+            reportResult({{QStringLiteral("outcome"), QStringLiteral("error")}});
+        }
     }
 }
 
@@ -1671,6 +1693,17 @@ void MatchController::reportDesync(int frame, bool again) {
         server_->send(report);
         log(tr("The match went out of step at frame %1: what the game logged of it went to the server").arg(frame));
     });
+}
+
+void MatchController::reportRefusedPick(const QString& why) {
+    const QString text = reportLine(why.toUtf8());
+    log(tr("A created character was held back at the select screen: %1").arg(text));
+    if (!game_ || !server_->isLoggedIn() || !server_->serverHas(QStringLiteral("pick_refused")) || text.isEmpty())
+        return;
+    server_->send({{QStringLiteral("type"), QStringLiteral("pick_refused")},
+                   {QStringLiteral("game"), game_->gameId()},
+                   {QStringLiteral("match"), str(go_, "match").left(64)},
+                   {QStringLiteral("reason"), text}});
 }
 
 // this player's game ended during the match: the report says so, with how it ended (the server logs it with the match)

@@ -122,7 +122,6 @@ int main(int argc, char** argv) {
       {"short", [](Record& r) { r.pop_back(); }, "bytes"},
       {"version", [](Record& r) { r[1] = 10; }, "version"},
       {"checksum", [](Record& r) { r[200] ^= 1; }, "checksum"},
-      {"no name", [](Record& r) { std::memset(&r[dna::kNameRelease], 0, dna::kNameLongSize); }, "no name"},
       {"name without end", [](Record& r) { std::memset(&r[dna::kNameRelease], 'A', dna::kNameLongSize); }, "no end"},
       {"name control", [](Record& r) { r[dna::kNameRelease + 1] = 0x0A; }, "control"},
       {"name percent", [](Record& r) { r[dna::kNameRelease + 2] = '%'; }, "'%'"},
@@ -137,19 +136,15 @@ int main(int argc, char** argv) {
       {"weapon style", [](Record& r) { r[dna::kWeapon + 1] = 3; }, "weapon's style"},
       {"original base type", [](Record& r) { r[dna::kType] = 32; r[dna::kBaseType] = 2; }, "base type"},
       {"customized fighter", [](Record& r) { r[dna::kType] = 18; r[dna::kBaseType] = 9; }, "customized fighter"},
-      {"attack rate", [](Record& r) { r[dna::kAttackRate] = 201; }, "attack rate"},
-      {"attack rate past title update 3's top", [](Record& r) { r[dna::kAttackRate] = 112; }, "attack rate"},
-      {"attack rate low", [](Record& r) { r[dna::kAttackRate] = 79; }, "attack rate"},
       {"pitch", [](Record& r) { r[dna::kPitch] = 51; }, "pitch"},
       {"formant", [](Record& r) { r[dna::kFormant] = uint8_t(-51); }, "formant"},
       {"flanger", [](Record& r) { r[dna::kFlanger] = 3; }, "flanger"},
-      {"DLC flag", [](Record& r) { r[dna::kDlcFlag] = 2; }, "DLC"},
       {"shoulders", [](Record& r) { PutF(r, dna::kBody, 0.2f); }, "shoulder"},
       {"shoulders NaN", [](Record& r) { Put32(r, dna::kBody, 0x7FC00000); }, "shoulder"},
       {"hand scale", [](Record& r) { PutF(r, dna::kBody + 16, 0.5f); }, "hand"},
       {"body rate", [](Record& r) { PutF(r, dna::kBody + 40, 1.5f); }, "rate"},
       {"body rate infinite", [](Record& r) { Put32(r, dna::kBody + 60, 0x7F800000); }, "rate"},
-      {"parts set", [](Record& r) { Put32(r, dna::kPartsSets + 8, 0x00FF1234); }, "parts set"},
+      // an unknown model in a level the match does not show: Creation never makes one, and it hangs the game
       {"model", [](Record& r) { Put32(r, dna::kBreakLevels + 2 * dna::kBreakLevelSize + 16, 0x02FFFFFF); }, "model"},
       {"sticker", [](Record& r) { Put32(r, dna::kStickers + 5 * dna::kStickerSize, 0x00001234); }, "sticker"},
       {"sticker NaN", [](Record& r) { Put32(r, dna::kStickers + dna::kStickerSize + 24, 0x7FC00000); }, "sticker"},
@@ -184,6 +179,36 @@ int main(int argc, char** argv) {
       const std::string why = CheckRecord(r.data(), r.size(), known);
       Expect(why.find(c.why) != std::string::npos,
              std::format("{}: refused for \"{}\", not \"{}\"", c.name, why, c.why));
+    }
+  }
+
+  // What 0.1.6 refused and nothing needs to: each passes now, in both forms. The attack rate is the fight's damage
+  // factor as it is (sub_82221978) in both games, title update 1 made up to 200 and title update 3's game plays such
+  // a character offline as it is; the DLC parts flag title update 3 no longer reads; the game ignores a record's list
+  // of parts sets; an empty name is text.
+  const Case allowed[] = {
+      {"attack rate 200 (title update 1's top)", [](Record& r) { r[dna::kAttackRate] = 200; }, ""},
+      {"attack rate 112", [](Record& r) { r[dna::kAttackRate] = 112; }, ""},
+      {"attack rate 150", [](Record& r) { r[dna::kAttackRate] = 150; }, ""},
+      {"attack rate 255", [](Record& r) { r[dna::kAttackRate] = 255; }, ""},
+      {"attack rate 79", [](Record& r) { r[dna::kAttackRate] = 79; }, ""},
+      {"attack rate 0", [](Record& r) { r[dna::kAttackRate] = 0; }, ""},
+      {"DLC flag 2", [](Record& r) { r[dna::kDlcFlag] = 2; }, ""},
+      {"a parts set no PC has", [](Record& r) { Put32(r, dna::kPartsSets + 8, 0x00FF1234); }, ""},
+      {"every parts set garbled", [](Record& r) {
+         for (uint32_t i = 0; i < dna::kPartsSetCount; i++) Put32(r, dna::kPartsSets + 4 * i, 0x7F000000 + i * 977);
+       }, ""},
+      {"no name", [](Record& r) { std::memset(&r[dna::kNameRelease], 0, dna::kNameLongSize); }, ""},
+  };
+  for (const Record& base : good) {
+    for (const Case& c : allowed) {
+      Record r = base;
+      c.spoil(r);
+      Seal(r);
+      for (const Form f : {Form::kWhole, Form::kPlain}) {
+        const std::string why = CheckRecord(r.data(), r.size(), known, f);
+        Expect(why.empty(), std::format("{}: refused for \"{}\"", c.name, why));
+      }
     }
   }
 
@@ -244,20 +269,20 @@ int main(int argc, char** argv) {
       {"his second costume", [&](Record& r) { Put32(r, last_set, 0x00130135), wear(r, 29, 0x00350100, 0x1F); }, ""},
       // his third does not load in a fight (tools\creationfuzz.py, "fighter3p"): not among his here
       {"his third costume", [&](Record& r) { Put32(r, last_set, 0x00130435), wear(r, 29, 0x00350300, 0x1F); },
-       "parts set 00130435"},
+       "model 00350300"},
       {"his third costume's model", [&](Record& r) { wear(r, 29, 0x00350300, 0x1F); }, "model 00350300"},
       {"Mitsurugi's hair", [&](Record& r) { Put32(r, dna::kPartsSets + 4, 0x02020001), wear(r, 33, 0x01000000, 0x0F); },
        ""},
       {"Mitsurugi's costume", [&](Record& r) { wear(r, 29, 0x00010000, 0x1F); }, "model 00010000"},
-      {"Mitsurugi's costume's parts set", [&](Record& r) { Put32(r, last_set, 0x00130001); }, "parts set 00130001"},
+      // the record's list of parts sets alone: the game loads nothing by it
+      {"Mitsurugi's costume's parts set", [&](Record& r) { Put32(r, last_set, 0x00130001); }, ""},
       {"an original character's body", [&](Record& r) { wear(r, 0, 0x02000000, 0x00); }, "model 02000000"},
-      {"an original character's parts set", [&](Record& r) { Put32(r, dna::kPartsSets, 0x00010008); },
-       "parts set 00010008"},
+      {"an original character's parts set", [&](Record& r) { Put32(r, dna::kPartsSets, 0x00010008); }, ""},
       {"a costume no one has", [&](Record& r) { wear(r, 29, 0x00350700, 0x1F); }, "model 00350700"},
       {"base type 0", [&](Record& r) { r[dna::kBaseType] = 0; },
        "customized fighter (character type 18) with base type 0"},
       {"base type 1", [&](Record& r) { r[dna::kBaseType] = 1; }, "with base type 1"},
-      {"Mitsurugi in Patroklos's costume", [&](Record& r) { r[dna::kType] = 0; }, "parts set 00130035"},
+      {"Mitsurugi in Patroklos's costume", [&](Record& r) { r[dna::kType] = 0; }, "model 00350000"},
       {"a character the select screen lacks", [&](Record& r) { r[dna::kType] = 27; }, "character type 27"},
       {"no parts", [&](Record& r) { wear(r, 29, 0xFFFFFFFF, 0xFF); }, "without its costume in break level 0"},
       {"only hair", [&](Record& r) { wear(r, 29, 0xFFFFFFFF, 0xFF), wear(r, 33, 0x01000000, 0x0F); },
@@ -407,16 +432,19 @@ int main(int argc, char** argv) {
           r2[at + 4] = i < n ? uint8_t(i % 32) : 0xFF;
         }
         Seal(r2);
-        const std::string why2 = CheckRecord(r2.data(), r2.size(), real);
+        const std::string why2 = CheckRecord(r2.data(), r2.size(), real, Form::kPlain);
         Expect(n == 20 ? why2.empty() : why2.find("more than 20 models in break level 2") != std::string::npos,
                std::format("{} models in break level 2: \"{}\"", n, why2));
+        // as made the fight lists level 0's alone
+        Expect(CheckRecord(r2.data(), r2.size(), real, Form::kWhole).empty(),
+               std::format("{} models in break level 2, as made", n));
       }
-      // the top attack rate title update 3 keeps passes
+      // a character made under title update 1 at its top attack rate passes against the real tables
       {
         Record r = female;
-        r[dna::kAttackRate] = dna::kMaxAttackRate;
+        r[dna::kAttackRate] = 200;
         Seal(r);
-        Expect(CheckRecord(r.data(), r.size(), real).empty(), "attack rate 111: " + CheckRecord(r.data(), r.size(), real));
+        Expect(CheckRecord(r.data(), r.size(), real).empty(), "attack rate 200: " + CheckRecord(r.data(), r.size(), real));
       }
       // the same model's segments count once
       Record r = female;
@@ -431,8 +459,7 @@ int main(int argc, char** argv) {
       const char* why;
       const char* plain;
     } plain[] = {
-        {"model 1B0800FF is not on this PC", "it wears a part this PC's game does not have"},
-        {"parts set 00130435 is not on this PC", "it wears a part this PC's game does not have"},
+        {"model 1B0800FF is not on this PC", "it wears a part the game does not have"},
         {"sticker 00001234 is not on this PC", "it has a sticker this PC's game does not have"},
         {"sticker 3's colour 1 has palette 9", "a setting in it is outside what Creation allows"},
         {"weapon 99 of style 3 is not on this PC", "its weapon is not in this PC's game"},
@@ -442,9 +469,18 @@ int main(int argc, char** argv) {
         {"character type 13's own costumes are not on this PC", "its fighter is not in this PC's game"},
         {"its checksum is wrong", "its saved data is damaged"},
         {"its name has a '%'", "its name has a character the game cannot keep"},
-        {"it has no name", "it has no name"},
-        {"the game's own repair pass would change it", "the game's own check of saved characters refuses it"},
         {"slots 49 and 50", "slots 49 and 50 are kept for the other player's character"},
+        {"character type 13 is not on the other PC",
+         "the other player's game does not have this fighter (it comes with a downloadable package)"},
+        {"downloadable model file 7F090600 (break levels 2 and 3, its plain body) has no file on the other PC",
+         "it wears downloadable parts the other player's PC does not have, even without its equipment"},
+        {"the other PC lacks downloadable model file 7F060800: its plain body",
+         "the other player's PC does not have some of its downloadable parts: both games show it without its "
+         "equipment"},
+        {"this PC lacks downloadable model file 7F060800: its plain body",
+         "this PC does not have some of its downloadable parts: both games show it without its equipment"},
+        {"downloadable model file 7F090600 (break level 2) has no file on this PC",
+         "it wears downloadable parts this PC does not have, even without its equipment"},
         {"a customized fighter with voice 254, which the game does not know", "its voice cannot be used for a fighter"},
         {"its hand scale 0.5 is out of Creation's range", "a setting in it is outside what Creation allows"},
         {"it wears more than 20 models", "it wears more pieces than the game can load"},
@@ -477,6 +513,200 @@ int main(int argc, char** argv) {
   }
   std::printf("%d garbled records against the real tables: %d refused, %d passed\n", real_refused + real_passed,
               real_refused, real_passed);
+
+  // How a player's character fights when the two PCs' downloadable parts differ (Decide): as made when both games load
+  // break levels 0 and 1, in its plain body (2 and 3, title update 3's own fallback) when only that loads on both, else
+  // held back; and both games of a match come to the same answer about the same record, whichever player owns it (two
+  // players with the same character, one copied from the other's save: 2026-11-25, finn and Defi)
+  {
+    const std::pair<int, int> male{kOriginal, 0};
+    Known with = known;  // the test records' tables, and two downloadable parts: a head piece and a hairstyle
+    with.models[male].insert({0x7F060800, 0x7F090600});
+    with.dlc_files = {0x7F060800, 0x7F090600};
+    Known without = with, head_only = with, hair_only = with;
+    without.dlc_files.clear();
+    head_only.dlc_files = {0x7F060800};
+    hair_only.dlc_files = {0x7F090600};
+    Known again;
+    Expect(ParseKnown(KnownText(with), again) && again.dlc_files == with.dlc_files, "the downloadable files to text and back");
+    auto other_of = [](const Known& k) {
+      Other o;
+      o.characters = k.characters;
+      o.dlc_files = k.dlc_files;
+      o.unlisted_styles = k.unlisted_styles;
+      return o;
+    };
+    auto put_part = [](Record& r, std::initializer_list<uint32_t> levels, uint32_t part, uint32_t model, uint8_t slot) {
+      for (const uint32_t level : levels) {
+        const uint32_t at = dna::kBreakLevels + level * dna::kBreakLevelSize + part * 8;
+        Put32(r, at, model);
+        r[at + 4] = slot;
+      }
+    };
+    // the head piece in break levels 0 and 1 and its plain body in 2 and 3, as title update 3's Creation makes it
+    Record head = good[0];
+    put_part(head, {0, 1}, 16, 0x7F060800, 29);
+    Seal(head);
+    // the downloadable hairstyle in every level, the plain body's too
+    Record hair = good[0];
+    put_part(hair, {0, 1, 2, 3}, 14, 0x7F090600, 14);
+    Seal(hair);
+    Record both = hair;
+    put_part(both, {0, 1}, 16, 0x7F060800, 29);
+    Seal(both);
+    // a downloadable part only in the levels a match never shows as made: no file needed for that
+    Record unshown = good[0];
+    put_part(unshown, {2, 3}, 16, 0x7F060800, 29);
+    Seal(unshown);
+    Expect(CheckRecord(unshown.data(), unshown.size(), without, Form::kWhole).empty() &&
+               !CheckRecord(unshown.data(), unshown.size(), without, Form::kPlain).empty(),
+           "a downloadable part in break levels 2 and 3 alone needs its file only for the plain body");
+    Expect(MissingFiles(both.data(), Form::kWhole, head_only.dlc_files) == std::vector<uint32_t>{0x7F090600} &&
+               MissingFiles(both.data(), Form::kPlain, without.dlc_files) == std::vector<uint32_t>{0x7F090600} &&
+               MissingFiles(head.data(), Form::kPlain, without.dlc_files).empty(),
+           "the files each form's break levels lack");
+    const struct {
+      const char* name;
+      const Record& rec;
+      const Known& mine;
+      const Known& other;
+      bool ok;
+      Form form;
+      const char* why;
+    } decide_cases[] = {
+        {"no downloadable parts, neither PC has any", good[0], without, without, true, Form::kWhole, ""},
+        {"the head piece, both PCs have it", head, with, with, true, Form::kWhole, ""},
+        {"the head piece, the other PC lacks it", head, with, without, true, Form::kPlain,
+         "the other PC lacks downloadable model file 7F060800"},
+        {"the head piece, this PC lost its data", head, without, with, true, Form::kPlain,
+         "this PC lacks downloadable model file 7F060800"},
+        {"the head piece, neither has it", head, without, without, true, Form::kPlain, "this PC lacks"},
+        {"the hairstyle, both have it", hair, with, with, true, Form::kWhole, ""},
+        {"the hairstyle, the other lacks it", hair, with, head_only, false, Form::kWhole, "no file on the other PC"},
+        {"the hairstyle, this PC lacks it", hair, head_only, with, false, Form::kWhole,
+         "(break level 2) has no file on this PC"},
+        {"both, the other has the hairstyle only", both, with, hair_only, true, Form::kPlain,
+         "the other PC lacks downloadable model file 7F060800"},
+        {"both, the other has the head piece only", both, with, head_only, false, Form::kWhole, "on the other PC"},
+    };
+    for (const auto& c : decide_cases) {
+      const Decision d = Decide(c.rec.data(), c.rec.size(), c.mine, other_of(c.other));
+      Expect(d.ok == c.ok && (!c.ok || d.form == c.form) && d.why.find(c.why) != std::string::npos,
+             std::format("decide, {}: {} {} \"{}\"", c.name, d.ok ? "picked" : "held back",
+                         d.form == Form::kPlain ? "plain" : "whole", d.why));
+      // the other game takes what it is sent in the form chosen (its own check, its own files), and so does this one
+      if (d.ok)
+        Expect(CheckRecord(c.rec.data(), c.rec.size(), c.other, d.form).empty() &&
+                   CheckRecord(c.rec.data(), c.rec.size(), c.mine, d.form).empty(),
+               std::format("decide, {}: a game refuses the form chosen", c.name));
+      Expect(d.ok || PlainWhy(d.why) != "it does not pass the online check",
+             std::format("decide, {}: \"{}\" has no plain words", c.name, d.why));
+    }
+    // a customized Dampierre (character type 13, his costume as Patroklos's here) only against a PC with his package
+    {
+      Known damp = with;
+      damp.characters.insert(13);
+      damp.models[{13, kFighterBase}] = damp.models[{18, kFighterBase}];
+      Record r = good[1];
+      r[dna::kType] = 13;
+      Seal(r);
+      const Decision d = Decide(r.data(), r.size(), damp, other_of(with));
+      Expect(!d.ok && d.why.find("character type 13 is not on the other PC") != std::string::npos,
+             "a customized Dampierre against a PC without him: " + d.why);
+      Expect(Decide(r.data(), r.size(), damp, other_of(damp)).ok, "a customized Dampierre against a PC with him");
+    }
+    // the same record on either PC (one player's, or a copy in the other's save), every way the two PCs' files can be:
+    // the same answer from both games, and each game's own check takes the form chosen
+    const Known* all[] = {&with, &without, &head_only, &hair_only};
+    int pairs = 0;
+    const Record* records[] = {&good[0], &head, &hair, &both, &unshown};
+    for (const Record* r : records)
+      for (const Known* a : all)
+        for (const Known* b : all) {
+          const Decision da = Decide(r->data(), r->size(), *a, other_of(*b));
+          const Decision db = Decide(r->data(), r->size(), *b, other_of(*a));
+          Expect(da.ok == db.ok && (!da.ok || da.form == db.form), "the two games decide the same record apart");
+          if (da.ok)
+            Expect(CheckRecord(r->data(), r->size(), *a, da.form).empty() &&
+                       CheckRecord(r->data(), r->size(), *b, da.form).empty(),
+                   "a game refuses the form both chose");
+          pairs++;
+        }
+    std::printf("%d records and pairs of PCs decided alike\n", pairs);
+  }
+
+  // The same against two real PCs' tables (tests\data: known.txt a PC without any package, known_dlc.txt with the
+  // owner's 12 and their data, both written by title update 3's game, 2026-11-25): the packs whose data is on the disc
+  // count on both (only the downloadable files differ), and a character in a downloadable head piece fights in its
+  // plain body against the PC without, in a downloadable hairstyle not at all
+  {
+    Known dlc;
+    std::string text;
+    if (FILE* f = std::fopen((dir + "/known_dlc.txt").c_str(), "rb")) {
+      char buf[65536];
+      for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
+      std::fclose(f);
+    }
+    Expect(!text.empty() && ParseKnown(text, dlc), "the real tables with packages (known_dlc.txt) are there and read");
+    Expect(real.dlc_files.empty() && dlc.dlc_files.count(0x7F060800) && dlc.dlc_files.count(0x7F090600),
+           "the downloadable files: none without packages, DLC06's and DLC09's with them");
+    // everything but the downloadable models and Dampierre is the same on both PCs
+    bool same = real.styles == dlc.styles && real.weapons == dlc.weapons && real.stickers == dlc.stickers &&
+                real.palette_rows == dlc.palette_rows && real.palette_cols == dlc.palette_cols;
+    for (const auto& [key, models] : real.models) {
+      std::set<uint32_t> theirs;
+      for (const uint32_t m : dlc.models.count(key) ? dlc.models.at(key) : std::set<uint32_t>{})
+        if (!IsDlcModel(m)) theirs.insert(m);
+      same = same && theirs == models;
+    }
+    Expect(same, "the two real PCs' tables differ in more than their downloadable models");
+    Expect(dlc.characters.count(13) && !real.characters.count(13), "Dampierre only with his package");
+    Expect(real.models.at({kOriginal, 0}).count(0x05530000), "a pack's part on the disc counts without its package");
+    auto other_of = [](const Known& k) {
+      Other o;
+      o.characters = k.characters;
+      o.dlc_files = k.dlc_files;
+      o.unlisted_styles = k.unlisted_styles;
+      return o;
+    };
+    Record head = good[0], hair = good[0], disc = good[0];
+    for (const uint32_t level : {0u, 1u}) {
+      const uint32_t at = dna::kBreakLevels + level * dna::kBreakLevelSize + 16 * 8;
+      Put32(head, at, 0x7F060800), head[at + 4] = 29;
+      Put32(disc, at, 0x05530000), disc[at + 4] = 29;
+    }
+    for (uint32_t level = 0; level < dna::kBreakLevelCount; level++) {
+      const uint32_t at = dna::kBreakLevels + level * dna::kBreakLevelSize + 14 * 8;
+      Put32(hair, at, 0x7F090600), hair[at + 4] = 14;
+    }
+    Seal(head), Seal(hair), Seal(disc);
+    const Decision h = Decide(head.data(), head.size(), dlc, other_of(real));
+    const Decision h2 = Decide(head.data(), head.size(), real, other_of(dlc));  // the copy in the other PC's save
+    Expect(h.ok && h.form == Form::kPlain && h2.ok && h2.form == Form::kPlain &&
+               CheckRecord(head.data(), head.size(), real, Form::kPlain).empty() &&
+               !CheckRecord(head.data(), head.size(), real, Form::kWhole).empty(),
+           "real tables: the head piece in its plain body on both PCs: " + h.why + " / " + h2.why);
+    Expect(Decide(head.data(), head.size(), dlc, other_of(dlc)).form == Form::kWhole, "real tables: the head piece as made");
+    const Decision r = Decide(hair.data(), hair.size(), dlc, other_of(real));
+    const Decision r2 = Decide(hair.data(), hair.size(), real, other_of(dlc));
+    Expect(!r.ok && !r2.ok, "real tables: the hairstyle against the PC without it: " + r.why + " / " + r2.why);
+    const Decision d = Decide(disc.data(), disc.size(), dlc, other_of(real));
+    Expect(d.ok && d.form == Form::kWhole && Decide(disc.data(), disc.size(), real, other_of(dlc)).ok,
+           "real tables: a pack's part on the disc as made on both: " + d.why);
+    // style 13, which Creation offers on both but the select screen lists only with its package's release
+    Expect(real.unlisted_styles == std::set<int>{kStyle13} && dlc.unlisted_styles.empty(),
+           "real tables: style 13 is listed only with the packages");
+    Record s13 = good[0];
+    s13[dna::kStyle] = uint8_t(kStyle13);
+    s13[dna::kWeapon + 1] = uint8_t(kStyle13);
+    s13[dna::kWeapon + 3] = 0;  // its first weapon
+    Seal(s13);
+    const Decision s = Decide(s13.data(), s13.size(), dlc, other_of(real));
+    Expect(Decide(s13.data(), s13.size(), dlc, other_of(dlc)).ok && !s.ok &&
+               PlainWhy(s.why).find("fighting style") != std::string::npos &&
+               CheckRecord(s13.data(), s13.size(), real).find("style 13") != std::string::npos,
+           "real tables: a style 13 character against the PC without its package: " + s.why);
+  }
 
   // the transfer: a record in chunks as netplay sends them
   using sc5::net::Incoming;

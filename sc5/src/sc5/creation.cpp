@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +41,6 @@
 
 REX_EXTERN(sub_82221978);  // the creation manager: an entry from a record (r3: where its address is, r4: the record)
 REX_EXTERN(sub_8246B318);  // the release state of an id (r3 the release table, r4 the id): 2 released (unlocks.cpp's)
-REX_EXTERN(sub_82222B28);  // the repair pass of a save's record (r3 the record, r4 a byte: 0x10 check its checksum)
 // a base type's parts sets from the creation data (r3: a table {type, count, entries}, r4: the base type, r5 and r6:
 // its data and size): the entries from the game's heap, the table's old ones freed
 REX_EXTERN(sub_8221E848);
@@ -92,10 +92,6 @@ void HoldOut(uint32_t n, const Record& r, const std::string& why) {
   std::lock_guard<std::mutex> lock(g_held_lock);
   g_held.push_back({int(n), r.size() > 9 ? int(r[9]) : -1, Name(r), PlainWhy(why)});
 }
-uint32_t g_dlc_fingerprint = 0;
-std::set<uint32_t> g_dlc_parts_sets, g_dlc_models;
-std::set<std::pair<int, int>> g_dlc_weapons;
-std::set<uint32_t> g_dlc_stickers;
 
 // The stickers Creation offers (the online game never loads Creation's own table): id, release, texture
 struct Sticker {
@@ -131,6 +127,13 @@ uint32_t RawRelease(uint32_t id) {
   return ((id & 1) ? byte >> 4 : byte & 0xF) & 7;
 }
 
+// A release id of downloadable content (state 3): released only while a package grants it. The parts and stickers
+// of the packs whose data is on the disc (DLC02 to DLC04's 48 parts sets, 12 stickers) are in every PC's tables
+// whether the package is there or not, and a fight loads them without it: two games, one without any package, fought
+// a character wearing one of those parts and one of those stickers in sync (2026-11-25). So the check counts them on
+// every PC, and only the downloadable models (0x7F, their data in the packages) differ between PCs.
+bool Downloadable(uint32_t id) { return id != 0xFFFF && RawRelease(id) == 3; }
+
 // the game's own answer for a release id (no release: 0xFFFF): released on this PC
 bool Released(PPCContext& ctx, uint8_t* base, uint32_t id) {
   if (id == 0xFFFF) return true;
@@ -144,12 +147,6 @@ bool Released(PPCContext& ctx, uint8_t* base, uint32_t id) {
   const uint32_t state = ctx.r3.u32;
   ctx = saved;
   return (state & 7) == 2;
-}
-
-// FNV-1a, a word at a time
-uint32_t Fnv(uint32_t h, uint32_t v) {
-  for (int i = 0; i < 4; i++) h = (h ^ ((v >> (8 * i)) & 0xFF)) * 16777619u;
-  return h;
 }
 
 // The fighters' costumes, base type 5. The builder keeps the creation data's archive ([+14868]'s object, its data at
@@ -195,11 +192,9 @@ int CostumeCode(int type) {
 // Every customized fighter's own parts into k ((its type, 5) for each fighter in k.characters): base type 5's parts
 // sets read with the game's own loader into a table of ours (in the SDK's heap: its entries come from the game's heap
 // and go back to it here), each fighter's own two costumes (its code in the set's id) and the hair any fighter may
-// wear.
-// Downloadable ones (none on the test PC) go into dlc_sets, dlc_models and the fingerprint. The number of parts sets
-// read; 0 when the data is not there (customized fighters are then refused).
-uint32_t ReadFighters(PPCContext& ctx, uint8_t* base, uint32_t builder, Known& k, std::set<uint32_t>& dlc_sets,
-                      std::set<uint32_t>& dlc_models, uint32_t& fp) {
+// wear (none downloadable on the test PC). The number of parts sets read; 0 when the data is not there (customized
+// fighters are then refused).
+uint32_t ReadFighters(PPCContext& ctx, uint8_t* base, uint32_t builder, Known& k) {
   const uint32_t archive = game::ReadU32(builder + kBuilderArchive);
   const uint32_t data = archive ? Call(ctx, base, sub_8223CE00, archive, kFighterBase) : 0;
   const uint32_t size = data ? Call(ctx, base, sub_8223CE90, archive, kFighterBase) : 0;
@@ -219,23 +214,20 @@ uint32_t ReadFighters(PPCContext& ctx, uint8_t* base, uint32_t builder, Known& k
   for (uint32_t i = 0; e && game::ReadU32(table) == kFighterBase && i < n && i < 5000; i++) {
     const uint32_t set = e + i * kSetSize, id = game::ReadU32(set), release = game::ReadU32(set + kSetRelease);
     const uint8_t category = *Host(set + kSetCategory);
-    if ((category != kCostumeCategory && category != kHairCategory) || !Released(ctx, base, release)) continue;
+    if (category != kCostumeCategory && category != kHairCategory) continue;
+    const bool released = Released(ctx, base, release);
+    if (!released && !Downloadable(release)) continue;
     if (category == kCostumeCategory && ((id >> 8) & 0xFF) >= kFightCostumes) continue;  // not loaded in a fight
-    const bool dlc = release != 0xFFFF && RawRelease(release) == 3;
     Parts& to = category == kHairCategory ? hair : costumes[int(id & 0xFF)];
     to.sets.insert(id);
     read++;
-    if (dlc) {
-      dlc_sets.insert(id);
-      fp = Fnv(Fnv(fp, 4), id);
-    }
     const uint32_t members = std::min(game::ReadU32(set + kSetMemberCount), kMaxMembers);
     for (uint32_t m = 0; m < members; m++) {
       for (uint32_t v = 0; v < kModelsPerMember; v++) {
         const uint32_t model = game::ReadU32(set + kSetMembers + m * kMemberSize + v * 8);
         if (model & 0x80000000u) continue;  // none
         to.models.insert(model);
-        if (dlc) dlc_models.insert(model);
+        if (IsDlcModel(model) && released && dlc::ModelFileInstalled(model)) k.dlc_files.insert(model & kModelFile);
       }
     }
   }
@@ -329,8 +321,7 @@ bool ReadRecord(uint32_t n, Record& out) {
   return true;
 }
 
-// Tests: SC5_TEST_CREATION_UNCHECKED=1 takes any record of the right size (fuzzing the game's own handling); =check
-// skips only this file's check, the game's own repair pass still runs (testing that one alone)
+// Tests: SC5_TEST_CREATION_UNCHECKED=1 takes any record of the right size (fuzzing the game's own handling)
 namespace {
 const char* TestUnchecked() {
   static const char* v = std::getenv("SC5_TEST_CREATION_UNCHECKED");
@@ -338,46 +329,18 @@ const char* TestUnchecked() {
 }
 }  // namespace
 
-std::string Check(const Record& r) {
+std::string Check(const Record& r, Form form) {
   if (TestUnchecked()) {
     REXLOG_WARN("sc5 creation: SC5_TEST_CREATION_UNCHECKED: a record taken without the check (tests only)");
     return r.size() == kRecordSize ? "" : "not a record";
   }
   if (!g_known_read) return "this PC has not read its own tables yet";
-  if (std::string why = CheckRecord(r.data(), r.size(), g_known); !why.empty()) return why;
-  // every downloadable model's file on this PC: title update 3 shows a character whose models it cannot load in its
-  // plain body (break levels 2 and 3, dlc.cpp), and both games of a match must show the same
-  for (uint32_t level = 0; level < dna::kBreakLevelCount; level++)
-    for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
-      const uint32_t model = Be32(&r[dna::kBreakLevels + level * dna::kBreakLevelSize + p * 8]);
-      if (!(model & 0x80000000u) && !dlc::ModelFileInstalled(model))
-        return fmt::format("model {:08X} is downloadable and its file is not on this PC", model);
-    }
-  return {};
+  // the two break levels the match shows: their downloadable models' data here (Known::dlc_files), as title update 3
+  // would otherwise show the plain body in one game alone (dlc.cpp)
+  return CheckRecord(r.data(), r.size(), g_known, form);
 }
 
 bool KnownRead() { return g_known_read && g_dropped; }
-
-std::string GameRepairCheck(PPCContext& ctx, uint8_t* base, const Record& r) {
-  if (TestUnchecked() && std::strcmp(TestUnchecked(), "check") != 0) return {};
-  // the copy, and before it the byte of the pass's flags (0x10: check the checksum, refuse a wrong one)
-  static const uint32_t scratch = REX_KERNEL_STATE()->memory()->SystemHeapAlloc(16 + kRecordSize, 0x20);
-  if (!scratch || r.size() != kRecordSize) return "there is no room to try the game's repair pass in";
-  uint8_t* p = Host(scratch);
-  std::memset(p, 0, 16);
-  p[0] = 0x10;
-  std::memcpy(p + 16, r.data(), kRecordSize);
-  const PPCContext saved = ctx;
-  ctx.r3.u64 = scratch + 16;
-  ctx.r4.u64 = scratch;
-  ctx.lr = 0x82189A40;  // as from main's loop
-  sub_82222B28(ctx, base);
-  const uint32_t took = ctx.r3.u32;  // 0: a wrong checksum, or no character (base type -1)
-  ctx = saved;
-  if (!took) return "the game's own repair pass refuses it";
-  if (std::memcmp(p + 16, r.data(), kRecordSize) != 0) return "the game's own repair pass would change it";
-  return {};
-}
 
 bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   if (g_known_read) return true;
@@ -386,9 +349,17 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   const uint32_t tables = c ? game::ReadU32(c + kContextTables) : 0;
   // the context is whole (sub_8223D0D0) and its tables are its builder's
   if (!d || tables != d + kBuilderTables || !SaveImage()) return false;
+  // and the DLC manager has read the packages: before that the game answers "not released" for every downloadable
+  // part and no downloadable file is there, and tables read then would hold this PC's own characters out and tell the
+  // other game this PC has nothing, for the whole run. A minute at most (then it is read as it is, and logged).
+  static const uint64_t first_try = GetTickCount64();
+  const bool late = GetTickCount64() - first_try > 60000;
+  if (!dlc::ManagerReady() && !late) return false;
+  if (!dlc::ManagerReady())
+    REXLOG_WARN("sc5 creation: the DLC manager has not read the packages after a minute (state {}): this PC's tables "
+                "are read without them", dlc::ManagerState());
   Known k;
-  std::set<uint32_t> dlc_sets, dlc_models;
-  uint32_t fp = 2166136261u, sets = 0, models = 0;
+  uint32_t sets = 0, models = 0, dlc_sets = 0;
   for (uint32_t t = 0; t < kTableCount; t++) {
     const uint32_t type = game::ReadU32(tables + t * kTableSize), n = game::ReadU32(tables + t * kTableSize + 4),
                    e = game::ReadU32(tables + t * kTableSize + 8);
@@ -397,14 +368,11 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
     if (type > 1) continue;  // an original character's are base types 0 and 1 (a customized fighter's: ReadFighters)
     for (uint32_t i = 0; i < n; i++) {
       const uint32_t set = e + i * kSetSize, id = game::ReadU32(set), release = game::ReadU32(set + kSetRelease);
-      if (!Released(ctx, base, release)) continue;
-      const bool dlc = release != 0xFFFF && RawRelease(release) == 3;
+      const bool released = Released(ctx, base, release);
+      if (!released && !Downloadable(release)) continue;
       k.parts_sets[{kOriginal, int(type)}].insert(id);
       sets++;
-      if (dlc) {
-        dlc_sets.insert(id);
-        fp = Fnv(Fnv(fp, 1), id);
-      }
+      dlc_sets += Downloadable(release) && released;
       const uint32_t members = std::min(game::ReadU32(set + kSetMemberCount), kMaxMembers);
       for (uint32_t m = 0; m < members; m++) {
         for (uint32_t v = 0; v < kModelsPerMember; v++) {
@@ -412,7 +380,8 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
           const uint32_t model = game::ReadU32(at);
           if (model & 0x80000000u) continue;  // none
           if (k.models[{kOriginal, int(type)}].insert(model).second) models++;
-          if (dlc) dlc_models.insert(model);
+          // a downloadable model: loaded from its package's data, which this PC has or not
+          if (IsDlcModel(model) && released && dlc::ModelFileInstalled(model)) k.dlc_files.insert(model & kModelFile);
         }
       }
     }
@@ -420,17 +389,13 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   if (!sets) return false;  // not loaded yet
   const uint32_t wn = game::ReadU32(d + kBuilderWeaponCount), we = game::ReadU32(d + kBuilderWeapons);
   if (!wn || wn > 2000 || !we) return false;
-  std::set<std::pair<int, int>> dlc_weapons;
   for (uint32_t i = 0; i < wn; i++) {
     const uint32_t w = we + i * kWeaponSize, release = game::ReadU32(w + kWeaponRelease);
     const int style = int(game::ReadU32(w)), variation = int(game::ReadU32(w + 4));
+    // Creation's own (the same 189 in 26 styles with the owner's packages and without any, 2026-11-25)
     if (style < 0 || style > 255 || variation < 0 || variation > 255 || !Released(ctx, base, release)) continue;
     k.weapons.insert({style, variation});
     k.styles.insert(style);  // a style Creation offers has its weapons
-    if (release != 0xFFFF && RawRelease(release) == 3) {
-      dlc_weapons.insert({style, variation});
-      fp = Fnv(Fnv(fp, 2), uint32_t(style) << 16 | uint32_t(variation));
-    }
   }
   // the colour palette's size (sub_8222D210 reads it at [0x8277B418]: +8 the last row, +10 the last column); the game
   // checks a colour's place against it itself, so without it any place up to 63 does
@@ -441,34 +406,34 @@ bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t obj) {
   for (int s = 0; s < select::kSlots; s++)
     if (select::Pickable(s) && s != select::kCreationSlot) k.characters.insert(select::IdOfSlot(s));
   k.characters.insert(kOriginal);
-  std::set<uint32_t> dlc_stickers;
+  // the select screen's manager copies a save's character of style 13 only when release 49 is released
+  // (sub_8231BD10), a downloadable one (state 3: not without the owner's packages, 2026-11-25), though Creation offers
+  // the style on every PC: without it such a character is listed nowhere
+  if (!Released(ctx, base, kStyle13Release)) k.unlisted_styles.insert(kStyle13);
+  // the stickers: Creation's, and a downloadable pack's, whose pictures are on the disc (a PC without the package
+  // fought one in sync, 2026-11-25)
+  uint32_t dlc_stickers = 0;
   for (const Sticker& st : kStickers) {
-    if (!Released(ctx, base, st.release)) continue;
+    const bool released = Released(ctx, base, st.release);
+    if (!released && !Downloadable(st.release)) continue;
     k.stickers[st.id] = st.olt << 24 | st.olt_relation << 16 | st.olt_key;
-    if (RawRelease(st.release) == 3) {
-      dlc_stickers.insert(st.id);
-      fp = Fnv(Fnv(fp, 3), st.id);
-    }
+    dlc_stickers += released && Downloadable(st.release);
   }
   // the customized fighters' own costumes (base type 5), which the select screen does not read itself
-  const uint32_t fighter_sets = ReadFighters(ctx, base, d, k, dlc_sets, dlc_models, fp);
+  const uint32_t fighter_sets = ReadFighters(ctx, base, d, k);
   int fighters = 0;
   for (const auto& [key, ids] : k.parts_sets) fighters += key.first != kOriginal;
   if (!fighters) REXLOG_WARN("sc5 creation: no fighters' costumes (base type 5) here: customized fighters stay out");
   WriteKnown(k);  // tests: SC5_TEST_KNOWN_OUT
   g_known = std::move(k);
-  g_dlc_stickers = std::move(dlc_stickers);
-  g_dlc_parts_sets = std::move(dlc_sets);
-  g_dlc_models = std::move(dlc_models);
-  g_dlc_weapons = std::move(dlc_weapons);
-  g_dlc_fingerprint = fp;
   g_known_read = true;
   REXLOG_INFO("sc5 creation: this PC's parts for created characters: {} parts sets, {} models, {} weapons in {} "
               "styles, {} stickers, {} characters, a palette of {}x{}; {} fighters' own costumes ({} parts sets of base "
-              "type 5); downloadable: {} sets, {} weapons, {} stickers (fingerprint {:08X})",
+              "type 5); its packages give {} parts sets and {} stickers, and the data of {} downloadable model files "
+              "(the DLC manager's state {})",
               sets, models, g_known.weapons.size(), g_known.styles.size(), g_known.stickers.size(),
               g_known.characters.size(), g_known.palette_rows + 1, g_known.palette_cols + 1, fighters, fighter_sets,
-              g_dlc_parts_sets.size(), g_dlc_weapons.size(), g_dlc_stickers.size(), fp);
+              dlc_sets, dlc_stickers, g_known.dlc_files.size(), dlc::ManagerState());
   return true;
 }
 
@@ -477,40 +442,54 @@ std::vector<HeldOut> HeldOutList() {
   return g_held;
 }
 
-uint32_t DlcFingerprint() { return g_known_read ? g_dlc_fingerprint : 0; }
+std::set<uint32_t> DlcFiles() { return g_known_read ? g_known.dlc_files : std::set<uint32_t>{}; }
+std::set<int> UnlistedStyles() { return g_known_read ? g_known.unlisted_styles : std::set<int>{}; }
 
-bool UsesDlc(const Record& r) {
-  if (r.size() != kRecordSize) return false;
-  for (uint32_t i = 0; i < dna::kPartsSetCount; i++)
-    if (g_dlc_parts_sets.count(Be32(&r[dna::kPartsSets + 4 * i]))) return true;
-  for (uint32_t level = 0; level < dna::kBreakLevelCount; level++)
-    for (uint32_t p = 0; p < dna::kPartsPerLevel; p++) {
-      const uint32_t at = dna::kBreakLevels + level * dna::kBreakLevelSize + p * 8;
-      if (!(r[at] & 0x80) && KnownModel(g_dlc_models, Be32(&r[at]))) return true;  // any of a file's segments
-    }
-  for (uint32_t k = 0; k < dna::kStickerCount + dna::kWeaponStickerCount; k++) {
-    const uint32_t at = k < dna::kStickerCount
-                            ? dna::kStickers + k * dna::kStickerSize
-                            : dna::kWeapon + dna::kWeaponStickers + (k - dna::kStickerCount) * dna::kStickerSize;
-    if (g_dlc_stickers.count(Be32(&r[at]))) return true;
-  }
-  const int style = r[dna::kStyle], variation = int(r[dna::kWeapon + 2] << 8 | r[dna::kWeapon + 3]);
-  return g_dlc_weapons.count({style, variation}) > 0;
+Decision DecideOwn(const Record& r, const Other& other) {
+  if (TestUnchecked()) return Decision{true, Form::kWhole, {}};
+  if (!g_known_read) return Decision{false, Form::kWhole, "this PC has not read its own tables yet"};
+  return Decide(r.data(), r.size(), g_known, other);
+}
+
+namespace {
+// each side's created character in the coming match that shows its plain body: its checksum, with bit 32 set (0 none)
+std::atomic<uint64_t> g_plain[2];
+}  // namespace
+
+void SetForm(int side, uint32_t checksum, Form form) {
+  if (side < 0 || side > 1) return;
+  g_plain[side] = form == Form::kPlain ? (uint64_t(1) << 32 | checksum) : 0;
+}
+
+void ClearForms(int only) {
+  for (int side = 0; side < 2; side++)
+    if (only < 0 || side == only) g_plain[side] = 0;
+}
+
+bool ShowsPlain(uint32_t checksum) {
+  const uint64_t want = uint64_t(1) << 32 | checksum;
+  return g_plain[0] == want || g_plain[1] == want;
 }
 
 void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager) {
   // once the tables are read and the creation manager is there: the select screen sets it a few frames in, and an
   // entry left filled stays on the costume panel (sub_82222208 lists every entry with parts), which shifts every later
   // costume's slot
+  (void)ctx;
+  (void)base;
   if (g_dropped || !g_known_read || !manager) return;
   g_dropped = true;
   if (std::getenv("SC5_TEST_CREATION_UNCHECKED")) return;  // tests: the game's own handling of whatever is there
   for (uint32_t n = 0; n < RemoteSlot(0); n++) {
     Record r;
     if (!ReadRecord(n, r)) continue;
-    // the check, then the game's own repair pass on a copy
-    std::string why = Check(r);
-    if (why.empty()) why = GameRepairCheck(ctx, base, r);
+    // what this PC's game cannot load or fight with in either form (whether the other PC can is the pick's to say)
+    std::string why = Check(r, Form::kWhole);
+    if (!why.empty()) {
+      const std::string plain = Check(r, Form::kPlain);
+      if (plain.empty()) why.clear();
+      else if (why.find("no file") != std::string::npos) why = plain;  // its plain body lacks a file too
+    }
     if (why.empty()) continue;
     PutBe32(Host(Slot(n)) + kHeaderSet2, 0);  // no screen lists it from here on
     PutBe32(Host(manager + 4 + n * kEntrySize + kEntryCount), 0);
@@ -694,9 +673,9 @@ const std::vector<uint8_t>& Card() {
 
 }  // namespace
 
-bool PlaceRemote(int side, const Record& r) {
+bool PlaceRemote(int side, const Record& r, Form form) {
   const uint32_t s = Slot(RemoteSlot(side));
-  if (!s || !Check(r).empty()) return false;
+  if (!s || !Check(r, form).empty()) return false;
   uint8_t* slot = Host(s);
   std::memset(slot, 0, kSlotSize);
   // the other PC's picture does not come: ours on its card
@@ -706,8 +685,8 @@ bool PlaceRemote(int side, const Record& r) {
   PutBe32(slot + (TypeOf(r.data()) == kOriginal ? kHeaderOriginal : kHeaderFighter), 1);
   PutBe32(slot + kHeaderSet1, 0x01000000);
   PutBe32(slot + kHeaderSet2, 0x01000000);  // last: from here on the screens list it
-  REXLOG_INFO("sc5 creation: player {}'s {} from the other PC in slot {} (type {}, style {})", side + 1, Name(r),
-              RemoteSlot(side) + 1, TypeOf(r.data()), r[16]);
+  REXLOG_INFO("sc5 creation: player {}'s {} from the other PC in slot {} (type {}, style {}{})", side + 1, Name(r),
+              RemoteSlot(side) + 1, TypeOf(r.data()), r[16], form == Form::kPlain ? ", its plain body" : "");
   return true;
 }
 
@@ -825,7 +804,7 @@ void OnHoldPoint() {
     const size_t got = f ? std::fread(r.data(), 1, r.size(), f) : 0;
     if (f) std::fclose(f);
     REXLOG_INFO("sc5 creation: test record {} ({} bytes): {}", rec, got,
-                got == kRecordSize && PlaceRemote(1, r) ? "placed" : "not placed");
+                got == kRecordSize && PlaceRemote(1, r, Form::kWhole) ? "placed" : "not placed");
   }
   // tests: whole slots into the first slots
   const char* list = std::getenv("SC5_TEST_CREATION_SLOT");

@@ -268,19 +268,27 @@ machine: +0x80 the state, +0x84 the fighter's part right after the entry, whose 
 Tennis Cap and Bronze Armor of DLC13): with the costume packs' data installed it fights in them; with the owner's
 packages as `game\dlc` holds them (each only its index, no data) the select screen's model falls back and the fight
 shows the plain body; with every package's data but DLC09's and the character wearing one DLC09 model, the whole
-outfit falls back (the one model is enough). dlc.cpp logs the fallback (`the models of the created character ... could
-not be loaded`). Online both games must show the same levels (the levels' tails, hit material and equipment weight
-among them, differ): the check refuses a record any of whose downloadable models has no file on this PC (the DLC
-manager's entry, bit 0x80; creation.cpp), on each PC for its player's own characters and for the other player's, so
-both games load levels 0 and 1, and a character with downloadable parts is still picked only when the two games'
-downloadable parts are the same (the fingerprint; it counts parts sets the tables list and the packages grant, so a
-package without its data passes it, which the file rule covers). Title update 3 also asks each package for
-`DLCnn:\dat.cpk` (the PS3 catalog packs' archive; not found in ours, which the game shrugs off: the files the index
-names load as before). Two linked games (tools\linktest.py, 2026-11-25): with the costume data on both, player 1's
-character in DLC13's Tennis Cap and Bronze Armor against player 2's made under title update 1 fought to the result
-in sync, the parts on both screens; with no packages on player 2's PC, player 1's A on that character was held back
-(the fingerprints differ) and Siegfried against player 2's created character fought in sync; a test pick that skips
-that gate had player 2's check refuse the record (`parts set 00030644 is not on this PC`), ending the match.
+outfit falls back (the one model is enough). Title update 3 also asks each package for `DLCnn:\dat.cpk` (the PS3
+catalog packs' archive; not found in ours, which the game shrugs off: the files the index names load as before).
+
+Online both games must show the same levels (the levels' tails, hit material and equipment weight among them,
+differ). 0.1.6 made sure of it by refusing: a record any of whose downloadable models had no file on this PC, and a
+character with downloadable parts unless the two PCs' downloadable parts were the same (a fingerprint of every pack's
+parts sets, weapons and stickers the packages grant); two players whose packages differed in anything could pick none
+of their characters with a downloadable part, and the A was refused without a word ("Created characters online", *Why
+two players got different answers*). Since 0.1.7 the match goes on in the plain body instead, as title update 3 itself
+does, in both games alike. Each game sends the other which downloadable model files it has (netplay packet 22: per
+package group a bit for each entry whose data is installed, `creation::DlcFiles`), and the picking player's game
+chooses (creation_check.h, `Decide`): as made when both games have the files of break levels 0 and 1; the plain body
+when both have those of levels 2 and 3; else the pick is held back with why. The PICK says which (costume -2 or -3),
+the other game checks the record for that form, and for a plain one each game's hook on `sub_823616A8` (dlc.cpp)
+passes r4 = 1 from the first call, the game's own retry, whatever this PC could load: both load levels 2 and 3, the
+model loader's +0x120 is 1, and the fight's setup lists level 2's models (`creation::ShowsPlain`, by the record's
+checksum at the entry's +13336). A fallback no match chose is logged as a fault (`the models of the created character
+... could not be loaded`). VS Battle's own Rematch keeps the form (its fight stays loaded); a select screen chooses
+again. Two linked games (tools\creationmatch.py, 2026-11-25): the same character in DLC06's 7F060800 on both PCs (one a
+copy from the other's save), player 2's PC without any package: both games chose its plain body for both sides,
+fought to the result and through VS Battle's own Rematch in sync; with the packages on both, as made.
 
 The game keeps a release state for each of 7426 unlockable things (characters, stages, music, creation parts,
 titles) in a table of 4 bits each at `[[0x8274EF10]] + 0x22C248` (just past the 2.2 MB save image in the save object),
@@ -973,15 +981,24 @@ floats of placement, 4 colours at +60); height 13224; facial motion name 13225 (
 Creation's); the name 13245 and as typed 13290 (45 each, UTF-8: the game turns `%`, `#`, `$` into their full-width
 forms, sub_82349AE0); checksum 13336 (sub_822470B0: each word turned left by an amount the word before sets, XORed).
 The game's repair pass (sub_82222B28: r3 the record, r4 a byte whose 0x10 makes it check the checksum and refuse a wrong
-one) clamps the attack rate (80-111 in title update 3, which lowered the top from title update 1's 200; the update's
-game keeps a save's own records as they are, so a character made before it with a higher rate stays out online, the
-check holding the update's limit), pitch and formant (-50 to 50), flanger (0-2) and six body sizes (shoulders 0.08-0.15,
-upper 0.9-1.2, lower 0.9-1.1, face 0.9-1.1, hand 0.7-1.1, body 0.8-1.2). A ModelData is four bytes: parts set type,
-table index, variation, segment. The 360 game did not check records from other consoles (sub_8229EF18 only replaced one
-with a template of the same style when its player chose not to see created characters). The check runs this pass too, on
-a copy in a buffer of the SDK's own heap (a save slot would not do: the creation manager copies slots as it goes), after
-its own checks, and refuses a record the pass refuses or would change; its own checks hold the same limits, so the pass
-is a second opinion.
+one; it writes the checksum again when it changed anything) clamps the attack rate (80-111 in title update 3, which
+lowered the top from title update 1's 200: title update 1's pass, sub_82221D88, has the same limits but that one),
+pitch and formant (-50 to 50), flanger (0-2) and six body sizes (shoulders 0.08-0.15, upper 0.9-1.2, lower 0.9-1.1,
+face 0.9-1.1, hand 0.7-1.1, body 0.8-1.2; a NaN passes it, its compares false), ends a name without its end and turns
+`%`, `#`, `$` into their full-width forms. The game runs it where it turns a record from elsewhere into its own
+(sub_82228100, then the pass: the templates' manager sub_822223D8, sub_8223EF70 beside the creation context's builder,
+sub_8229EF18's templates and six more), never
+on a save's own characters at the select screen: the select screen's manager copies each used slot as it is
+(sub_8231BD10, sub_822228D8 a plain copy) and fills its entry from it (sub_82221978), which makes the attack rate the
+fight's damage factor as it is (rate x 0.01 at the entry's +13536; a customized fighter, the record's last parts set not
+-1, gets 1.0). So a character made under title update 1 at rate 150 fights at 1.5 offline under title update 3 too, and
+online both games fill the entry from the same bytes. 0.1.6's check refused a rate above 111 and ran the pass on a copy,
+refusing a record it would change: every character made under title update 1 with a rate above 111 stayed out online.
+Since 0.1.7 the check holds the voice and the body sizes to the sliders as before (Creation never makes a record
+outside them, title update 1's nor 3's; garbage sizes hang both games) but not the attack rate, and the pass is not
+run. A ModelData is four bytes: parts set type, table index, variation, segment. The 360 game did not check records
+from other consoles (sub_8229EF18 only replaced one with a template of the same style when its player chose not to see
+created characters).
 
 **What the game has.** At the select screen, its object's [+1264] is the creation context (sub_8223CFE8,
 sub_8223D0D0): +12 the parts sets of each base type (6 x {type, count, entries of 2,496 bytes}: the id at +0, the
@@ -998,7 +1015,25 @@ Creation object's +15048, its table at +140: count +52, entries +56): 446, each 
 relation, key, which a record's sticker repeats) and release; the check carries them (creation_stickers.inc,
 tools\py\creation_stickers.py from a dump of that table) and asks the game which of their releases this PC has.
 sub_8246B318 answers whether a release id is released (unlocks.cpp opens everything but downloadable content, state 3,
-and hidden entries). A parts set's models in the record must be among its base type's (the body's 0x020000xx included).
+and hidden entries). A record's models must be among its base type's (the body's 0x020000xx included).
+
+**The same on every PC but the downloadable files** (2026-11-25, both PCs' tables written with SC5_TEST_KNOWN_OUT,
+tests\data\known.txt without any package and known_dlc.txt with the owner's 12). Without packages the tables have
+1,322 parts sets: the 48 of the packs whose parts are on the disc (DLC02 to DLC04, state 3: Creation offers them only
+with the package) are there, their 80 models plain disc files; the packages' data adds 275 parts sets, every one of
+them of downloadable models (0x7F), and changes none of the others. The 12 downloadable stickers' pictures are on the
+disc too, and the weapons and styles are the same 189 in 26 with packages or without. A fight loads the disc's parts
+and stickers without their package: two games, player 2's without any package, fought a character in DLC02's
+05530000 with sticker 000C0049 in sync (2026-11-25). 0.1.6 read only what Creation offers here (`Released`), so a PC
+without a pack refused a character in that pack's disc parts though its game loads them, and refused any parts set id
+it did not offer though the game loads nothing by the record's list of them: the same record passed on one PC and not
+on the other. Since 0.1.7 the tables take a pack's parts and stickers whether its package is there or not, the
+record's list of parts sets is not held to anything, and what differs between two PCs is only the downloadable files
+(Known::dlc_files: the 0x7F files of the parts sets released here whose DLC manager entry has its file) and Dampierre
+(his package puts him and his costumes on the select screen), which the pick weighs ("Downloadable parts in a fight").
+The tables are read once the DLC manager has read the packages (its state 7 to 11, a minute at most): read before, the
+game answers "not released" for every downloadable part and no file is there, which would hold the player's own
+characters out for the whole run.
 
 **A model's segment.** Of a ModelData's four bytes the game loads the file the first three name (sub_822A4530, a model loader's
 virtual function, its neighbour at 0x820C83E8 sub_822A46B0 giving the archive, 5 or 14: the model table at
@@ -1013,20 +1048,48 @@ new one he made and a copy of his working one with only its height changed, his 
 had made. So a model passes when the tables list it, or when it is one of their files with segment 0xFF (`KnownModel`:
 only that form, only a file this PC's tables have for that character and base type; another negative segment or an
 unknown segment stays refused). Such a character fights as Creation shows it: two games with a female character wearing
-1B0800FF from break level 1 on, picked through the pad, fought in sync (2026-11-24). The same goes for downloadable
-parts (UsesDlc takes any segment of a downloadable file). The list of break level 0's models (sub_82221548 in title
-update 3, filled for both; level 2's when the game shows the plain body, "Downloadable parts in a fight") has room for
-20, a model once however many of its segments are worn, with its count right after it: a record whose level 0 wears more
-than 20 would write over it, so the check refuses that too, in break level 2 as well (Creation's own view would break on
+1B0800FF from break level 1 on, picked through the pad, fought in sync (2026-11-24). A downloadable model needs its
+file on this PC in the two break levels the match shows, whatever its segment. The list of break level 0's models
+(sub_82221548 in title update 3, filled for both; level 2's when the game shows the plain body, "Downloadable parts in
+a fight") has room for 20, a model once however many of its segments are worn, with its count right after it: a record
+whose level 0 wears more than 20 would write over it, so the check refuses that too (the select screen's manager lists
+level 0's of every record), and level 2's for a match that shows the plain body (Creation's own view would break on
 such a record first).
 
-**Held out, said plainly.** A player's own character that fails the check is not only a log line (`slot N (name) stays
-out online: <why>`): at the online select screen the game draws, with the result overlay's drawer (result_overlay.cpp,
-large and high-contrast), "N OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE", each one's name and slot and why in
-plain words (creation_check.h's PlainWhy: "it wears a part this PC's game does not have", "its saved data is
-damaged"...), for the screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one
-of them customizes; and the status line says how many (`starting match=<id> held_out=N`, PROTOCOL.md 3.4), which the
-launcher's footer and log show as they show every state.
+**Held out, said plainly.** A player's own character this game cannot load in either form is not only a log line
+(`slot N (name) stays out online: <why>`): at the online select screen the game draws, with the result overlay's drawer
+(result_overlay.cpp, large and high-contrast), "N OF YOUR CREATED CHARACTERS CANNOT BE PICKED ONLINE", each one's name
+and slot and why in plain words (creation_check.h's PlainWhy: "its saved data is damaged", "a setting in it is outside
+what Creation allows"...), for the screen's first 20 s and whenever the player's cursor is on the Creation slot or on a
+fighter one of them customizes; and the status line says how many (`starting match=<id> held_out=N`, PROTOCOL.md 3.4),
+which the launcher's footer and log show as they show every state. A character the pick weighs against the other PC
+(`Decide`) has its own panel in the middle of the screen, a 20th of its height, white on navy in a gold frame, while
+the costume panel's cursor is on it: "THIS CHARACTER CANNOT BE PICKED IN THIS MATCH", its name, "Why: ..." ("it wears
+downloadable parts the other player's PC does not have, even without its equipment"), "B: choose another one"; or "IN
+THIS MATCH IT FIGHTS WITHOUT ITS EQUIPMENT" with why and "A picks it like this"; or "PLEASE WAIT" until the other game
+has said which files it has. An A the pick holds back is logged once per character and match (`pick refused N: <name>
+(slot S): <plain words> (<the check's words>)`) and counted on the status line (`refused=N refused_why=<name>: <why>`),
+which the launcher sends to the server's log (PROTOCOL.md 1.13.3); so does the other game's refusal of a record (its
+`error` line), which both games deciding alike should never give.
+
+**Why two players got different answers** (0.1.6, 2026-11-25, from a report of finn and Defi: the same outfit, made
+on one PC and copied to the other, refused on both; copies with height and hit effect taken out refused differently;
+the original then pickable on Defi's PC and not on finn's). finn's game log, sent when he closed the game at a
+select screen, has his A on a created character taken back again and again (`side 2 step 0 -> 1`, then `step 1 -> 0`)
+and no reason: 0.1.6's costume panel let A through on a character with downloadable parts only when the other PC's
+fingerprint of downloadable parts was the same as this PC's, and held it back without a word otherwise (B was the only
+way out). Everything 0.1.6 held that depended on the PC could make the same record pass on one PC and not on the other,
+or pass in one game run and not the next: that fingerprint (every pack's parts sets, stickers and weapons the packages
+grant: one package more or less on either side, or a package without its data, and every character with any
+downloadable part is held back in both games); `UsesDlc`, which weighed a record by this PC's own list of downloadable
+things (on a PC without a pack it is not downloadable at all, and A passes there); the parts set ids of the record's
+list, refused when this PC's Creation did not offer them (a pack's disc parts without its package) though the game
+loads nothing by them; the downloadable files of all four break levels; and the tables read before the DLC manager had
+read the packages, if that happened (every downloadable part "not on this PC" for that run). And one rule that did not
+depend on the PC refused characters made under title update 1: an attack rate above title update 3's 111 (a copy
+saved by title update 3's Creation may have it clamped: code beside its creation context runs the repair pass,
+sub_8223EF70, not tried). Their logs of those matches are not in, so which of these held each pick cannot be told;
+each one is gone in 0.1.7 (above, and "The same on every PC but the downloadable files").
 
 **A customized fighter's costumes.** A customized fighter (a regular fighter re-dressed in Creation: the fighter's own
 character type, base type 5) wears that fighter's own costumes, which the select screen does not read. Its builder
@@ -1063,7 +1126,7 @@ parts coordinates (sub_82243AF8 skips a part not worn or a bone not allowed and 
 (sub_8224B8E8 and sub_8222D210 check the palette and the place), the small ids (select number, model, facial motion,
 voice, eyebrow, height), break effects, parts sounds, the break levels' tails, the body's muscle and figure bytes,
 names (shown as they are); a character type or style the game lacks is not listed at all. The check holds most of
-these to Creation's limits too. The customized Patroklos (`--record patroklos`, 2026-11-20) did the same in every area
+these to Creation's limits too, but not the record's list of parts sets (since 0.1.7) nor the attack rate. The customized Patroklos (`--record patroklos`, 2026-11-20) did the same in every area
 (unknown models and stickers stall the game, a weapon garbled whole crashes it, garbage body sizes hang it, a garbage
 type is not listed, the rest fought in sync), and more: an unknown voice (the header's small ids, then the voice
 alone) and his third costume made both games give up loading the fight, and with no parts at all he is not listed; his
@@ -1261,7 +1324,9 @@ the no. A spectator takes a whole pick back once the player's game shows phase 0
 are their players' (`-`): a side the launcher names is picked at once. Two games (2026-11-24, `SC5_SELECT_INPUT_P1/_P2`, the pad path):
 player 1 picked a created character, took it back (player 1's game: side 1 3 -> 1 -> 0; the other's: side 1 3 -> 1 ->
 0, the record forgotten), picked Alpha Patroklos instead, player 2 picked, and the match ran in sync to the result.
-`SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests. A side named `c.<checksum>` (a ranked
+`SC5_TEST_LOCAL_PICK=<slot>[.<costume>]` stands in for the player in tests; a second after a comma is what that player
+takes when the pick holds the first back (its A refused as the player's would be, then 3 s on the panel, so the overlay
+can be seen; B first when it is another fighter's). A side named `c.<checksum>` (a ranked
 winner's created character, or a lobby's rematch that starts again) its own PC's autopilot picks: the fighter, then,
 once the costume panel is there, its created costume. The A that picked the fighter is held to its end while the panel
 comes in: cut off there (until 0.1.4) its last frames came as a new A on the panel, which took the first costume, so
@@ -1474,9 +1539,11 @@ after a call that never returns, 0x822A6970, which it now takes too).
 - The menus: the main menu's notice of the update and its states, and the "No save data" message box's new caller
   ("The launcher's game").
 - Created characters and downloadable parts: the fight no longer swaps a character with downloadable parts for a
-  template; it shows the plain body when a part's data cannot be loaded, and the check refuses a record whose
-  downloadable models have no file on this PC, so both games of a match load the same ("Created characters online",
-  "Unlocks and downloadable content"). The game registers the parts' names itself.
+  template; it shows the plain body when a part's data cannot be loaded, and since 0.1.7 both games of a match show
+  a character's plain body alike when either PC lacks its downloadable parts' data ("Created characters online",
+  "Unlocks and downloadable content"). The game registers the parts' names itself. Its repair pass holds the attack
+  rate to 111 (title update 1's to 200), but it never runs on a save's own characters, which fight at their own rate
+  (the check no longer holds the rate, since 0.1.7).
 - The launcher and the player's build take title update 3 only and refuse title update 1 by name (docs\LAUNCHER.md).
 
 **Checked with title update 3** (2026-11-25): the fight test as above; two games through the link with 40 ms each

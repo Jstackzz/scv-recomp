@@ -40,8 +40,10 @@ NEEDS_LOGIN = {
     "result", "lobby_create", "lobby_list", "lobby_join", "lobby_leave", "lobby_chat", "lobby_character",
     "lobby_ready", "lobby_start", "admin_notice", "series_ready", "lobby_role", "feed", "lobby_settings",
     "crash_report", "udp_tunnel", "tunnel", "desync_report", "report_file", "report_done", "lobby_rate",
+    "pick_refused",
 }
 CRASH_REPORTS_PER_SESSION = 20  # a game crashing over and over says so this many times, then no more
+PICK_REFUSALS_PER_SESSION = 40  # created characters a session's games held back at the select screen, then no more
 DESYNC_REPORTS_PER_SESSION = 10  # matches out of step a session reports, then no more
 # a desync report's lines from the game's log, 200 characters each at most (40 until SCV 0.1.4, when the game's own
 # `sc5 desync:` detail lines, up to about 80, came after its failed check); the message may be up to
@@ -213,6 +215,7 @@ class Session:
         self.features: set[str] = set()  # what its launcher can do beyond the protocol's start (hello, P.FEATURES)
         self.crash_reports = 0
         self.desync_reports = 0
+        self.pick_refusals = 0
         self.reports: dict[str, Report] = {}  # F3 reports coming in, and the ones saved (by id)
         self.account_id: int | None = None
         self.name: str | None = None
@@ -666,6 +669,7 @@ class Server:
             "leaderboard": self.on_leaderboard,
             "crash_report": self.on_crash_report,
             "desync_report": self.on_desync_report,
+            "pick_refused": self.on_pick_refused,
             "report_file": self.on_report_file,
             "report_done": self.on_report_done,
             "udp_tunnel": self.on_udp_tunnel,
@@ -2809,6 +2813,34 @@ class Server:
             log.info("DESYNC_REPORT %s | %s", s.name, line)
         self._pair_desync(s, match, frame, lines, again)
         self._reply(s, msg, {"type": "desync_ack"})
+
+    def on_pick_refused(self, s: Session, msg: dict[str, Any]) -> None:
+        """The launcher's game held back a created character its player tried to pick at the select screen (SCV 0.1.7):
+        one PICK_REFUSED line with both players' names and launchers, the match, the character and why in the game's
+        plain words (docs/PROTOCOL.md 1.13.3). Logged, nothing kept; PICK_REFUSALS_PER_SESSION at most."""
+        game = P.get_str(msg, "game", max_len=8)
+        if game not in P.GAMES:
+            raise P.ProtocolError("bad_request", "Unknown game.")
+        match = P.get_str(msg, "match", max_len=64, default="")
+        reason = P.get_str(msg, "reason", max_len=200)
+        if not CRASH_TEXT.fullmatch(match) or not CRASH_TEXT.fullmatch(reason) or not reason.strip():
+            raise P.ProtocolError("bad_request", "A refused pick is plain text.")
+        s.pick_refusals += 1
+        if s.pick_refusals > PICK_REFUSALS_PER_SESSION:
+            self._reply(s, msg, {"type": "pick_refused_ack"})
+            return
+        # the other player, from the match the server set up (a lobby's or the queue's)
+        other, other_version = "?", "?"
+        m = self.matches.get(match)
+        p = m.player_for(s.account_id) if m is not None else None
+        if m is not None and p is not None:
+            o = m.other(p)
+            other = o.name
+            if o.session is not None:
+                other_version = o.session.client_version or "?"
+        log.info("PICK_REFUSED %s (launcher %s) vs %s (launcher %s) %s match %s: %s", s.name, s.client_version or "?",
+                 other, other_version, game, match or "?", reason)
+        self._reply(s, msg, {"type": "pick_refused_ack"})
 
     def _pair_desync(self, s: Session, match: str, frame: int, lines: list[str], again: bool = False) -> None:
         """Both players' reports of one match in: one DESYNC_PAIR line names the two players, the frames each game
