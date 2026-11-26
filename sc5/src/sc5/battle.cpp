@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <process.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -177,7 +178,6 @@ struct Blend {
   uint32_t system;  // the cameras' system ([the manager + 8]): its mode at +0x2C, the director at +0x28
   int32_t camera;   // which of the director's eight cameras
   float from, to, length, done;
-  bool fresh;       // made in this frame: it moves on from the next one, as the game's task did
 };
 std::vector<Blend> g_blends;
 
@@ -646,12 +646,11 @@ REX_HOOK_RAW(sub_8211A9E8) {
 
 // The cameras' blends. When the fight's camera logic wants one of the director's eight cameras at another weight
 // (sub_82480D50, as the camera's mode changes), the game makes a task of 152 bytes for it (sub_82479E08: r3 the
-// cameras' manager, r4 the camera, f1 the weight wanted; a child of the task running then, vtable 0x820DA848) whose
-// update (sub_82479CD0, once a frame from the battle scene's step, sub_824968A8) moves the camera's weight (+0x9C)
-// from where it was to the weight wanted over a fixed length of the game's time (0x820B8E90), and ends itself. The
-// camera with the greatest weight decides which rule gives each player's side of the screen (sub_8216C890: player 1
-// while that camera is in its modes 1 and 3, else the sign of a cross product), which turns left and right into
-// forward and back: the weights are the fight's.
+// cameras' manager, r4 the camera, f1 the weight wanted; a child of the battle scene's task, vtable 0x820DA848) whose
+// update (sub_82479CD0) moves the camera's weight (+0x9C) from where it was to the weight wanted over a fixed length
+// of the game's time (0x820B8E90), and ends itself. The camera with the greatest weight decides which rule gives each
+// player's side of the screen (sub_8216C890: player 1 while that camera is in its modes 1 and 3, else the sign of a
+// cross product), which turns left and right into forward and back: the weights are the fight's.
 //   The task is a heap object the game's snapshot does not carry, so rollback did not put it back: a task made at
 // frame n was still there when the frames from n - 2 were run again, moved the weight on a frame early, and the frame
 // that made it made a second one. Ivy against Kilik with 60 ms each way: the first run of frame 2486 left camera 0
@@ -659,9 +658,18 @@ REX_HOOK_RAW(sub_8211A9E8) {
 // had player 1's rule, player 1's +0xC4 was 1 in one game and 0 in the other, and the check of frame 2490 failed, in
 // every run (0.1.6 and 0.1.7 too; the round was played again). The cameras themselves were alike in both games to
 // frame 2486 (SC5_NET_DUMP_AT, the director and both camera arrays).
-//   So the blends are kept here instead of in tasks: sub_82479E08 notes one, the battle scene's step moves each on
-// after the game's own work (one made in this frame from the next frame on, as a new task was first run then), and
-// the list is kept and put back with every snapshot's raw memory (Kept). The arithmetic is the task's.
+//   So the blends are kept here instead of in tasks: sub_82479E08 notes one, each is moved on where the game's task
+// was, and the list is kept and put back with every snapshot's raw memory (Kept). The arithmetic is the task's.
+//   Where the task was: the task system runs the battle scene's update (sub_82162168: the cameras' logic, which asks
+// for the blends, then the cameras' manager, sub_8247A138) and right after it the scene's child tasks, the blends
+// among them, in the very frame they were made and in each frame after: 16 updates for a blend of 15 (traced with the
+// game's own tasks, SC5_BLENDS_ORIGINAL=1 and SC5_DBG_BLENDS: asked at fight frame 376, updated from 376 to 391). The
+// first version of this (2026-11-25) moved them from sub_824968A8 instead, which runs only while a cinematic camera
+// does (the intro, a throw: 226 times in a match), so a blend asked for outside one waited, hundreds of frames, for
+// the next and then ran: the weights went back to where the blend began and over to its end again, at whatever frame
+// that game came to it. Two players' games came to it within a rollback of each other and mostly agreed; a
+// spectator's game, which runs each frame once, did not (Ivy against Kilik, 60 ms each way with jitter and loss: the
+// watched match apart at frame 1350 or 1830 in every run, 2026-11-26).
 namespace {
 constexpr uint32_t kBlendLength = 0x820B8E90;   // the length of a blend, in the game's time
 constexpr uint32_t kBlendZero = 0x820B8DE0;     // 0.0
@@ -683,30 +691,59 @@ bool ClockStopped() {
   return (sc5::battle::Get32(kGameClock + 0xE2A8) | sc5::battle::Get32(kGameClock + 0xE2B0) |
           sc5::battle::Get32(kGameClock + 0xE2B4)) != 0;
 }
+// tests: SC5_DBG_BLENDS=<file stem>: every blend asked for and every step of one, a line each, into <stem><pid>.txt
+// (a file of its own: the log leaves out lines that repeat); SC5_BLENDS_ORIGINAL=1 leaves the game's own blend tasks
+// and traces them there (sub_82479CD0's calls)
+FILE* BlendLog() {
+  static FILE* out = [] {
+    const char* v = std::getenv("SC5_DBG_BLENDS");
+    FILE* f = v && *v ? std::fopen(fmt::format("{}{}.txt", v, _getpid()).c_str(), "w") : nullptr;
+    if (f) std::setvbuf(f, nullptr, _IONBF, 0);
+    return f;
+  }();
+  return out;
+}
+bool BlendsOriginal() {
+  static const bool on = [] { const char* v = std::getenv("SC5_BLENDS_ORIGINAL"); return v && v[0] == '1'; }();
+  return on;
+}
+const char* Again() { return sc5::frame::Replaying() ? " again" : ""; }
 }  // namespace
 
 REX_EXTERN(sub_824B4158);  // sets a camera's weight: r3 the cameras' system, r4 the camera, f1 the weight
+REX_EXTERN(__imp__sub_82479CD0);
+REX_HOOK_RAW(sub_82479CD0) {
+  if (FILE* out = BlendLog()) std::fprintf(out, "%u%s the game's task %08X\n", sc5::game::FightFrame(), Again(), ctx.r3.u32);
+  __imp__sub_82479CD0(ctx, base);
+}
+
+REX_EXTERN(__imp__sub_82479E08);
 REX_HOOK_RAW(sub_82479E08) {
   const uint32_t manager = ctx.r3.u32;
   const int32_t camera = ctx.r4.s32;
   const float want = float(ctx.f1.f64);
   const uint32_t system = sc5::battle::Get32(manager + 8);
   const float now = BlendWeight(system, camera);
-  if (now == want) return;
-  sc5::battle::Put32(manager + 0x88, 1);
-  sc5::battle::g_blends.push_back({system, camera, now, want, GetF(kBlendLength), GetF(kBlendZero), true});
-}
-
-REX_EXTERN(__imp__sub_824968A8);
-REX_HOOK_RAW(sub_824968A8) {
-  __imp__sub_824968A8(ctx, base);
-  auto& blends = sc5::battle::g_blends;
-  if (blends.empty()) return;
-  const uint32_t state = sc5::game::BattleState();
-  if (state == sc5::game::kBattleIdle || state == sc5::game::kBattleLoading) {
-    blends.clear();  // the battle is over (its tasks went with it)
+  if (FILE* out = BlendLog())
+    std::fprintf(out, "%u%s asked camera %d from %g to %g (%zu blends)%s\n", sc5::game::FightFrame(), Again(), camera,
+                 double(now), double(want), sc5::battle::g_blends.size(), now == want ? " there already" : "");
+  if (BlendsOriginal()) {
+    __imp__sub_82479E08(ctx, base);
     return;
   }
+  if (now == want) return;
+  sc5::battle::Put32(manager + 0x88, 1);
+  sc5::battle::g_blends.push_back({system, camera, now, want, GetF(kBlendLength), GetF(kBlendZero)});
+}
+
+// The battle scene's update, then its blends, as the task system ran its child tasks after it. r3: the scene's task,
+// whose cameras' system is the word at +224 + 896 (the director's part of the task, battle.cpp kCameraDirector).
+REX_EXTERN(__imp__sub_82162168);
+REX_HOOK_RAW(sub_82162168) {
+  const uint32_t system = sc5::battle::Get32(ctx.r3.u32 + 224 + 896);
+  __imp__sub_82162168(ctx, base);
+  auto& blends = sc5::battle::g_blends;
+  if (blends.empty()) return;
   const PPCContext saved = ctx;
   auto set = [&](const sc5::battle::Blend& b, float weight) {
     ctx.r3.u64 = b.system;
@@ -716,9 +753,8 @@ REX_HOOK_RAW(sub_824968A8) {
   };
   for (size_t i = 0; i < blends.size();) {
     sc5::battle::Blend& b = blends[i];
-    if (b.fresh) {
-      b.fresh = false;
-      i++;
+    if (b.system != system) {  // another battle's (its tasks went with it)
+      blends.erase(blends.begin() + i);
       continue;
     }
     if (ClockStopped()) {
@@ -736,6 +772,9 @@ REX_HOOK_RAW(sub_824968A8) {
       else if (mode == 2) set(b, GetF(kBlendZero));
       over = true;
     }
+    if (FILE* out = BlendLog())
+      std::fprintf(out, "%u%s camera %d %g -> %g done %g of %g mode %u%s\n", sc5::game::FightFrame(), Again(), b.camera,
+                   double(b.from), double(b.to), double(b.done), double(b.length), mode, over ? " over" : "");
     if (over) blends.erase(blends.begin() + i);
     else i++;
   }

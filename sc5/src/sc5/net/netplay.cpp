@@ -2727,6 +2727,8 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
     SeedFrame(ctx, base, g_frame);
     SetFrameInputs(g_frame);
     sparring::OnFrame(g_frame);
+    DumpAtTop(ctx, base, g_frame);  // tests (SC5_NET_DUMP_AT): a spectator's frames beside the players'
+    DumpSettled(g_frame + 1);
     frame::RunAgain(ctx, base);
     LogFrame(true);
     g_frame++;
@@ -2751,6 +2753,8 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
   SeedFrame(ctx, base, g_frame);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);
+  DumpAtTop(ctx, base, g_frame);
+  DumpSettled(g_frame + 1);
 }
 
 // A KO's replay cut short (RSKIP): this game's player's START or A while one plays asks the other game for a frame some
@@ -3049,7 +3053,7 @@ void DumpSettled(uint32_t settled) {
   const char* dir = std::getenv("SC5_NET_DUMP_DIR");
   while (!d.pending.empty() && d.pending.begin()->first < settled) {
     const auto [f, stream] = *d.pending.begin();
-    const std::string stem = fmt::format("{}/net{}_m{}at{}", dir, g_slot + 1, g_match, f);
+    const std::string stem = fmt::format("{}/net{}_m{}at{}", dir, g_cfg.watch ? 3 : g_slot + 1, g_match, f);  // 3: a spectator
     auto write = [](const std::string& path, const uint8_t* data, size_t size, const std::vector<battle::Block>& blocks) {
       if (FILE* out = std::fopen((path + ".bin").c_str(), "wb")) {
         std::fwrite(data, 1, size, out);
