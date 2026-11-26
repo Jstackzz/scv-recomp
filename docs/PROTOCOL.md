@@ -1590,3 +1590,72 @@ the new launcher starts, finds `built.txt` from the old release and title update
 asks for title update 3 (the player's saved step 2 still names title update 1's file, and choosing it again is
 refused by name); once title update 3 is chosen, CHECK AND BUILD puts its `default.xexp` and `patch.cpk` in place
 (the disc already extracted is kept, its files checked by size) and builds the game again.
+
+### 3.8 The game's own online menus (SCV 0.1.8)
+
+From 0.1.8 the player does everything online inside the game: the launcher builds the game, starts it (PLAY) and
+keeps the connection to the server in the background; the game draws the menus (docs/GAME.md, "The game's online
+menus") and tells the launcher what the player chose. There is one game process for everything, started with the
+player's own save (`SC5_USER_DIR` is `<game folder>\user`, not a fresh session save) and `SC5_NET=1`
+`SC5_MENUS=1`: single player, Creation, Training and online matches all happen in it.
+
+Two more files in the session folder, with 3.2's rules (atomic replacement, readers share):
+
+**`ui.json` (launcher -> game).** One UTF-8 JSON object, replaced whole whenever anything in it changes and at least
+once a second (`t` moves on: a game that sees no new `t` for 5 s shows "the launcher does not answer"). The game
+polls it about ten times a second while its online menus are up, once a second otherwise. Every field is always
+there; lists may be empty.
+
+```
+{ "v": 1, "t": 1795600000123,
+  "account": { "state": "signed_out" | "connecting" | "signed_in" | "offline",
+               "name": "", "rank": "", "elo": 0, "wins": 0, "losses": 0, "error": "" },
+  "server":  { "online": 0, "in_matches": 0, "notice": "" },
+  "side": "off" | "left" | "right",
+  "queue":   { "state": "idle" | "searching" | "found" | "accepted" | "connecting" | "starting",
+               "kind": "" | "ranked" | "casual", "secs": 0, "accept_left": 0,
+               "opponent": "", "opponent_rank": "", "ping": 0, "text": "" },
+  "series":  { "kind": "" | "ranked" | "casual" | "lobby", "opponent": "", "mine": 0, "theirs": 0, "to": 0,
+               "state": "" | "choosing" | "waiting" | "over", "text": "" },
+  "lobbies": { "at": 0, "list": [ { "code": "", "name": "", "host": "", "players": 0, "max": 0,
+               "mode": "versus" | "sparring", "koth": false, "locked": false, "region": "" } ] },
+  "lobby":   null | { "code": "", "name": "", "host": "", "mode": "versus", "koth": false, "ready": false,
+               "state": "waiting" | "match", "text": "",
+               "members": [ { "name": "", "ready": false, "role": "player" | "spectator", "wins": 0 } ] },
+  "leaderboard": { "at": 0, "rows": [ { "place": 0, "name": "", "rank": "", "elo": 0, "wins": 0, "losses": 0 } ] },
+  "message": { "id": 0, "kind": "info" | "error", "text": "" },
+  "update":  { "version": "", "text": "" } }
+```
+
+`queue.secs` is how long the search has run; `accept_left` the seconds left to accept a match found; `queue.text`
+and `series.text`, `lobby.text` one plain sentence of what is going on, ready to show. `series` describes the
+matches against the present opponent: `to` is 3 in a ranked set and 0 where there is no end (casual, a lobby);
+`state` is `choosing` while the loser of the last match chooses on the game's result screen (3.3, *The loser's
+choice*), `waiting` while this player waits for the other, `over` when the set or the series ended. `message` is
+shown once per `id`. `update.version` is set when the server offers a newer release: the game says so and the
+launcher installs it when the game is closed.
+
+**`ask.txt` (game -> launcher).** One line, claimed by the launcher by renaming it to `ask.txt.taken`, as the game
+claims `cmd.txt` (3.3); the game writes the next one once the last was taken (it keeps its own queue). Line grammar
+as 3.2: `ask n=<count> <verb> [key=value ...]`; a text value is percent-encoded (UTF-8 bytes other than
+`[A-Za-z0-9_.-]` as `%XX`).
+
+| ask | meaning |
+|---|---|
+| `queue kind=ranked` / `queue kind=casual` | search for a match (1.7) |
+| `cancel` | stop searching |
+| `accept` / `decline` | answer a match found |
+| `leave` | leave the series or set after a match (the other player is told, 1.9.1) |
+| `side value=off\|left\|right` | the player's preferred side (docs/GAME.md, "A player's preferred side"); the launcher keeps it and hands it back in `ui.json` and to the game |
+| `lobbies` | refresh the list of open lobbies (1.10) |
+| `lobby_create name=<text> mode=versus\|sparring koth=0\|1 private=0\|1` | open a lobby and join it |
+| `lobby_join code=<code> [watch=1]` | join a lobby, as a player or to watch |
+| `lobby_ready value=0\|1` | ready or not for the lobby's next match |
+| `lobby_leave` | leave the lobby |
+| `leaderboard` | fetch the leaderboard (1.11) |
+
+A match itself starts as before: the launcher writes `start ...` to `cmd.txt` (3.3) once the two players are
+connected; the game leaves its online menu, the fight is set up and played, `result` goes to `status.txt`, and
+`park` brings the game back to its online menu. Searching and a lobby's waiting happen while the player is in the
+game's online menu: leaving that menu sends `cancel` (or `lobby_leave`) first. The player's account is signed in
+in the launcher before PLAY (a name and password are typed there, never in the game).
