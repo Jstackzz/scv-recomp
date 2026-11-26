@@ -1,4 +1,5 @@
-// The game's own online menus, see online_menu.h. The screens, the player's pad and the asks; online_draw.cpp draws them.
+// The game's own online menus, see online_menu.h. The screens, the player's pad and the asks; online_draw.cpp draws
+// them.
 //
 // The entry. AstralHome's top-level list has five entries in a fixed order (Offline Play 0, Xbox LIVE 1, Story 2,
 // Creation 3, Options 4: the menu's cursor at +0x94, sc5/autopilot.cpp ReadHome), and the count is in its update's code
@@ -21,12 +22,6 @@
 
 #include "sc5/online_menu.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
-
 #include <fmt/format.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -34,13 +29,20 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+
 #include "sc5/autopilot.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/testinput.h"
 #include "sc5/ui_link.h"
 
-REX_EXTERN(sub_821DAD90);  // a menu sound (r3 a 16-byte handle the call fills, r4 the sound: 8 cursor, 10 choice, 11 back)
+REX_EXTERN(
+    sub_821DAD90);  // a menu sound (r3 a 16-byte handle the call fills, r4 the sound: 8 cursor, 10 choice, 11 back)
 
 namespace sc5::online {
 
@@ -56,7 +58,7 @@ const char* const kEntryDesc =
     "Fight other players online with rollback netcode. Ranked and casual matches, lobbies, the leaderboard and "
     "online practice.";
 
-enum class Screen { Top, Search, Lobbies, Create, Room, Board, After };
+enum class Screen { Top, Search, Lobbies, Create, Room, Board, After, Password };
 enum TopItem { kRanked, kCasual, kLobbies, kPractice, kBoard, kSide, kBack, kTopItems };
 
 bool g_on = false;
@@ -68,29 +70,35 @@ bool g_test_opened = false;
 Screen g_screen = Screen::Top;
 int g_cursor = 0;
 int g_top_cursor = 0;
-std::string g_kind;               // the search asked for: ranked or casual
-uint64_t g_asked_at = 0;          // the frame the last ask that changes screens went
+std::string g_kind;       // the search asked for: ranked or casual
+uint64_t g_asked_at = 0;  // the frame the last ask that changes screens went
 // the frames the player left a search (cancel, decline) and a lobby: ui.json says so only once the launcher has taken
 // the ask, so for a while its old word is not followed back into them
 uint64_t g_left_search_at = 0, g_left_lobby_at = 0;
 constexpr uint64_t kGrace = 150;
-int g_side_pending = -1;          // 0 off, 1 left, 2 right: asked, ui.json not there yet
+int g_side_pending = -1;  // 0 off, 1 left, 2 right: asked, ui.json not there yet
 uint64_t g_side_at = 0;
-int g_ready_pending = -1;         // the lobby's ready asked
+int g_ready_pending = -1;  // the lobby's ready asked
 uint64_t g_ready_at = 0;
 int64_t g_message_seen = 0;
-bool g_message_primed = false;    // the message ui.json had when the menus first read it is old news
-std::string g_join;               // a lobby asked for (its code), until the lobby is there
+bool g_message_primed = false;  // the message ui.json had when the menus first read it is old news
+std::string g_join;             // a lobby asked for (its code), until the lobby is there
 uint64_t g_join_at = 0;
-bool g_board_jump = false;        // the leaderboard asked for: the cursor goes to the player's own row
+bool g_board_jump = false;  // the leaderboard asked for: the cursor goes to the player's own row
 bool g_popup = false, g_popup_error = false;
 std::string g_popup_head, g_popup_text;
 // Create a Lobby's settings
-int g_name_i = 0, g_mode_i = 0, g_koth = 0, g_private = 0;
-const char* const kLobbyNames[] = {"", "Casual Sets", "First to Three", "Training Room", "Newcomers Welcome",
-                                   "Late Night Fights", "King of the Hill"};
+int g_name_i = 0, g_mode_i = 0, g_koth = 0, g_private = 0, g_rounds_i = 2;
+constexpr int kRounds[3] = {1, 3, 5};  // best of (lobby_create's rounds; 5 the launcher's default, first to 3)
+// a locked lobby's password, entered with the pad: four digits, the one being changed, the lobby, to watch or play
+int g_digits[4] = {0, 0, 0, 0};
+int g_digit_at = 0;
+std::string g_pw_code, g_pw_name;
+bool g_pw_watch = false;
+const char* const kLobbyNames[] = {
+    "", "Casual Sets", "First to Three", "Training Room", "Newcomers Welcome", "Late Night Fights", "King of the Hill"};
 constexpr int kLobbyNameCount = int(std::size(kLobbyNames));
-enum CreateItem { kCName, kCMode, kCKoth, kCPrivate, kCCreate, kCBack, kCreateItems };
+enum CreateItem { kCName, kCMode, kCRounds, kCKoth, kCPrivate, kCCreate, kCBack, kCreateItems };
 
 // the pad: each direction pressed, then again after 20 frames and every 6 after
 struct Pressed {
@@ -115,9 +123,9 @@ input::Pad OwnPad() {
 
 Pressed ReadPressed(const input::Pad& pad) {
   Pressed p;
-  const bool dir[4] = {(pad.buttons & input::kDpadUp) || pad.ly > 16000, (pad.buttons & input::kDpadDown) || pad.ly < -16000,
-                       (pad.buttons & input::kDpadLeft) || pad.lx < -16000,
-                       (pad.buttons & input::kDpadRight) || pad.lx > 16000};
+  const bool dir[4] = {
+      (pad.buttons & input::kDpadUp) || pad.ly > 16000, (pad.buttons & input::kDpadDown) || pad.ly < -16000,
+      (pad.buttons & input::kDpadLeft) || pad.lx < -16000, (pad.buttons & input::kDpadRight) || pad.lx > 16000};
   bool* out[4] = {&p.up, &p.down, &p.left, &p.right};
   for (int i = 0; i < 4; i++) {
     g_hold[i] = dir[i] ? g_hold[i] + 1 : 0;
@@ -160,8 +168,9 @@ void Why(const uilink::Ui& u, std::string& head, std::string& text, bool& error)
   error = false;
   if (!u.seen || !u.fresh) {
     head = "THE LAUNCHER IS NOT ANSWERING";
-    text = u.seen ? "SCV Online's launcher stopped answering. Online play comes back when it does. Practice still works."
-                  : "Online play needs SCV Online's launcher: start the game with its PLAY button. Practice still works.";
+    text = u.seen
+               ? "SCV Online's launcher stopped answering. Online play comes back when it does. Practice still works."
+               : "Online play needs SCV Online's launcher: start the game with its PLAY button. Practice still works.";
     error = true;
   } else if (u.account.state == "signed_out") {
     head = "NOT SIGNED IN";
@@ -222,7 +231,8 @@ void Go(Screen s, int cursor = 0) {
   if (g_screen == Screen::Top) g_top_cursor = g_cursor;
   g_screen = s;
   g_cursor = s == Screen::Top ? g_top_cursor : cursor;
-  static const char* kNames[] = {"top", "search", "lobbies", "create", "room", "leaderboard", "after the match"};
+  static const char* kNames[] = {"top",  "search",      "lobbies",         "create",
+                                 "room", "leaderboard", "after the match", "password"};
   REXLOG_INFO("sc5 online: screen {} at frame {}", kNames[int(s)], Frame());
 }
 
@@ -236,8 +246,10 @@ bool Searching(const uilink::Ui& u) { return u.queue.state != "idle"; }
 
 // The menus close: a search is cancelled and a lobby left first (docs\PROTOCOL.md 3.8)
 void Close(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, bool sound) {
-  if (u.queue.state == "found") uilink::Ask("decline");
-  else if (Searching(u) || (g_screen == Screen::Search && Frame() < g_asked_at + 300)) uilink::Ask("cancel");
+  if (u.queue.state == "found")
+    uilink::Ask("decline");
+  else if (Searching(u) || (g_screen == Screen::Search && Frame() < g_asked_at + 300))
+    uilink::Ask("cancel");
   if (u.lobby.present || !g_join.empty()) uilink::Ask("lobby_leave");
   g_left_search_at = g_left_lobby_at = Frame();
   g_join.clear();
@@ -265,9 +277,12 @@ void TopRows(const uilink::Ui& u, View& v) {
   const bool ok = Usable(u);
   const int side = g_side_pending >= 0 ? g_side_pending : SideOf(u.side);
   v.title = kName;
-  v.rows = {{"Ranked Match", "", "", ok},  {"Casual Match", "", "", ok},
-            {"Lobbies", "", "", ok},       {"Practice"},
-            {"Leaderboard", "", "", ok},   {"Preferred Side", SideName(side), "", u.fresh, false, true},
+  v.rows = {{"Ranked Match", "", "", ok},
+            {"Casual Match", "", "", ok},
+            {"Lobbies", "", "", ok},
+            {"Practice"},
+            {"Leaderboard", "", "", ok},
+            {"Preferred Side", SideName(side), "", u.fresh, false, true},
             {"Back"}};
   static const char* kDesc[kTopItems] = {
       "Fight for rank and rating. A ranked set is first to three wins against a player near your level; the winner of "
@@ -350,9 +365,7 @@ void TopInput(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pressed
       SetSide(side + 1);
       Sound(ctx, base, 10);
       break;
-    case kBack:
-      Close(ctx, base, u, true);
-      break;
+    case kBack: Close(ctx, base, u, true); break;
   }
 }
 
@@ -387,8 +400,9 @@ void SearchRows(const uilink::Ui& u, View& v) {
   } else {
     v.stage_head = "SEARCHING FOR AN OPPONENT";
     v.stage_big = Clock(st == "searching" ? u.queue.secs : 0);
-    v.stage_sub = st == "searching" ? (kind == "ranked" ? "Looking for a player near your rating" : "Looking for a player")
-                                    : "Asking the launcher";
+    v.stage_sub = st == "searching"
+                      ? (kind == "ranked" ? "Looking for a player near your rating" : "Looking for a player")
+                      : "Asking the launcher";
     v.rows = {{"Cancel"}};
     v.desc = "Stop searching and go back.";
     v.legend = {{"A", "OK"}, {"B", "Cancel"}};
@@ -431,7 +445,6 @@ void LobbiesRows(const uilink::Ui& u, View& v) {
     Row row;
     row.label = r.name.empty() ? r.code : r.name;
     row.detail = fmt::format("{}{}/{}", r.locked ? "LOCKED  " : "", r.players, r.max > 0 ? r.max : 2);
-    row.enabled = !r.locked;
     v.rows.push_back(row);
   }
   if (g_cursor == 0) {
@@ -443,13 +456,15 @@ void LobbiesRows(const uilink::Ui& u, View& v) {
                                              age, age == 1 ? "" : "s")
                                : "Ask the server for the open lobbies again.";
   } else if (g_cursor == 1) {
-    v.desc = "Open a lobby of your own: its name from a list, versus or Online Practice, King of the Hill, private or "
-             "not.";
+    v.desc =
+        "Open a lobby of your own: its name from a list, versus or Online Practice, King of the Hill, private or "
+        "not.";
   } else if (size_t(g_cursor - kLobbyFirst) < u.lobbies.size()) {
     const uilink::LobbyRow& r = u.lobbies[size_t(g_cursor - kLobbyFirst)];
-    v.desc = fmt::format("Host {}. {}{}. Code {}.{}{}", r.host.empty() ? "unknown" : r.host, ModeName(r.mode),
-                         r.koth ? ", King of the Hill" : "", r.code, r.region.empty() ? "" : " Region " + r.region + ".",
-                         r.locked ? " Locked: it cannot be joined." : "");
+    v.desc =
+        fmt::format("Host {}. {}{}. Code {}.{}{}", r.host.empty() ? "unknown" : r.host, ModeName(r.mode),
+                    r.koth ? ", King of the Hill" : "", r.code, r.region.empty() ? "" : " Region " + r.region + ".",
+                    r.locked ? " Locked: it needs its password, which its host can tell you." : "");
   }
   if (!g_join.empty()) v.desc = "Joining lobby " + g_join + " ...";
   v.legend = {{"UD", "Select"}, {"A", g_cursor >= kLobbyFirst ? "Join" : "OK"}};
@@ -474,14 +489,65 @@ void LobbiesInput(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pre
   } else if (size_t(g_cursor - kLobbyFirst) < u.lobbies.size()) {
     const uilink::LobbyRow& r = u.lobbies[size_t(g_cursor - kLobbyFirst)];
     if (r.locked) {
-      Popup("LOCKED", "This lobby is locked: it cannot be joined just now.", false);
-      Sound(ctx, base, 11);
+      // its password first: four digits with the pad
+      g_pw_code = r.code;
+      g_pw_name = r.name.empty() ? r.code : r.name;
+      g_pw_watch = p.x;
+      for (int& d : g_digits) d = 0;
+      g_digit_at = 0;
+      Sound(ctx, base, 10);
+      Go(Screen::Password);
       return;
     }
     g_join = r.code;
     g_join_at = Frame();
-    if (p.x) uilink::Ask("lobby_join", {{"code", r.code}, {"watch", "1"}});
-    else uilink::Ask("lobby_join", {{"code", r.code}});
+    if (p.x)
+      uilink::Ask("lobby_join", {{"code", r.code}, {"watch", "1"}});
+    else
+      uilink::Ask("lobby_join", {{"code", r.code}});
+    Sound(ctx, base, 10);
+  }
+}
+
+// A locked lobby's password: four digits, LEFT and RIGHT to the one to change, UP and DOWN change it, A joins
+void PasswordRows(const uilink::Ui& u, View& v) {
+  (void)u;
+  v.title = "Lobby Password";
+  v.stage = true;
+  v.stage_head = "ENTER THE PASSWORD";
+  for (int d : g_digits) v.digits += char('0' + d);
+  v.digit_at = g_digit_at;
+  v.stage_sub = g_pw_name;
+  v.stage_lines.push_back("Its host sees it in the lobby's room.");
+  v.rows = {{g_pw_watch ? "Watch the Lobby" : "Join the Lobby"}};
+  v.desc = !g_join.empty() ? "Joining lobby " + g_join + " ..."
+                           : "UP and DOWN change a digit, LEFT and RIGHT go to the next one. A joins with it.";
+  v.legend = {{"UD", "Digit"}, {"LR", "Move"}, {"A", "Join"}, {"B", "Back"}};
+}
+
+void PasswordInput(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pressed& p) {
+  (void)u;
+  if (p.b) {
+    g_join.clear();
+    Sound(ctx, base, 11);
+    Go(Screen::Lobbies);
+    return;
+  }
+  if (p.left || p.right) {
+    g_digit_at = std::clamp(g_digit_at + (p.right ? 1 : -1), 0, 3);
+    Sound(ctx, base, 8);
+  } else if (p.up || p.down) {
+    g_digits[g_digit_at] = (g_digits[g_digit_at] + (p.up ? 1 : 9)) % 10;
+    Sound(ctx, base, 8);
+  } else if (p.a && g_join.empty()) {
+    std::string pw;
+    for (int d : g_digits) pw += char('0' + d);
+    g_join = g_pw_code;
+    g_join_at = Frame();
+    if (g_pw_watch)
+      uilink::Ask("lobby_join", {{"code", g_pw_code}, {"watch", "1"}, {"password", pw}});
+    else
+      uilink::Ask("lobby_join", {{"code", g_pw_code}, {"password", pw}});
     Sound(ctx, base, 10);
   }
 }
@@ -490,6 +556,7 @@ void CreateRows(const uilink::Ui& u, View& v) {
   v.title = "Create a Lobby";
   v.rows = {{"Name", LobbyName(g_name_i, u), "", true, false, true},
             {"Mode", g_mode_i ? "Online Practice" : "Versus", "", true, false, true},
+            {"Rounds", fmt::format("Best of {}", kRounds[g_rounds_i]), "", true, false, true},
             {"King of the Hill", g_koth ? "On" : "Off", "", true, false, true},
             {"Private", g_private ? "Yes" : "No", "", true, false, true},
             {"Create Lobby"},
@@ -498,8 +565,10 @@ void CreateRows(const uilink::Ui& u, View& v) {
       "The name others see in the list.",
       "Versus: matches that count for nothing but the lobby's own wins. Online Practice: endless rounds, health "
       "refilled.",
+      "The rounds of each match: best of 1, 3 or 5 (first to 3, as the console's default).",
       "On: the winner stays in and the next player in line takes on the winner.",
-      "Yes: the lobby is not in the list; players join it by its code.",
+      "Yes: the lobby is locked with a 4-digit password the launcher makes up; the room shows it to you, for your "
+      "friends to join with.",
       "Open the lobby and wait for players in it.",
       "Back to the lobbies."};
   v.desc = kDesc[std::clamp(g_cursor, 0, kCreateItems - 1)];
@@ -518,6 +587,7 @@ void CreateInput(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pres
   switch (g_cursor) {
     case kCName: g_name_i = (g_name_i + step + kLobbyNameCount) % kLobbyNameCount; break;
     case kCMode: g_mode_i ^= 1; break;
+    case kCRounds: g_rounds_i = (g_rounds_i + step + 3) % 3; break;
     case kCKoth: g_koth ^= 1; break;
     case kCPrivate: g_private ^= 1; break;
     case kCCreate:
@@ -525,7 +595,8 @@ void CreateInput(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pres
       uilink::Ask("lobby_create", {{"name", LobbyName(g_name_i, u)},
                                    {"mode", g_mode_i ? "sparring" : "versus"},
                                    {"koth", g_koth ? "1" : "0"},
-                                   {"private", g_private ? "1" : "0"}});
+                                   {"private", g_private ? "1" : "0"},
+                                   {"rounds", fmt::format("{}", kRounds[g_rounds_i])}});
       g_join = "new";
       g_join_at = Frame();
       Sound(ctx, base, 10);
@@ -547,7 +618,15 @@ void RoomRows(const uilink::Ui& u, View& v) {
   v.desc = !l.text.empty() ? l.text
            : on_ready      ? "Say you are ready for the lobby's next match. A changes it."
                            : "Leave this lobby and go back to the list.";
-  v.card_head = fmt::format("Lobby {} - {}{}", l.code, ModeName(l.mode), l.koth ? ", King of the Hill" : "");
+  v.card_head = fmt::format("Lobby {} - {}{}{}", l.code, ModeName(l.mode), l.koth ? ", King of the Hill" : "",
+                            l.locked ? ", locked" : "");
+  if (!l.password.empty()) {
+    Line pw;  // the host's own lobby: its password, to tell friends
+    pw.name = "Password";
+    pw.value = l.password;
+    pw.strong = true;
+    v.card.push_back(pw);
+  }
   for (const uilink::Member& m : l.members) {
     Line line;
     line.name = m.name + (m.name == l.host ? " (host)" : "");
@@ -623,18 +702,24 @@ bool SeriesGoing(const uilink::Ui& u) { return !u.series.kind.empty() && u.serie
 
 void AfterRows(const uilink::Ui& u, View& v) {
   const uilink::Series& s = u.series;
-  v.title = s.kind == "ranked" ? "Ranked Set" : s.kind == "casual" ? "Casual Match" : s.kind == "lobby" ? "Lobby" : kName;
+  v.title = s.kind == "ranked"   ? "Ranked Set"
+            : s.kind == "casual" ? "Casual Match"
+            : s.kind == "lobby"  ? "Lobby"
+                                 : kName;
   v.stage = true;
   if (s.kind.empty()) {
     v.stage_head = "THE MATCH IS OVER";
     v.stage_big = "";
   } else {
-    v.stage_head = s.state == "over" ? (s.kind == "ranked" ? "THE SET IS OVER" : "THE SERIES IS OVER")
-                                     : s.kind == "ranked" ? "THE SET SO FAR" : "THE SCORE SO FAR";
+    v.stage_head = s.state == "over"    ? (s.kind == "ranked" ? "THE SET IS OVER" : "THE SERIES IS OVER")
+                   : s.kind == "ranked" ? "THE SET SO FAR"
+                                        : "THE SCORE SO FAR";
     v.stage_big = fmt::format("You {}  -  {} {}", s.mine, s.theirs, s.opponent.empty() ? "Opponent" : s.opponent);
     if (s.to > 0) v.stage_sub = fmt::format("First to {} wins", s.to);
-    if (s.state == "choosing") v.stage_lines.push_back("The last match's loser is choosing the next match");
-    else if (s.state == "waiting") v.stage_lines.push_back("Waiting for the other player");
+    if (s.state == "choosing")
+      v.stage_lines.push_back("The last match's loser is choosing the next match");
+    else if (s.state == "waiting")
+      v.stage_lines.push_back("Waiting for the other player");
   }
   if (!s.text.empty()) v.stage_lines.push_back(s.text);
   if (SeriesGoing(u)) {
@@ -675,8 +760,8 @@ void Common(const uilink::Ui& u, View& v) {
     v.account.push_back({"Players online", fmt::format("{}", u.server.online)});
     v.account.push_back({"In matches", fmt::format("{}", u.server.in_matches)});
   } else {
-    v.rank = !u.seen || !u.fresh ? "Launcher not answering" : Capital(u.account.state == "signed_out" ? "signed out"
-                                                                                                     : u.account.state);
+    v.rank = !u.seen || !u.fresh ? "Launcher not answering"
+                                 : Capital(u.account.state == "signed_out" ? "signed out" : u.account.state);
   }
   if (!u.update_version.empty())
     v.news.push_back({"UPDATE READY", u.update_text.empty() ? "Version " + u.update_version +
@@ -697,8 +782,8 @@ void Common(const uilink::Ui& u, View& v) {
 }
 
 // The launcher's own changes of screen: a search going on shows the search (one the launcher started again by itself
-// after a series too); a lobby joined shows its room; a room gone shows the list; a search gone back to idle (cancelled,
-// declined, the server's word) the top level
+// after a series too); a lobby joined shows its room; a room gone shows the list; a search gone back to idle
+// (cancelled, declined, the server's word) the top level
 void Follow(const uilink::Ui& u) {
   // a lobby: the one just left is not followed back into, nor an old one while another is being joined
   const bool lobby_left = Frame() < g_left_lobby_at + kGrace && g_join.empty();
@@ -712,8 +797,7 @@ void Follow(const uilink::Ui& u) {
     Go(Screen::Lobbies);
   }
   if (Searching(u) && u.fresh && Frame() > g_left_search_at + kGrace && g_screen != Screen::Search &&
-      g_screen != Screen::Room &&
-      !(g_screen == Screen::After && SeriesGoing(u))) {
+      g_screen != Screen::Room && !(g_screen == Screen::After && SeriesGoing(u))) {
     g_kind = u.queue.kind;
     Go(Screen::Search);
   }
@@ -722,8 +806,10 @@ void Follow(const uilink::Ui& u) {
     Go(Screen::Top);
   }
   if (!g_join.empty() && Frame() > g_join_at + 900 && !u.lobby.present) {
-    Popup("NO ANSWER", g_join == "new" ? "The lobby could not be opened. Please try again."
-                                       : "The lobby did not answer. It may have closed.", true);
+    Popup("NO ANSWER",
+          g_join == "new" ? "The lobby could not be opened. Please try again."
+                          : "The lobby did not answer. It may have closed.",
+          true);
     g_join.clear();
   }
   if (g_side_pending >= 0 && (SideOf(u.side) == g_side_pending || Frame() > g_side_at + 300)) g_side_pending = -1;
@@ -742,6 +828,8 @@ void Follow(const uilink::Ui& u) {
   if (u.message.id != g_message_seen && !u.message.text.empty()) {
     g_message_seen = u.message.id;
     Popup(u.message.kind == "error" ? "ERROR" : "NOTICE", u.message.text, u.message.kind == "error");
+    // an ask the launcher refused (it says why in an error): a lobby asked for is not coming
+    if (u.message.kind == "error") g_join.clear();
   }
 }
 
@@ -755,6 +843,7 @@ View Build(const uilink::Ui& u) {
     case Screen::Room: RoomRows(u, v); break;
     case Screen::Board: BoardRows(u, v); break;
     case Screen::After: AfterRows(u, v); break;
+    case Screen::Password: PasswordRows(u, v); break;
   }
   g_cursor = v.rows.empty() ? 0 : std::clamp(g_cursor, 0, int(v.rows.size()) - 1);
   v.cursor = g_cursor;
@@ -770,7 +859,7 @@ void Input(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pressed& p
     }
     return;
   }
-  if (rows > 0 && (p.up || p.down)) {
+  if (rows > 0 && (p.up || p.down) && g_screen != Screen::Password) {
     const int before = g_cursor;
     g_cursor = std::clamp(g_cursor + (p.down ? 1 : -1), 0, rows - 1);
     if (g_cursor != before) Sound(ctx, base, 8);
@@ -783,6 +872,7 @@ void Input(PPCContext& ctx, uint8_t* base, const uilink::Ui& u, const Pressed& p
     case Screen::Room: RoomInput(ctx, base, u, p); break;
     case Screen::Board: BoardInput(ctx, base, u, p); break;
     case Screen::After: AfterInput(ctx, base, u, p); break;
+    case Screen::Password: PasswordInput(ctx, base, u, p); break;
   }
 }
 
@@ -860,7 +950,10 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
       return;
     }
     // tests: SC5_TEST_ONLINE_MENU=1 opens them once the game is first at its hold point, as the player's A would
-    static const bool test = [] { const char* v = std::getenv("SC5_TEST_ONLINE_MENU"); return v && v[0] == '1'; }();
+    static const bool test = [] {
+      const char* v = std::getenv("SC5_TEST_ONLINE_MENU");
+      return v && v[0] == '1';
+    }();
     if (test && !g_test_opened && at_menu && depth == 0) {
       g_test_opened = true;
       Opened(ctx, base, "SC5_TEST_ONLINE_MENU");
@@ -885,11 +978,17 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
     // back from a match (or a park at the menus themselves): its series, or the lobby's room
     g_parked = false;
     g_popup = false;
-    if (u.lobby.present) Go(Screen::Room);
-    else if (!u.series.kind.empty()) Go(Screen::After);
-    else Go(Screen::Top);
-    REXLOG_INFO("sc5 online: back from the match: {}", u.series.kind.empty() ? "no series" : "the series " +
-                u.series.kind + fmt::format(" {} - {} ({})", u.series.mine, u.series.theirs, u.series.state));
+    if (u.lobby.present)
+      Go(Screen::Room);
+    else if (!u.series.kind.empty())
+      Go(Screen::After);
+    else
+      Go(Screen::Top);
+    REXLOG_INFO("sc5 online: back from the match: {}",
+                u.series.kind.empty()
+                    ? "no series"
+                    : "the series " + u.series.kind +
+                          fmt::format(" {} - {} ({})", u.series.mine, u.series.theirs, u.series.state));
   }
   Follow(u);
   const Pressed p = ReadPressed(pad);

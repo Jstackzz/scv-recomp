@@ -1,12 +1,12 @@
 // The online menus drawn over the main menu (online_menu.h), in the look of the game's own menus: Astral Home and
-// Offline Play (pictures of both, 2026-11-26) have the screen's title top left on a long band with a bright flare at its
-// left end, the entries as long blade-shaped bars (the chosen one wide and bright, its text dark; the others narrower,
-// dimmer and set further in the further they are from it, the list moving so that the chosen one stays near the middle),
-// the chosen entry's description under it, cards on the right (the player's license: a coloured band with the name,
-// then its numbers), and the buttons' legend at the bottom right. Here the same, larger: the owner sees poorly, so every
-// text is at least a 26th of the screen's height, light on dark or dark on light, and nothing is said by colour alone
-// (a button's letter is in its circle, a lobby member is READY or NOT READY in words beside its tick or box, the
-// player's own leaderboard row says YOU).
+// Offline Play (pictures of both, 2026-11-26) have the screen's title top left on a long band with a bright flare at
+// its left end, the entries as long blade-shaped bars (the chosen one wide and bright, its text dark; the others
+// narrower, dimmer and set further in the further they are from it, the list moving so that the chosen one stays near
+// the middle), the chosen entry's description under it, cards on the right (the player's license: a coloured band with
+// the name, then its numbers), and the buttons' legend at the bottom right. Here the same, larger: the owner sees
+// poorly, so every text is at least a 26th of the screen's height, light on dark or dark on light, and nothing is said
+// by colour alone (a button's letter is in its circle, a lobby member is READY or NOT READY in words beside its tick or
+// box, the player's own leaderboard row says YOU).
 //
 // Fonts: Palatino Linotype Bold for the titles and entries (the game's are a classical serif), Segoe UI Semibold for
 // the rest, both Windows' own; Georgia Bold and Segoe UI Bold where those are missing. Drawn with ImGui's draw list on
@@ -51,9 +51,9 @@ ImU32 Fade(ImU32 c, float f) {
   return (c & ~IM_COL32_A_MASK) | (ImU32(a) << IM_COL32_A_SHIFT);
 }
 
-const ImU32 kInk = Rgba(8, 14, 34);           // text on a bright bar
+const ImU32 kInk = Rgba(8, 14, 34);  // text on a bright bar
 const ImU32 kWhite = Rgba(245, 248, 255);
-const ImU32 kPale = Rgba(214, 226, 246);      // the other entries' text
+const ImU32 kPale = Rgba(214, 226, 246);  // the other entries' text
 const ImU32 kGold = Rgba(255, 214, 110);
 const ImU32 kDim = Rgba(150, 160, 182);
 const ImU32 kShadow = Rgba(0, 0, 0, 230);
@@ -63,7 +63,9 @@ float Width(ImFont* f, float px, const std::string& t) { return f->CalcTextSizeA
 // text with a dark outline (readable over anything)
 void Outlined(ImDrawList* dl, ImFont* f, float px, ImVec2 at, ImU32 col, const std::string& t, float o) {
   static const float kDirs[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-  for (const auto& d : kDirs) dl->AddText(f, px, ImVec2(at.x + d[0] * o, at.y + d[1] * o), Fade(kShadow, ((col >> 24) & 0xFF) / 255.0f), t.c_str());
+  for (const auto& d : kDirs)
+    dl->AddText(f, px, ImVec2(at.x + d[0] * o, at.y + d[1] * o), Fade(kShadow, ((col >> 24) & 0xFF) / 255.0f),
+                t.c_str());
   dl->AddText(f, px, at, col, t.c_str());
 }
 
@@ -101,14 +103,17 @@ void Glow(ImDrawList* dl, ImVec2 c, float r, ImU32 col, int rings = 14) {
 // the blade: a long bar with pointed ends, a vertical gradient
 void Blade(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom) {
   const float h = b.y - a.y, tip = h * 0.5f, mid = (a.y + b.y) * 0.5f;
-  const ImVec2 pts[6] = {{a.x, mid}, {a.x + tip, a.y}, {b.x - tip, a.y}, {b.x, mid}, {b.x - tip, b.y}, {a.x + tip, b.y}};
+  const ImVec2 pts[6] = {{a.x, mid}, {a.x + tip, a.y}, {b.x - tip, a.y},
+                         {b.x, mid}, {b.x - tip, b.y}, {a.x + tip, b.y}};
   const int v0 = dl->VtxBuffer.Size;
   dl->AddConvexPolyFilled(pts, 6, top);
-  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(a.x, a.y), ImVec2(a.x, b.y), top, bottom);
+  ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(a.x, a.y), ImVec2(a.x, b.y), top,
+                                                bottom);
 }
 void BladeEdge(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float t) {
   const float h = b.y - a.y, tip = h * 0.5f, mid = (a.y + b.y) * 0.5f;
-  const ImVec2 pts[6] = {{a.x, mid}, {a.x + tip, a.y}, {b.x - tip, a.y}, {b.x, mid}, {b.x - tip, b.y}, {a.x + tip, b.y}};
+  const ImVec2 pts[6] = {{a.x, mid}, {a.x + tip, a.y}, {b.x - tip, a.y},
+                         {b.x, mid}, {b.x - tip, b.y}, {a.x + tip, b.y}};
   dl->AddPolyline(pts, 6, col, ImDrawFlags_Closed, t);
 }
 
@@ -138,9 +143,11 @@ float ButtonIcon(ImDrawList* dl, const Frame& f, ImVec2 c, const std::string& b)
     const float k = r * 0.72f, w = r * 0.36f;
     for (int s = -1; s <= 1; s += 2) {
       if (ud)
-        dl->AddTriangleFilled(ImVec2(c.x, c.y + s * k), ImVec2(c.x - w, c.y + s * (k - w)), ImVec2(c.x + w, c.y + s * (k - w)), kWhite);
+        dl->AddTriangleFilled(ImVec2(c.x, c.y + s * k), ImVec2(c.x - w, c.y + s * (k - w)),
+                              ImVec2(c.x + w, c.y + s * (k - w)), kWhite);
       else
-        dl->AddTriangleFilled(ImVec2(c.x + s * k, c.y), ImVec2(c.x + s * (k - w), c.y - w), ImVec2(c.x + s * (k - w), c.y + w), kWhite);
+        dl->AddTriangleFilled(ImVec2(c.x + s * k, c.y), ImVec2(c.x + s * (k - w), c.y - w),
+                              ImVec2(c.x + s * (k - w), c.y + w), kWhite);
     }
     return r;
   }
@@ -163,8 +170,10 @@ void Mark(ImDrawList* dl, const Frame& f, ImVec2 c, bool tick) {
   const float r = f.L(11);
   dl->AddRect(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), kWhite, 0, 0, f.L(2.5f));
   if (tick) {
-    dl->AddRectFilled(ImVec2(c.x - r + f.L(2), c.y - r + f.L(2)), ImVec2(c.x + r - f.L(2), c.y + r - f.L(2)), Rgba(40, 150, 70));
-    const ImVec2 pts[3] = {{c.x - r * 0.6f, c.y}, {c.x - r * 0.15f, c.y + r * 0.5f}, {c.x + r * 0.65f, c.y - r * 0.55f}};
+    dl->AddRectFilled(ImVec2(c.x - r + f.L(2), c.y - r + f.L(2)), ImVec2(c.x + r - f.L(2), c.y + r - f.L(2)),
+                      Rgba(40, 150, 70));
+    const ImVec2 pts[3] = {
+        {c.x - r * 0.6f, c.y}, {c.x - r * 0.15f, c.y + r * 0.5f}, {c.x + r * 0.65f, c.y - r * 0.55f}};
     dl->AddPolyline(pts, 3, kWhite, 0, f.L(3.5f));
   }
 }
@@ -268,7 +277,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     const float x0 = 40, x1 = 810;
     const float hp = f.L(36), bp = f.L(60), sp = f.L(30), lp = f.L(27);
     const float room = f.L(x1 - x0 - 40);
-    float h = 20 + 44 + (v.stage_big.empty() ? 0 : 70) + (v.stage_sub.empty() ? 0 : 40);
+    float h =
+        20 + 44 + (v.stage_big.empty() ? 0 : 70) + (v.digits.empty() ? 0 : 84 + 46) + (v.stage_sub.empty() ? 0 : 40);
     for (const std::string& l : v.stage_lines) h += Sans()->CalcTextSizeA(lp, FLT_MAX, room, l.c_str()).y / f.s + 6;
     h += 16;
     const ImVec2 a = f.P(x0, y), b = f.P(x1, y + h);
@@ -291,14 +301,46 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     if (!v.stage_big.empty()) {
       float px = bp;
       const std::string s = Fit(Serif(), px, v.stage_big, room);
-      Outlined(dl, Serif(), px, ImVec2(f.P(cx, 0).x - Width(Serif(), px, s) * 0.5f, f.P(0, cy).y), kWhite, s, f.L(2.5f));
+      Outlined(dl, Serif(), px, ImVec2(f.P(cx, 0).x - Width(Serif(), px, s) * 0.5f, f.P(0, cy).y), kWhite, s,
+               f.L(2.5f));
       cy += 70;
+    }
+    if (!v.digits.empty()) {
+      // a password being entered: a box per digit, the chosen one bright with arrows above and below it (UP, DOWN)
+      const float bw = 70, bh = 84, gap = 22, n = float(v.digits.size());
+      const float x0 = cx - (n * bw + (n - 1) * gap) * 0.5f, y0 = cy + 14;
+      const float dp = f.L(64);
+      for (size_t i = 0; i < v.digits.size(); i++) {
+        const float bx = x0 + i * (bw + gap);
+        const bool on = int(i) == v.digit_at;
+        const ImVec2 a = f.P(bx, y0), b = f.P(bx + bw, y0 + bh);
+        if (on) {
+          dl->AddRectFilledMultiColor(a, b, Rgba(236, 246, 255), Rgba(236, 246, 255), Rgba(70, 128, 226),
+                                      Rgba(70, 128, 226));
+          dl->AddRect(a, b, kGold, 0, 0, f.L(4));
+          const float mx = f.P(bx + bw * 0.5f, 0).x, w = f.L(14);
+          dl->AddTriangleFilled(ImVec2(mx, f.P(0, y0 - 16).y), ImVec2(mx - w, f.P(0, y0 - 4).y),
+                                ImVec2(mx + w, f.P(0, y0 - 4).y), kGold);
+          dl->AddTriangleFilled(ImVec2(mx, f.P(0, y0 + bh + 16).y), ImVec2(mx - w, f.P(0, y0 + bh + 4).y),
+                                ImVec2(mx + w, f.P(0, y0 + bh + 4).y), kGold);
+        } else {
+          dl->AddRectFilled(a, b, Rgba(10, 22, 60));
+          dl->AddRect(a, b, Rgba(150, 190, 250), 0, 0, f.L(2));
+        }
+        const std::string d(1, v.digits[i]);
+        const ImVec2 at(f.P(bx + bw * 0.5f, 0).x - Width(Serif(), dp, d) * 0.5f, f.P(0, y0 + bh * 0.5f).y - dp * 0.56f);
+        if (on)
+          dl->AddText(Serif(), dp, at, kInk, d.c_str());
+        else
+          Outlined(dl, Serif(), dp, at, kWhite, d, f.L(2));
+      }
+      cy += bh + 46;
     }
     if (!v.stage_sub.empty()) {
       float px = sp;
       const std::string s = Fit(Sans(), px, v.stage_sub, room);
-      Outlined(dl, Sans(), px, ImVec2(f.P(cx, 0).x - Width(Sans(), px, s) * 0.5f, f.P(0, cy).y), found ? kGold : kPale, s,
-               f.L(1.5f));
+      Outlined(dl, Sans(), px, ImVec2(f.P(cx, 0).x - Width(Sans(), px, s) * 0.5f, f.P(0, cy).y), found ? kGold : kPale,
+               s, f.L(1.5f));
       cy += 40;
     }
     for (const std::string& l : v.stage_lines) {
@@ -323,8 +365,10 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     const float need_above = c * pitch + gap, need_below = sel_h + desc_h + (n - 1 - c) * pitch;
     const float pref = std::max(top + std::min(c, 3) * pitch + gap, 300.0f);
     float ys;
-    if (top + need_above <= bottom - need_below) ys = std::clamp(pref, top + need_above, bottom - need_below);
-    else ys = std::clamp(pref, top + std::min(c, 2) * pitch + gap, std::max(top + gap, bottom - sel_h - desc_h - pitch));
+    if (top + need_above <= bottom - need_below)
+      ys = std::clamp(pref, top + need_above, bottom - need_below);
+    else
+      ys = std::clamp(pref, top + std::min(c, 2) * pitch + gap, std::max(top + gap, bottom - sel_h - desc_h - pitch));
     bool cut_above = false, cut_below = false;
     for (int i = 0; i < n; i++) {
       if (i == c) continue;
@@ -352,30 +396,35 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     const auto arrow = [&](float y, bool up) {
       const ImVec2 c0 = f.P(400, y);
       const float w = f.L(14), h = f.L(10) * (up ? -1 : 1);
-      dl->AddTriangleFilled(ImVec2(c0.x - w, c0.y - h * 0.5f), ImVec2(c0.x + w, c0.y - h * 0.5f), ImVec2(c0.x, c0.y + h * 0.5f), kGold);
+      dl->AddTriangleFilled(ImVec2(c0.x - w, c0.y - h * 0.5f), ImVec2(c0.x + w, c0.y - h * 0.5f),
+                            ImVec2(c0.x, c0.y + h * 0.5f), kGold);
     };
     if (cut_above) arrow(top - 4, true);
     if (cut_below) arrow(bottom + 40, false);
   }
 
-  static void Bar(ImDrawList* dl, const Frame& f, const Row& r, float x0, float y0, float x1, float y1, bool chosen, float t) {
+  static void Bar(ImDrawList* dl, const Frame& f, const Row& r, float x0, float y0, float x1, float y1, bool chosen,
+                  float t) {
     const ImVec2 a = f.P(x0, y0), b = f.P(x1, y1);
     const float h = b.y - a.y;
     if (chosen) {
       const float pulse = 0.5f + 0.5f * std::sin(t * 3.0f);
       for (int i = 5; i >= 1; i--)
-        BladeEdge(dl, ImVec2(a.x - f.L(i * 2.2f), a.y - f.L(i * 1.6f)), ImVec2(b.x + f.L(i * 2.2f), b.y + f.L(i * 1.6f)),
+        BladeEdge(dl, ImVec2(a.x - f.L(i * 2.2f), a.y - f.L(i * 1.6f)),
+                  ImVec2(b.x + f.L(i * 2.2f), b.y + f.L(i * 1.6f)),
                   Rgba(110, 190, 255, int((40 + 30 * pulse) * (6 - i) / 5)), f.L(3));
-      if (r.enabled) Blade(dl, a, b, Rgba(236, 246, 255), Rgba(70, 128, 226));
-      else Blade(dl, a, b, Rgba(196, 200, 210), Rgba(100, 106, 122));
+      if (r.enabled)
+        Blade(dl, a, b, Rgba(236, 246, 255), Rgba(70, 128, 226));
+      else
+        Blade(dl, a, b, Rgba(196, 200, 210), Rgba(100, 106, 122));
       // the light running along it
       const float run = std::fmod(t * 0.45f, 1.6f) - 0.3f;
       const float sx = a.x + (b.x - a.x) * run;
       dl->PushClipRect(ImVec2(a.x + h * 0.5f, a.y), ImVec2(b.x - h * 0.5f, b.y), true);
-      dl->AddRectFilledMultiColor(ImVec2(sx - f.L(90), a.y), ImVec2(sx, b.y), Rgba(255, 255, 255, 0), Rgba(255, 255, 255, 120),
-                                  Rgba(255, 255, 255, 120), Rgba(255, 255, 255, 0));
-      dl->AddRectFilledMultiColor(ImVec2(sx, a.y), ImVec2(sx + f.L(90), b.y), Rgba(255, 255, 255, 120), Rgba(255, 255, 255, 0),
-                                  Rgba(255, 255, 255, 0), Rgba(255, 255, 255, 120));
+      dl->AddRectFilledMultiColor(ImVec2(sx - f.L(90), a.y), ImVec2(sx, b.y), Rgba(255, 255, 255, 0),
+                                  Rgba(255, 255, 255, 120), Rgba(255, 255, 255, 120), Rgba(255, 255, 255, 0));
+      dl->AddRectFilledMultiColor(ImVec2(sx, a.y), ImVec2(sx + f.L(90), b.y), Rgba(255, 255, 255, 120),
+                                  Rgba(255, 255, 255, 0), Rgba(255, 255, 255, 0), Rgba(255, 255, 255, 120));
       dl->AddLine(ImVec2(a.x, a.y + h * 0.3f), ImVec2(b.x, a.y + h * 0.3f), Rgba(255, 255, 255, 110), f.L(2));
       dl->PopClipRect();
       BladeEdge(dl, a, b, r.mine ? kGold : Rgba(255, 255, 255, 230), f.L(r.mine ? 4 : 2.5f));
@@ -388,7 +437,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     } else {
       Blade(dl, a, b, Rgba(40, 70, 146, 225), Rgba(8, 18, 52, 225));
       BladeEdge(dl, a, b, r.mine ? kGold : Rgba(130, 170, 236, 230), f.L(r.mine ? 3.5f : 2));
-      dl->AddLine(ImVec2(a.x + h * 0.5f, a.y + f.L(3)), ImVec2(b.x - h * 0.5f, a.y + f.L(3)), Rgba(200, 225, 255, 90), f.L(1.5f));
+      dl->AddLine(ImVec2(a.x + h * 0.5f, a.y + f.L(3)), ImVec2(b.x - h * 0.5f, a.y + f.L(3)), Rgba(200, 225, 255, 90),
+                  f.L(1.5f));
     }
     const ImU32 col = chosen ? (r.enabled ? kInk : Rgba(40, 44, 56)) : (r.enabled ? kPale : kDim);
     const float label_px0 = f.L(chosen ? 40 : 35);
@@ -397,8 +447,10 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     float right = b.x - h * 0.6f;
     const float small_px = f.L(chosen ? 30 : 27);
     std::string tail;
-    if (!r.detail.empty()) tail = r.detail;
-    else if (!r.enabled) tail = "NOT AVAILABLE";
+    if (!r.detail.empty())
+      tail = r.detail;
+    else if (!r.enabled)
+      tail = "NOT AVAILABLE";
     if (!r.value.empty()) {
       const float vp = f.L(chosen ? 36 : 32);
       const float vw = Width(Serif(), vp, r.value);
@@ -414,14 +466,18 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
       } else {
         right = vx - f.L(18);
       }
-      if (chosen) dl->AddText(Serif(), vp, ImVec2(vx, mid - vp * 0.56f), col, r.value.c_str());
-      else Outlined(dl, Serif(), vp, ImVec2(vx, mid - vp * 0.56f), col, r.value, f.L(1.5f));
+      if (chosen)
+        dl->AddText(Serif(), vp, ImVec2(vx, mid - vp * 0.56f), col, r.value.c_str());
+      else
+        Outlined(dl, Serif(), vp, ImVec2(vx, mid - vp * 0.56f), col, r.value, f.L(1.5f));
     }
     if (!tail.empty()) {
       const float tw = Width(Sans(), small_px, tail);
       const ImVec2 at(right - tw, (a.y + b.y) * 0.5f - small_px * 0.6f);
-      if (chosen) dl->AddText(Sans(), small_px, at, col, tail.c_str());
-      else Outlined(dl, Sans(), small_px, at, col, tail, f.L(1.2f));
+      if (chosen)
+        dl->AddText(Sans(), small_px, at, col, tail.c_str());
+      else
+        Outlined(dl, Sans(), small_px, at, col, tail, f.L(1.2f));
       right -= tw + f.L(18);
     }
     if (r.mine) {
@@ -434,8 +490,10 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     float px = label_px0;
     const std::string label = Fit(Serif(), px, r.label, std::max(f.L(80), right - tx));
     const ImVec2 at(tx, (a.y + b.y) * 0.5f - px * 0.56f);
-    if (chosen) dl->AddText(Serif(), px, at, col, label.c_str());
-    else Outlined(dl, Serif(), px, at, col, label, f.L(1.8f));
+    if (chosen)
+      dl->AddText(Serif(), px, at, col, label.c_str());
+    else
+      Outlined(dl, Serif(), px, at, col, label, f.L(1.8f));
   }
 
   // the cards on the right: the player's license (name on a red band as the game's user card), its numbers; a second
@@ -447,19 +505,20 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     {
       const float h = 64 + 36 + v.account.size() * 36.0f + 14;
       Panel(dl, f.P(x0, y), f.P(x1, y + h), Rgba(230, 180, 180, 200), f.L(2));
-      dl->AddRectFilledMultiColor(f.P(x0 + 3, y + 3), f.P(x1 - 3, y + 56), Rgba(170, 46, 52, 240), Rgba(110, 30, 44, 200),
-                                  Rgba(70, 16, 30, 200), Rgba(130, 34, 44, 240));
+      dl->AddRectFilledMultiColor(f.P(x0 + 3, y + 3), f.P(x1 - 3, y + 56), Rgba(170, 46, 52, 240),
+                                  Rgba(110, 30, 44, 200), Rgba(70, 16, 30, 200), Rgba(130, 34, 44, 240));
       float px = name_px;
       const std::string name = Fit(Sans(), px, v.name, f.L(x1 - x0 - 30));
       Outlined(dl, Sans(), px, f.P(x0 + 14, y + 8), kWhite, name, f.L(1.5f));
       float rp = row_px;
       const std::string rank = Fit(Serif(), rp, v.rank, f.L(x1 - x0 - 30));
-      Outlined(dl, Serif(), rp, ImVec2(f.P(x1 - 14, 0).x - Width(Serif(), rp, rank), f.P(0, y + 64).y), kGold, rank, f.L(1.5f));
+      Outlined(dl, Serif(), rp, ImVec2(f.P(x1 - 14, 0).x - Width(Serif(), rp, rank), f.P(0, y + 64).y), kGold, rank,
+               f.L(1.5f));
       float ry = y + 100;
       for (const Line& l : v.account) {
         Outlined(dl, Sans(), row_px, f.P(x0 + 16, ry), kPale, l.name, f.L(1.2f));
-        Outlined(dl, Sans(), row_px, ImVec2(f.P(x1 - 16, 0).x - Width(Sans(), row_px, l.value), f.P(0, ry).y), kWhite, l.value,
-                 f.L(1.2f));
+        Outlined(dl, Sans(), row_px, ImVec2(f.P(x1 - 16, 0).x - Width(Sans(), row_px, l.value), f.P(0, ry).y), kWhite,
+                 l.value, f.L(1.2f));
         dl->AddLine(f.P(x0 + 12, ry + 34), f.P(x1 - 12, ry + 34), Rgba(140, 170, 230, 70), f.L(1));
         ry += 36;
       }
@@ -468,8 +527,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     if (!v.card_head.empty() || !v.card.empty()) {
       const float h = 50 + std::max<size_t>(v.card.size(), 1) * 38.0f + 12;
       Panel(dl, f.P(x0, y), f.P(x1, y + h), Rgba(150, 190, 250, 220), f.L(2));
-      dl->AddRectFilledMultiColor(f.P(x0 + 3, y + 3), f.P(x1 - 3, y + 44), Rgba(40, 80, 170, 240), Rgba(20, 40, 100, 200),
-                                  Rgba(14, 30, 80, 200), Rgba(30, 60, 140, 240));
+      dl->AddRectFilledMultiColor(f.P(x0 + 3, y + 3), f.P(x1 - 3, y + 44), Rgba(40, 80, 170, 240),
+                                  Rgba(20, 40, 100, 200), Rgba(14, 30, 80, 200), Rgba(30, 60, 140, 240));
       float hp = f.L(28);
       const std::string head = Fit(Sans(), hp, v.card_head, f.L(x1 - x0 - 28));
       Outlined(dl, Sans(), hp, f.P(x0 + 14, y + 8), kWhite, head, f.L(1.2f));
@@ -485,8 +544,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
         float np = row_px;
         const std::string nm = Fit(Sans(), np, l.name, f.L(x1 - nx - 24) - vw);
         Outlined(dl, Sans(), np, f.P(nx, ry), l.strong ? kGold : kWhite, nm, f.L(1.2f));
-        Outlined(dl, Sans(), vp, ImVec2(f.P(x1 - 14, 0).x - vw, f.P(0, ry + 3).y), l.mark == 1 ? Rgba(170, 255, 180) : kPale,
-                 l.value, f.L(1.2f));
+        Outlined(dl, Sans(), vp, ImVec2(f.P(x1 - 14, 0).x - vw, f.P(0, ry + 3).y),
+                 l.mark == 1 ? Rgba(170, 255, 180) : kPale, l.value, f.L(1.2f));
         ry += 38;
       }
       y += h + 12;
@@ -495,7 +554,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     if (!v.news.empty() && y < 560) {
       const float hp = f.L(26), np = f.L(27), room = f.L(x1 - x0 - 28);
       float h = 12;
-      for (const auto& [head, text] : v.news) h += 34 + Sans()->CalcTextSizeA(np, FLT_MAX, room, text.c_str()).y / f.s + 8;
+      for (const auto& [head, text] : v.news)
+        h += 34 + Sans()->CalcTextSizeA(np, FLT_MAX, room, text.c_str()).y / f.s + 8;
       h = std::min(h, 630.0f - y);
       Panel(dl, f.P(x0, y), f.P(x1, y + h), kGold, f.L(2));
       dl->PushClipRect(f.P(x0, y), f.P(x1, y + h), true);
@@ -535,8 +595,8 @@ class MenuDialog final : public rex::ui::ImGuiDialog {
     const float y = 360 - h * 0.5f;
     const ImU32 edge = v.popup_error ? Rgba(255, 110, 100) : kGold;
     for (int i = 4; i >= 1; i--)
-      dl->AddRect(f.P(x0 - i * 3.0f, y - i * 3.0f), f.P(x1 + i * 3.0f, y + h + i * 3.0f), Fade(edge, 0.12f * (5 - i)), 0, 0,
-                  f.L(3));
+      dl->AddRect(f.P(x0 - i * 3.0f, y - i * 3.0f), f.P(x1 + i * 3.0f, y + h + i * 3.0f), Fade(edge, 0.12f * (5 - i)),
+                  0, 0, f.L(3));
     Panel(dl, f.P(x0, y), f.P(x1, y + h), edge, f.L(3.5f), 0.97f);
     const ImVec2 c = f.P(x0 + 50, y + 52);
     dl->AddCircleFilled(c, f.L(22), edge, 32);

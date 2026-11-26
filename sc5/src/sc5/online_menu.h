@@ -53,9 +53,9 @@ void CreateOverlay(rex::ui::ImGuiDrawer* drawer);
 // --- what online_draw.cpp draws (a copy made on the main thread each frame) ---
 
 struct Row {
-  std::string label;   // the bar's text
-  std::string value;   // a setting's value, after the label ("Off"); "" none
-  std::string detail;  // smaller text at the bar's right end ("1/2 players"); "" none
+  std::string label;    // the bar's text
+  std::string value;    // a setting's value, after the label ("Off"); "" none
+  std::string detail;   // smaller text at the bar's right end ("1/2 players"); "" none
   bool enabled = true;  // false: shown dimmed with "NOT AVAILABLE"
   bool mine = false;    // the player's own row (the leaderboard): marked "YOU"
   bool arrows = false;  // LEFT / RIGHT change the value: arrows around it
@@ -75,6 +75,8 @@ struct View {
   bool stage = false;
   std::string stage_head, stage_big, stage_sub;
   std::vector<std::string> stage_lines;
+  std::string digits;  // a password being entered: its digits, drawn as boxes in the stage, the one at digit_at chosen
+  int digit_at = -1;
   // the panel on the right: the account, then a second card (a lobby's members, the series)
   std::string name, rank;
   std::vector<Line> account;

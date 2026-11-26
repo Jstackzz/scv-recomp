@@ -26,7 +26,7 @@ struct Queue {
   std::string opponent, opponent_rank, text;
 };
 struct Series {
-  std::string kind;   // "", ranked, casual, lobby
+  std::string kind;  // "", ranked, casual, lobby
   std::string opponent;
   int mine = 0, theirs = 0, to = 0;
   std::string state;  // "", choosing, waiting, over
@@ -46,6 +46,8 @@ struct Lobby {
   bool present = false;  // "lobby": null when the player is in none
   std::string code, name, host, mode, state, text;
   bool koth = false, ready = false;
+  bool locked = false;   // it needs a password to join
+  std::string password;  // the host's own lobby only ("" for everyone else): for the host to tell friends
   std::vector<Member> members;
 };
 struct BoardRow {
@@ -58,8 +60,8 @@ struct Message {
 };
 
 struct Ui {
-  bool seen = false;    // a ui.json was read at all
-  bool fresh = false;   // its `t` moved on within the last 5 s: the launcher answers
+  bool seen = false;   // a ui.json was read at all
+  bool fresh = false;  // its `t` moved on within the last 5 s: the launcher answers
   int64_t t = 0;
   Account account;
   Server server;

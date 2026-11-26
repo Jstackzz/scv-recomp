@@ -1,10 +1,10 @@
 // The online menus' contract with the launcher (docs\PROTOCOL.md 3.8), see ui_link.h.
 //
-// ui.json: one UTF-8 JSON object, replaced whole by the launcher (3.2: a .tmp file moved over it), with `t` moving on at
-// least once a second. The game reads it with every share flag (a reader never stops the launcher's replace), parses it
-// with the small reader below (the SDK has no JSON library) and keeps the last good reading: a file caught half written
-// or unreadable for a moment changes nothing. A `t` that has not moved for 5 s, or no file at all, is "the launcher
-// does not answer".
+// ui.json: one UTF-8 JSON object, replaced whole by the launcher (3.2: a .tmp file moved over it), with `t` moving on
+// at least once a second. The game reads it with every share flag (a reader never stops the launcher's replace), parses
+// it with the small reader below (the SDK has no JSON library) and keeps the last good reading: a file caught half
+// written or unreadable for a moment changes nothing. A `t` that has not moved for 5 s, or no file at all, is "the
+// launcher does not answer".
 //
 // ask.txt: `ask n=<count> <verb> [key=value ...]`, written as a .tmp file moved into place once the launcher has taken
 // the last one (renamed it to ask.txt.taken, as the game claims cmd.txt): the game keeps its own queue meanwhile.
@@ -100,10 +100,14 @@ class Reader {
     for (int i = 0; i < 4; i++) {
       const char c = *p_++;
       v <<= 4;
-      if (c >= '0' && c <= '9') v |= uint32_t(c - '0');
-      else if (c >= 'a' && c <= 'f') v |= uint32_t(c - 'a' + 10);
-      else if (c >= 'A' && c <= 'F') v |= uint32_t(c - 'A' + 10);
-      else return false;
+      if (c >= '0' && c <= '9')
+        v |= uint32_t(c - '0');
+      else if (c >= 'a' && c <= 'f')
+        v |= uint32_t(c - 'a' + 10);
+      else if (c >= 'A' && c <= 'F')
+        v |= uint32_t(c - 'A' + 10);
+      else
+        return false;
     }
     return true;
   }
@@ -329,6 +333,8 @@ Ui FromJson(const Json& j) {
     u.lobby.ready = lb["ready"].Bool();
     u.lobby.state = lb["state"].Str();
     u.lobby.text = lb["text"].Str();
+    u.lobby.locked = lb["locked"].Bool();
+    u.lobby.password = lb["password"].Str();
     for (const Json& m : lb["members"].a) {
       Member mem;
       mem.name = m["name"].Str();
@@ -385,10 +391,10 @@ void ReadUi() {
       REXLOG_WARN("sc5 ui: ui.json could not be read as JSON ({} bytes): the last reading stands", text.size());
     }
   }
-  const bool fresh =
-      g_last_t >= 0 && std::chrono::steady_clock::now() - g_t_moved < std::chrono::seconds(5);
+  const bool fresh = g_last_t >= 0 && std::chrono::steady_clock::now() - g_t_moved < std::chrono::seconds(5);
   static bool was_fresh = false;
-  if (was_fresh != fresh) REXLOG_INFO("sc5 ui: the launcher {}", fresh ? "answers" : "does not answer (no new t for 5 s)");
+  if (was_fresh != fresh)
+    REXLOG_INFO("sc5 ui: the launcher {}", fresh ? "answers" : "does not answer (no new t for 5 s)");
   was_fresh = fresh;
   std::lock_guard<std::mutex> lock(g_lock);
   g_ui_now.fresh = fresh;

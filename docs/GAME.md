@@ -1654,9 +1654,10 @@ card on the right, the buttons' legend bottom right; the launcher's word decides
 |---|---|---|
 | SCV Online | Ranked Match, Casual Match, Lobbies, Practice, Leaderboard, Preferred Side (Off / Left / Right, LEFT and RIGHT or A), Back | `queue kind=ranked\|casual`, `lobbies`, `leaderboard`, `side value=...`; Back (or B) closes the menus |
 | Ranked / Casual Match | searching: the time, Cancel; `found`: the opponent, rank, ping, the seconds left, Accept / Decline (B declines); `accepted`, `connecting`, `starting`: what goes on | `cancel`, `accept`, `decline` |
-| Lobbies | Refresh, Create a Lobby, then each open lobby (name, players; LOCKED ones cannot be joined) | `lobbies`, `lobby_join code=` (A), `lobby_join code= watch=1` (X) |
-| Create a Lobby | Name (the player's own lobby or six ready-made names), Mode (Versus, Online Practice), King of the Hill, Private, Create Lobby, Back | `lobby_create name= mode= koth= private=` |
-| a lobby's room | Ready (Yes / No), Leave Lobby; the card: the code, mode, each member READY (a tick) or NOT READY (an empty box) or WATCHING, wins | `lobby_ready value=`, `lobby_leave` |
+| Lobbies | Refresh, Create a Lobby, then each open lobby (name, players; a locked one says LOCKED) | `lobbies`, `lobby_join code=` (A), `lobby_join code= watch=1` (X) |
+| Lobby Password | a locked lobby's four digits, each in a box (UP and DOWN change the chosen one, LEFT and RIGHT choose), Join the Lobby | `lobby_join code= password=` (`watch=1` from X) |
+| Create a Lobby | Name (the player's own lobby or six ready-made names), Mode (Versus, Online Practice), Rounds (best of 1, 3 or 5; 5 at first), King of the Hill, Private (the launcher makes up its 4-digit password), Create Lobby, Back | `lobby_create name= mode= koth= private= rounds=` |
+| a lobby's room | Ready (Yes / No), Leave Lobby; the card: the code, mode, locked or not, the password (the host's own lobby), each member READY (a tick) or NOT READY (an empty box) or WATCHING, wins | `lobby_ready value=`, `lobby_leave` |
 | Leaderboard | the rows, the player's own marked YOU in gold, the cursor on it; X asks again | `leaderboard` |
 | after a match | the series' score, first to how many, what is going on (`series.text`: what the other player chose); Leave while it goes on, Continue once over | `leave` |
 
@@ -1667,7 +1668,8 @@ followed back into it (the launcher takes the ask a moment later). Whatever stop
 the list and the online entries say NOT AVAILABLE (A on one says why): the launcher not answering (no `ui.json`, or its
 `t` the same for 5 s), not signed in ("Sign in in the launcher first"), connecting, offline (with the launcher's
 error). An update waiting and the server's notice show under the player's card; the launcher's `message` shows once
-per id in a box that A closes (an error with "!", a notice with "i"). Leaving the menus (Back, Practice) sends `cancel`
+per id in a box that A closes (an error with "!", a notice with "i"): an ask the launcher refused comes back as one
+(its words, kind `error`), and a lobby being joined is no longer waited for then. Leaving the menus (Back, Practice) sends `cancel`
 or `decline` first when a search is on, and `lobby_leave` in a lobby.
 
 **The look** (online_draw.cpp). Astral Home and Offline Play were photographed first: the title on a long band with a
@@ -1690,7 +1692,10 @@ stand-in took, in order: `queue kind=ranked`, `accept` (searching, found, accept
 search ended with the launcher's word), `queue kind=casual` and `cancel` (B), `queue kind=ranked` and `decline` (B on
 the match found), `lobbies`, `lobby_join code=K7Q2`, `lobby_ready value=1`, `lobby_leave`, `lobby_join code=M3X9
 watch=1`, a locked lobby refused with why, `lobby_create name=Casual%20Sets mode=sparring koth=1 private=1`,
-`leaderboard` (the cursor on the player's row), `side value=left` and `value=right`, the update and the notice, a
+`leaderboard` (the cursor on the player's row), a locked lobby's password entered with the pad (`lobby_join
+code=Q8L0 password=0000` refused with the stand-in's error shown, then `password=4821` and its room), a private lobby
+of the player's own (`lobby_create name=Taki%27s%20Lobby mode=versus koth=0 private=1 rounds=3`, its room showing the
+password 4821 the stand-in made up), `side value=left` and `value=right`, the update and the notice, a
 message, signed out, connecting, offline, the launcher not answering, a ranked set's score after a `park` and `leave`,
 a casual series over, a search the launcher started again by itself and B cancelling it, and Practice to Training's
 select screen (`away`). `tools\linktest.py --menus`: two games with their own copies of the save, each opening its
@@ -1698,6 +1703,11 @@ menus at its hold point (`SC5_TEST_ONLINE_MENU=1`), both `ready` 33 s after boot
 Mitsurugi best of 1 in sync to the same result line in both (both net logs the same byte for byte), `park`, both back
 in their online menus (`ready`) 20 s later showing the series, quit. The old way (`tools\linktest.py` without `--menus`)
 went the same way, and `tools\synctest.sh` still gave 1,800 checks, 549 in the game's snapshot, none in the fight.
+And with the real launcher (`tools\online-e2e.ps1 -Queue casual -Exe sc5.exe`, the launcher of the `ingame-lch` branch,
+two accounts on a throwaway server, `SC5_TEST_ONLINE_MENU=1` in the games' environment): both games read the launchers'
+`ui.json` (signed in; the search, the match found, accepted, connecting, starting, shown on the search screen as the
+launchers' own test switches went through them), said `ready` from their menus, took the launchers' start and played the
+match in sync to the same result (a draw, 3-3: nobody pressed anything), which both launchers reported.
 
 
 ## From title update 1 to title update 3

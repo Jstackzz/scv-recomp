@@ -1,9 +1,10 @@
 """A stand-in for the launcher's side of the game's online menus (docs/PROTOCOL.md 3.8), for tests and pictures: it
 writes ui.json into a game's session folder as the launcher would (replaced whole, `t` moving on every second) and
 answers the game's ask.txt (claimed by renaming it to ask.txt.taken) the way the server and the launcher would, from a
-small model of its own: a search finds an opponent after a while, a match found counts down, lobbies have members, the
-leaderboard has rows. A timeline (--timeline, JSON) sets any field at a given second, so every state the launcher can be
-in shows: signed out, offline, not answering (`"stop": true`), an update, a notice, a series after a match.
+small model of its own: a search finds an opponent after a while, a match found counts down, lobbies have members (the
+locked one, Q8L0, takes the password 4821; a private lobby created without one gets 4821 too), the leaderboard has
+rows, and an ask that does not fit the state is refused with a `message` of kind error, as the launcher's are. A
+timeline (--timeline, JSON) sets any field at a given second, so every state the launcher can be in shows: signed out, offline, not answering (`"stop": true`), an update, a notice, a series after a match.
 
     python -I tools/fake_launcher.py --session DIR [--name Taki] [--account signed_in|signed_out|connecting|offline]
                                      [--found-after 6] [--no-find] [--timeline FILE] [--control FILE]
@@ -35,7 +36,7 @@ LOBBIES = [
      "koth": False, "locked": False, "region": "NA"},
     {"code": "Z1B4", "name": "First to Three", "host": "Siegfried_Schtauffen", "players": 5, "max": 8,
      "mode": "versus", "koth": False, "locked": False, "region": "NA"},
-    {"code": "Q8L0", "name": "Casual Sets", "host": "Astaroth", "players": 8, "max": 8, "mode": "versus",
+    {"code": "Q8L0", "name": "Casual Sets", "host": "Astaroth", "players": 3, "max": 8, "mode": "versus",
      "koth": True, "locked": True, "region": "EU"},
 ]
 BOARD_NAMES = ["Xiba_Prime", "EdgeMasterRay", "Viola_Eyes", "Kilik_Fan", "Mitsurugi99", "NightmareMain", "{me}",
@@ -138,11 +139,18 @@ class Launcher:
 
     # --- the asks ---
 
+    def refuse(self, why):
+        """an ask that does not fit the state: left undone, and the message says why (docs/PROTOCOL.md 3.8)"""
+        self.message(why, "error")
+        self.say(f"refused: {why}")
+
     def ask(self, verb, k):
         q = self.ui["queue"]
         if verb == "queue":
+            if q["state"] != "idle":
+                return self.refuse("You are already searching for a match.")
             if self.ui["lobby"] is not None:
-                self.ui["lobby"] = None
+                return self.refuse("Leave the lobby before searching for a match.")
             q.update(state="searching", kind=k.get("kind", "casual"), secs=0, accept_left=0, opponent="",
                      opponent_rank="", ping=0, text="")
             self.search_start = time.time()
@@ -154,15 +162,21 @@ class Launcher:
             q.update(state="idle", kind="", secs=0, text="")
         elif verb in ("accept", "decline"):
             if q["state"] != "found":
-                return
+                return self.refuse("There is no match to answer.")
             if verb == "decline":
                 q.update(state="idle", kind="", secs=0, accept_left=0, opponent="", text="")
             else:
                 q.update(state="accepted", text="")
                 gen = self.search_gen
-                self.later(2.5, lambda: gen == self.search_gen and q["state"] == "accepted" and q.update(state="connecting", text="Reaching the other player's game"))
-                self.later(5.0, lambda: gen == self.search_gen and q["state"] == "connecting" and q.update(state="starting", text=""))
+                def step(want, then, text):
+                    if gen == self.search_gen and q["state"] == want:
+                        q.update(state=then, text=text)
+
+                self.later(2.5, lambda: step("accepted", "connecting", "Reaching the other player's game"))
+                self.later(5.0, lambda: step("connecting", "starting", ""))
         elif verb == "leave":
+            if not self.ui["series"]["kind"]:
+                return self.refuse("There is no set or series to leave.")
             self.ui["series"] = {"kind": "", "opponent": "", "mine": 0, "theirs": 0, "to": 0, "state": "", "text": ""}
         elif verb == "side":
             self.ui["side"] = k.get("value", "off") if k.get("value") in ("off", "left", "right") else "off"
@@ -170,9 +184,14 @@ class Launcher:
             self.ui["lobbies"] = {"at": now_ms(), "list": copy.deepcopy(LOBBIES)}
         elif verb == "lobby_create":
             code = "R5T1"
+            # private=1 without a password: the launcher makes one up (4 digits), shown to the host only
+            password = k.get("password", "") or ("4821" if k.get("private") == "1" else "")
+            rounds = k.get("rounds", "5")
+            text = f"Waiting for players. Best of {rounds}. Others join with the code {code}" + (
+                f" and the password {password}." if password else ".")
             self.ui["lobby"] = {"code": code, "name": k.get("name", "Lobby"), "host": self.me,
                                 "mode": k.get("mode", "versus"), "koth": k.get("koth") == "1", "ready": False,
-                                "state": "waiting", "text": f"Waiting for players. Others join with the code {code}.",
+                                "state": "waiting", "text": text, "locked": bool(password), "password": password,
                                 "members": [{"name": self.me, "ready": False, "role": "player", "wins": 0}]}
             self.later(3, self.someone_joins)
         elif verb == "lobby_join":
@@ -180,6 +199,9 @@ class Launcher:
             if row is None:
                 self.message("That lobby is gone.", "error")
                 return
+            if row["locked"] and k.get("password") != "4821":
+                return self.refuse("Wrong password for that lobby." if k.get("password") else
+                                   "That lobby is locked: it needs its password.")
             watch = k.get("watch") == "1"
             members = [{"name": row["host"], "ready": True, "role": "player", "wins": 3},
                        {"name": "Mitsurugi99", "ready": False, "role": "player", "wins": 1},
@@ -188,9 +210,12 @@ class Launcher:
                                 "koth": row["koth"], "ready": False, "state": "waiting",
                                 "text": "You are watching: the matches show here as they start." if watch else
                                 "Next up: Voldo_Enjoyer against Mitsurugi99, then you.",
-                                "members": members}
+                                "locked": row["locked"], "password": "", "members": members}
         elif verb == "lobby_ready":
             lob = self.ui["lobby"]
+            me = next((m for m in lob["members"] if m["name"] == self.me), None) if lob else None
+            if not lob or (me and me["role"] == "spectator"):
+                return self.refuse("You are not a player in a lobby.")
             if lob:
                 lob["ready"] = k.get("value") == "1"
                 for m in lob["members"]:
@@ -206,7 +231,7 @@ class Launcher:
                              "elo": 1900 - i * 23, "wins": 120 - i * 4, "losses": 30 + i * 2})
             self.ui["leaderboard"] = {"at": now_ms(), "rows": rows}
         else:
-            self.say(f"(an ask this stand-in does not know: {verb})")
+            self.refuse(f"The launcher does not know the ask {verb}.")
 
     def found(self, gen):
         q = self.ui["queue"]
@@ -257,7 +282,8 @@ def main():
     ap.add_argument("--found-after", type=float, default=6, help="seconds from a search to its match found")
     ap.add_argument("--no-find", action="store_true", help="a search finds nobody")
     ap.add_argument("--timeline", default="", help="a JSON file of steps (see the top of this file)")
-    ap.add_argument("--control", default="", help="a file of steps (one JSON object a line) applied as they are appended")
+    ap.add_argument("--control", default="",
+                    help="a file of steps (one JSON object a line) applied as they are appended")
     ap.add_argument("--seconds", type=float, default=3600)
     ap.add_argument("--log", default="", help="the asks taken, one line each")
     ap.add_argument("--quiet", action="store_true")
