@@ -1631,6 +1631,39 @@ bool g_neutral = false;
 // too (battle::InKoReplay says why it runs on neutral inputs, as the KO around it)
 bool RoundFought() { return game::BattleState() == game::kBattleFighting && !battle::InKoReplay(); }
 
+// A round's KO is played on as the round was: the players' own inputs, guesses and rollbacks, until the KO's replay
+// (or what else comes after the KO) begins. The game goes on taking the pads in its KO state (0x58: 240 of its own
+// ticks, the state machine's +0x5C counting to +0x64, the first of them in slow motion), and until 0.1.6 the netplay
+// gave both games neutral inputs from the KO's first frame: online the fighters stood still after a KO, where the
+// game itself lets them act. Seen by playing one match twice, both players mashing, with the same seed (Mitsurugi
+// against Siegfried, the KO at match frame 2071, the replay from 2311): with the pads the snapshots of frames 2160 to
+// 2310 differ from those on neutral inputs in 7,000 to 10,000 bytes, where two runs differ in about 450 before the KO
+// (poses). Nothing is checked there (the check is of fought frames: after a KO a fighter's script waits on its
+// voice, which two PCs do not time alike; the check at the next round's call makes the fight alike before it is
+// fought, CallCheck). The KO state after the replay, where the game shows the winner, stays on neutral inputs.
+// g_ko_played: the frame's top is in a KO that fought frames led to, set by MarkPlayed at every top and after frames
+// were run again (a KO keeps what the frame before had: a rerun never crosses a replay). SC5_NET_NO_KO_PLAY (tests):
+// as before, neutral inputs from the KO on.
+bool g_ko_played = false;
+bool g_ko_sure = false;  // the KO this frame's top is in came with both players' real inputs (OnTop makes sure once)
+void MarkPlayed() {
+  const uint32_t s = game::BattleState();
+  if (s == game::kBattleFighting) g_ko_played = !battle::InKoReplay();
+  else if (s != game::kBattleKO) g_ko_played = false;
+}
+bool RoundPlayed() {
+  static const bool off = std::getenv("SC5_NET_NO_KO_PLAY") != nullptr;
+  MarkPlayed();
+  return RoundFought() || (!off && g_ko_played && game::BattleState() == game::kBattleKO);
+}
+// The first frame after the played ones: a KO's first frame takes the players' inputs still (they do nothing there
+// that lasts; so it was when the rolling ended at the KO, and so it is with SC5_NET_NO_KO_PLAY), but any other frame
+// runs on neutral inputs. Where a played KO ends, that frame is the replay's first, and the game cuts a replay short
+// on a press: with the pads there, the game of the player who held a button cut its replay at once and the other
+// game, which ran that frame on a guess of that pad, played it through, and the two began the next round 266 frames
+// apart (Cervantes against Yoshimitsu, both mashing, round 4 of tools\pairsweep.sh's third pair, 2026-11-25).
+bool AfterPlayedNeutral() { return game::BattleState() != game::kBattleKO; }
+
 // The fight's random numbers seeded again wherever the battle's state changes outside a round's fighting (the KO, the
 // KO's replay and its end, between rounds, the round's call, the round's first frame fought), at the frame's top: the
 // two games reach each of these on the same frame with the same fight. Within a round their generators come apart
@@ -1727,7 +1760,7 @@ void Keep(PPCContext& ctx, uint8_t* base, uint32_t f) {
   g_ring_frame[slot] = int64_t(f);
   g_ring_count[slot] = frame::Count();
   input::KeepKeys(frame::Count());
-  if (f % kCheckEvery == 0) {
+  if (f % kCheckEvery == 0 && RoundFought()) {  // a KO played on (RoundPlayed) is kept, not checked
     g_tentative[f] = battle::FightHash(g_ring[slot]);
     KeepEvidence(f, g_ring[slot]);
     // tests: SC5_NET_DUMP_DIR, the first checks' snapshots and their blocks (what came from where), to compare games
@@ -2627,10 +2660,10 @@ bool WatchWait(uint32_t f) {
 // Which frames the players ran on neutral inputs (OnTop): a frame whose top is outside a round's fighting, unless the
 // frame before was fought (that one still takes the real inputs, as the players' last rolled frame does)
 void WatchNeutral() {
-  const bool fighting = RoundFought();
+  const bool fighting = RoundPlayed();
   if (g_watch_rolling) {
     if (!fighting) g_watch_rolling = false;
-    g_neutral = false;
+    g_neutral = !fighting && AfterPlayedNeutral();  // as the players' games run that frame
   } else if (fighting) {
     g_watch_rolling = true;
     g_neutral = false;
@@ -2686,10 +2719,16 @@ void WatchTop(PPCContext& ctx, uint8_t* base) {
 
 // A KO's replay cut short (RSKIP): this game's player's START or A while one plays asks the other game for a frame some
 // 30 ahead (tests: SC5_TEST_SKIP_REPLAY=<n> asks n frames into each replay)
-void ReplaySkipAsk() {
+bool ReplaySkipDown() {
   input::Pad own;
   if (!testinput::ScriptedPad(uint32_t(g_slot), own)) own = input::ReadPhysical(0);
-  const bool down = (own.buttons & (input::kStart | input::kA)) != 0;
+  return (own.buttons & (input::kStart | input::kA)) != 0;
+}
+// while the round and its KO are played: what the player holds, so that a button held on into the replay is not a
+// press there (the replay is cut by a press made while it plays)
+void ReplaySkipHeld() { g_rskip_held = ReplaySkipDown(); }
+void ReplaySkipAsk() {
+  const bool down = ReplaySkipDown();
   bool press = down && !g_rskip_held;
   g_rskip_held = down;
   if (!battle::InKoReplay()) {
@@ -2821,15 +2860,34 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
   g_neutral = false;
   // the game ahead of the other's real inputs runs on them as they come
   if (g_rolling) {
+    ReplaySkipHeld();
     SendOwn();
     if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
-    // the round is no longer fought: lockstep again once every frame so far ran with the real inputs
-    if (!RoundFought()) {
+    // the round is no longer played (fought, or its KO played on): lockstep again once every frame so far ran with
+    // the real inputs
+    if (!RoundPlayed()) {
       if (g_frame && !WaitForInputs(g_frame - 1)) return InputsFailed(ctx, base);
       if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
-      if (!RoundFought()) {
+      if (!RoundPlayed()) {
         StopRolling();
         ReseedAtStateChange(ctx, base);
+        g_neutral = AfterPlayedNeutral();
+      }
+    } else if (RoundFought()) {
+      g_ko_sure = false;
+    } else if (!g_ko_sure) {
+      // A KO has just come, and it is played on: first every frame up to it runs on the real inputs, as when the
+      // KO ended the rolling. A KO that came on a guess is taken back here, before its first frame is shown, not
+      // some frames into its slow motion and its call.
+      if (g_frame && !WaitForInputs(g_frame - 1)) return InputsFailed(ctx, base);
+      if (!CorrectGuesses(ctx, base)) return Lost(Status::Desynced);
+      if (!RoundPlayed()) {
+        StopRolling();
+        ReseedAtStateChange(ctx, base);
+        g_neutral = AfterPlayedNeutral();
+      } else if (!RoundFought()) {
+        g_ko_sure = true;
+        ReseedAtStateChange(ctx, base);  // the KO's first frame, as when the rolling ended there
       }
     }
     if (g_rolling) {
@@ -2851,6 +2909,7 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
   } else {
     SendOwn();
+    MarkPlayed();
     ReseedAtStateChange(ctx, base);  // before the round's first frame is kept
     if (g_cfg.rollback && RoundFought()) {
       StartRolling(ctx, base);
@@ -2881,6 +2940,20 @@ void OnTop(PPCContext& ctx, uint8_t* base) {
     }
   }
   ReplaySkipTop();
+  // SC5_DBG_KO=1: where a round's end stands at each top it changes at (the battle's state, the KO's replay, whether
+  // the frame is played or runs on neutral inputs, the KO state's own count at the state machine's +0x5C)
+  static const bool dbg_ko = std::getenv("SC5_DBG_KO") != nullptr;
+  if (dbg_ko) {
+    static uint32_t last = ~0u;
+    const uint32_t now = game::BattleState() | (battle::InKoReplay() ? 0x10000u : 0) | (g_neutral ? 0x20000u : 0) |
+                         (g_rolling ? 0x40000u : 0) | (g_ko_played ? 0x80000u : 0);
+    if (now != last) {
+      last = now;
+      REXLOG_INFO("sc5 dbg: match frame {}: battle {:X}{}{}{}{}, KO count {}", g_frame, game::BattleState(),
+                  battle::InKoReplay() ? " replay" : "", g_neutral ? " neutral" : " inputs", g_rolling ? " rolling" : "",
+                  g_ko_played ? " ko-played" : "", Get32(kAgreedMachine + 0x5C));
+    }
+  }
   SeedFrame(ctx, base, g_frame);
   SetFrameInputs(g_frame);
   sparring::OnFrame(g_frame);  // Online Practice's rules at the frame's top, after it was kept (a rerun starts there)
