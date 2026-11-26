@@ -1484,7 +1484,9 @@ for a named side), the loser picks on their own PC, and a panel on the winner's 
 stands in for the loser, one choice per match (wait: none, the time runs out). Two games with saves that differ
 (tools\linktest.py `--save1 --save2 --choose select,rematch,leave --series casual`, 40 ms each way, 2026-11-26):
 player 2 lost and chose CHARACTER SELECT (player 1 kept Siegfried, player 2 picked Xiba), then REMATCH (the game's
-own Rematch), then LEAVE, both games in step to every result.
+own Rematch), then LEAVE, both games in step to every result; with player 1 losing the second and third matches, player
+1 chose there. A ranked set (`--series ranked --set 3`): CHARACTER SELECT, REMATCH, then the third win, whose result
+screen offered nothing ("player 1 won the ranked set 3 - 0") and both games parked, every check alike.
 
 **The battle setup** (versus.cpp, sub_8244C6A8 copying the VS settings record into the battle setup; the record:
 per side 88 bytes: +0 1 a player / 2 the CPU, +4 the input, +8 the rounds to win (Battle Count), +12 and +16 health
