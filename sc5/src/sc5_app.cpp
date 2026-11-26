@@ -22,6 +22,7 @@
 #include "sc5/dlc.h"
 #include "sc5/framemeter.h"
 #include "sc5/link.h"
+#include "sc5/online_menu.h"
 #include "sc5/system_ui.h"
 #include "sc5/net/netplay.h"
 #include "sc5/net/synctest.h"
@@ -228,7 +229,10 @@ void Sc5App::OnPostSetup() {
 }
 
 // The frame meter's font (sc5/framemeter.h), before the runtime builds its font atlas
-void Sc5App::OnConfigureFonts(ImFontAtlas* atlas) { sc5::framemeter::AddFonts(atlas); }
+void Sc5App::OnConfigureFonts(ImFontAtlas* atlas) {
+  sc5::framemeter::AddFonts(atlas);
+  sc5::online::AddFonts(atlas);  // the online menus' (SC5_MENUS=1)
+}
 
 // The window's title, once the window is there: the name players know, SCV Online (the app's own name, "sc5",
 // stays: its config file and user folder carry it); and the frame meter over practice (sc5/framemeter.h)
@@ -236,4 +240,5 @@ void Sc5App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   if (rex::ui::Window* w = window()) w->SetTitle(std::string("SCV Online ") + REXGLUE_BUILD_TITLE);
   sc5::framemeter::CreateOverlay(drawer);
   sc5::overlay::Install(drawer);  // what the game draws over its picture: a lobby match's loser's choice
+  sc5::online::CreateOverlay(drawer);  // the game's own online menus (SC5_MENUS=1)
 }

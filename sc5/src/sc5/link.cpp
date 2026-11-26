@@ -13,7 +13,10 @@
 //   quit     exit
 //   choose=1 (start, rematch): the match's loser chooses the next one on the result screen (a lobby's match)
 //
-// status.txt: booting, ready, starting match=<id> [held_out=N] [refused=N refused_why=<name>: <why>, the rest of the
+// With SC5_MENUS=1 (sc5/online_menu.h) the hold point is the game's own online menus: `ready` while they are up,
+// `away` while the player is elsewhere in the game.
+//
+// status.txt: booting, ready, away, starting match=<id> [held_out=N] [refused=N refused_why=<name>: <why>, the rest of the
 // line], in_match match=<id> (the same keys, and again=N again_frame=N), result winner=N p1_rounds=N p2_rounds=N
 // p1_char=C.c p2_char=C.c match=<id>, chose choice=rematch|select match=<id> (choose=1: the loser's choice on the
 // result screen), desync frame=N match=<id>, disconnected match=<id>, error <text>.
@@ -41,6 +44,7 @@
 #include "sc5/frame.h"
 #include "sc5/game.h"
 #include "sc5/net/netplay.h"
+#include "sc5/online_menu.h"
 #include "sc5/select.h"
 #include "sc5/sparring.h"
 #include "sc5/versus.h"
@@ -330,6 +334,7 @@ void Park() {
   versus::SetOnline(false, 0, 2);
   sparring::Set(false);
   autopilot::Park();
+  online::OnPark();  // the online menus show the series once the game is back (SC5_MENUS)
   g_in_match = false;
   REXLOG_INFO("sc5 link: park");
 }
@@ -367,6 +372,7 @@ void Rematch(const Command& c) {
 
 void OnFrame(PPCContext& ctx, uint8_t* base) {
   autopilot::OnFrame(ctx, base);
+  online::OnFrame(ctx, base);
   if (frame::Count() % 6 == 0) {
     std::string line;
     if (ClaimCommand(line)) {
@@ -395,16 +401,16 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   }
   if (!g_in_match) {
     if (autopilot::Lost()) WriteStatus("error the game went somewhere the launcher's autopilot does not know");
-    else WriteStatus(autopilot::AtHoldPoint() ? "ready" : "booting");
+    else WriteStatus(autopilot::AtHoldPoint() ? "ready" : autopilot::Away() ? "away" : "booting");
     return;
   }
   // practice: in_match once Training's fight is up; the player leaving it for the main menu is the hold point again
   if (g_mode == "practice") {
     if (autopilot::Lost()) {
       WriteStatus("error the game went somewhere the launcher's autopilot does not know");
-    } else if (autopilot::AtHoldPoint()) {
+    } else if (autopilot::Holding()) {
       g_in_match = false;
-      WriteStatus("ready");
+      WriteStatus(autopilot::AtHoldPoint() ? "ready" : "away");
     } else {
       WriteStatus(autopilot::Practicing() ? "in_match match=practice" : "starting match=practice");
     }
@@ -489,6 +495,7 @@ void Init() {
   g_on = true;
   WriteStatus("booting");
   net::Install();
+  online::Init();  // SC5_MENUS=1: the game's own online menus (before the autopilot, which asks whether they are on)
   autopilot::Init(true);
   frame::SetMenuHook(&OnFrame);
   REXLOG_INFO("sc5 link: the launcher's game (instance {})", std::getenv("SC5_INSTANCE") ? std::getenv("SC5_INSTANCE") : "1");

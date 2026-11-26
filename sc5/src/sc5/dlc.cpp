@@ -39,6 +39,7 @@
 #include "sc5/creation.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
+#include "sc5/online_menu.h"
 
 REX_EXTERN(sub_82348780);  // a text table's data (r3 its number): 0 when the game does not have it
 
@@ -257,25 +258,38 @@ REX_HOOK_RAW(sub_82364500) {
   __imp__sub_82364500(ctx, base);
 }
 
-// A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on): SC5_DBG_TEXT=1 logs each string the game
-// asks for and does not have (no such table, or not that many strings), once each, with the caller.
+// A string of a text table (sub_82347670: r3 the table, r4 the string, 1 on). The online menus' entry in the main menu
+// (sc5/online_menu.h) gives its own strings for a few; SC5_DBG_TEXT=1 logs each string the game asks for and does not
+// have (no such table, or not that many strings), once each, with the caller; SC5_DBG_TEXT_ALL=1 logs every string
+// asked for, once each, with the caller and the frame (how the main menu's texts were found).
 REX_EXTERN(__imp__sub_82347670);
 REX_HOOK_RAW(sub_82347670) {
   static const bool debug = [] { const char* v = std::getenv("SC5_DBG_TEXT"); return v && v[0] == '1'; }();
-  if (!debug) {
-    __imp__sub_82347670(ctx, base);
-    return;
+  static const bool all = [] { const char* v = std::getenv("SC5_DBG_TEXT_ALL"); return v && v[0] == '1'; }();
+  const uint32_t table = ctx.r3.u32, asked = ctx.r4.u32, index = asked & 0xFFFF, lr = uint32_t(ctx.lr);
+  bool missing = false, has_table = false;
+  uint32_t count = 0;
+  if (debug) {
+    PPCContext c = ctx;
+    sub_82348780(c, base);
+    const uint32_t data = c.r3.u32;
+    has_table = data != 0;
+    count = data ? Rd32(data + 4) : 0;
+    missing = int32_t(asked) != -1 && (!data || index == 0 || index > count);
   }
-  const uint32_t table = ctx.r3.u32, index = ctx.r4.u32 & 0xFFFF, lr = uint32_t(ctx.lr);
-  PPCContext c = ctx;
-  sub_82348780(c, base);
-  const uint32_t data = c.r3.u32;
-  const bool missing = int32_t(ctx.r4.u32) != -1 && (!data || index == 0 || index > Rd32(data + 4));
   __imp__sub_82347670(ctx, base);
+  if (const uint32_t ours = sc5::online::Text(ctx, base, table, asked)) ctx.r3.u64 = ours;
+  if (!debug && !all) return;
   static std::mutex lock;
   std::lock_guard<std::mutex> hold(lock);
   static std::map<uint64_t, int> seen;
-  if (missing && seen[uint64_t(table) << 32 | index]++ == 0)
+  if (all && seen[uint64_t(table) << 32 | asked]++ == 0) {
+    std::string s;
+    for (uint32_t a = ctx.r3.u32; a && s.size() < 80 && base[a]; a++) s += char(base[a]);
+    REXLOG_INFO("sc5 dbg text: table {} string {} from {:08X} at frame {}: {}", table, int32_t(asked), lr,
+                sc5::frame::Count(), s);
+  } else if (missing && !all && seen[uint64_t(table) << 32 | index]++ == 0) {
     REXLOG_INFO("sc5 dbg text: table {} string {} not there ({}), asked from {:08X}", table, index,
-                data ? fmt::format("the table has {}", Rd32(data + 4)) : std::string("no such table"), lr);
+                has_table ? fmt::format("the table has {}", count) : std::string("no such table"), lr);
+  }
 }

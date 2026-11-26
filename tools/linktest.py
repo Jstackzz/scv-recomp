@@ -10,6 +10,7 @@ line both games write, with the time.
                                 [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
                                 [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
                                 [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select]
+                                [--menus] [--shots DIR]
 
 --fight1/--fight2: other fight scripts (tools/py/netlog2script.py makes them from a match's net log, so a desync between
 two PCs plays again here; tools/py/mash.py makes varied ones); --heap-shift2 moves game 2's heap, as a second PC's lies
@@ -22,6 +23,13 @@ screen (SC5_TEST_RESULT_CHOICE stands in for them, one choice per result in turn
 next match goes on from there as the launchers would start it (rematch: the result line's fighters and stage=keep;
 select: both pick again, --pick1/--pick2 then pick for the players).
 
+--menus: the launcher's one game for everything (docs/PROTOCOL.md 3.8): SC5_MENUS=1, each game with a copy of the
+repository's save (game/user) instead of an empty one, and a ui.json kept fresh in each session folder (a player signed
+in, as tools/fake_launcher.py writes it); SC5_TEST_ONLINE_MENU=1 opens the game's online menus at its hold point as the
+player's A on the main menu's entry would, and the games say `ready` only while those menus are up. After the park
+both must be back in their online menus (`ready` again) before the quit. --shots DIR: pictures of both games' windows
+when both are ready before the start and after the park (tools/py/winshot.py).
+
 --p1/--p2 "-": that side picks on the game's own select screen; --pick1/--pick2 then stand in for each PC's player
 there (SC5_TEST_LOCAL_PICK). The fight's inputs are tools/synctest.sh's scripted ones (player 1's in game 1, player
 2's in game 2); --back-at adds a BACK to player 1's at that fight frame (Online Practice: the match ends). --watch: a
@@ -32,6 +40,7 @@ Session folders go in build/runs/<name>-1, -2, -3 (deleted afterwards unless --k
 build/runs/<name>_1.log ... first).
 """
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -61,6 +70,25 @@ def write_atomic(path, text):
             return
         except PermissionError:
             time.sleep(0.005)
+
+
+SCORE = [0, 0]  # player 1's and player 2's wins so far (--menus: the series' score in ui.json)
+
+
+def write_ui(session, i):
+    """ui.json as the launcher keeps it (docs/PROTOCOL.md 3.8): a player signed in, `t` moving on"""
+    ui = {"v": 1, "t": int(time.time() * 1000),
+          "account": {"state": "signed_in", "name": f"Tester{i}", "rank": "squire", "elo": 1500, "wins": 0,
+                      "losses": 0, "error": ""},
+          "server": {"online": 2, "in_matches": 0, "notice": ""}, "side": "off",
+          "queue": {"state": "idle", "kind": "", "secs": 0, "accept_left": 0, "opponent": "", "opponent_rank": "",
+                    "ping": 0, "text": ""},
+          "series": {"kind": "casual", "opponent": f"Tester{3 - i}", "mine": SCORE[i - 1], "theirs": SCORE[2 - i],
+                     "to": 0, "state": "",
+                     "text": ""},
+          "lobbies": {"at": 0, "list": []}, "lobby": None, "leaderboard": {"at": 0, "rows": []},
+          "message": {"id": 0, "kind": "info", "text": ""}, "update": {"version": "", "text": ""}}
+    write_atomic(os.path.join(session, "ui.json"), json.dumps(ui))
 
 
 def read_status(path):
@@ -162,6 +190,8 @@ def main():
     ap.add_argument("--args2", default="", help="game 2's extra command line")
     ap.add_argument("--runs", default="", help="where the session folders and logs go (default build/runs)")
     ap.add_argument("--choose", default="", help="the loser's choices on the result screens in turn: rematch,select")
+    ap.add_argument("--menus", action="store_true", help="the game's own online menus (SC5_MENUS=1, the player's save)")
+    ap.add_argument("--shots", default="", help="pictures of both games at ready, before the start and after the park")
     a = ap.parse_args()
 
     relay = FeedRelay() if a.watch else None
@@ -174,7 +204,12 @@ def main():
     for i in range(1, count + 1):
         s = os.path.join(runs, f"{a.name}-{i}")
         shutil.rmtree(s, ignore_errors=True)
-        os.makedirs(os.path.join(s, "user"))
+        if a.menus:  # the player's own save (a copy: both games run at once, each prunes its DLC to its dlc folder)
+            os.makedirs(s)
+            shutil.copytree(os.path.join(ROOT, "game", "user"), os.path.join(s, "user"),
+                            ignore=shutil.ignore_patterns("cache"))
+        else:
+            os.makedirs(os.path.join(s, "user"))
         # the shader cache: a copy of the test saves' (an empty one makes the first fights stutter)
         cache = os.path.join(ROOT, "game", "user", "cache")
         if os.path.isdir(cache):
@@ -200,6 +235,10 @@ def main():
         for kv in a.env + (a.env1 if i == 1 else a.env2 if i == 2 else []):
             k, _, v = kv.partition("=")
             env[k] = v.replace("{i}", str(i))
+        if a.menus:
+            env["SC5_MENUS"] = "1"
+            env["SC5_TEST_ONLINE_MENU"] = "1"
+            write_ui(s, i)
         if a.lag and i <= 2:
             env["SC5_NET_LAG"] = str(a.lag)
         if a.choose and i <= 2:
@@ -228,8 +267,25 @@ def main():
     again_done = False
     in_match_at = 0
     match = f"local-{int(t0)}"
+    shot_n = 0
+
+    def shots(what):
+        if not a.shots:
+            return
+        os.makedirs(a.shots, exist_ok=True)
+        for i, p in enumerate(games[:2]):
+            out = os.path.join(a.shots, f"{a.name}-{what}-{i + 1}.png")
+            subprocess.run([sys.executable, os.path.join(ROOT, "tools", "py", "winshot.py"), "SCV Online", out, "--pid",
+                            str(p.pid)], capture_output=True)
+        print(f"{time.time() - t0:7.1f}s pictures: {what}", flush=True)
+
+    last_ui = 0
     try:
         while time.time() - t0 < a.seconds:
+            if a.menus and time.time() - last_ui >= 0.5:
+                last_ui = time.time()
+                for i, s in enumerate(sessions):
+                    write_ui(s, i + 1)
             st = [read_status(os.path.join(s, "status.txt")) for s in sessions]
             for i in range(count):
                 if st[i] != last[i]:
@@ -237,10 +293,17 @@ def main():
                     last[i] = st[i]
                     if i == 0 and st[i].startswith("result"):
                         last_result = st[i]
+                        winner = dict(kv.split("=", 1) for kv in st[i].split()[1:] if "=" in kv).get("winner", "0")
+                        if winner in ("1", "2"):
+                            SCORE[int(winner) - 1] += 1
             if stage != "quit" and any(p.poll() is not None for p in games):
                 print("a game exited", [p.poll() for p in games])
                 break
             if stage == "boot" and all(x == "ready" for x in st):
+                if shot_n == 0:
+                    shot_n = 1
+                    time.sleep(2)
+                    shots("ready")
                 for i in (0, 1):
                     line = (f"start game=sc5 mode={a.mode} side={i + 1} local_port={a.port_base + i} "
                             f"remote=127.0.0.1:{a.port_base + 1 - i} delay={a.delay} seed={a.seed} p1={a.p1} p2={a.p2} "
@@ -312,6 +375,10 @@ def main():
                 print(f"{time.time() - t0:7.1f}s again", flush=True)
                 continue
             elif stage == "park" and all(x == "ready" for x in st):
+                if a.menus:
+                    print(f"{time.time() - t0:7.1f}s both games back in their online menus", flush=True)
+                    time.sleep(3)
+                    shots("parked")
                 for s in sessions:
                     write_atomic(os.path.join(s, "cmd.txt"), "quit")
                 print(f"{time.time() - t0:7.1f}s quit sent", flush=True)

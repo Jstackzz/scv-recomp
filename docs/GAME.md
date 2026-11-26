@@ -73,6 +73,9 @@ main menu (`ready`) in 41 s.
 | `framemeter.cpp` | frame data in practice: a frame meter as Street Fighter 6's over Training and Online Practice (below) |
 | `mirror.cpp` | a player's preferred side: the fight shown mirrored on this PC, the player's left and right and the sound's swapped with it (below, "A player's preferred side") |
 | `result_overlay.cpp` | the panel over a lobby match's result screen where its loser chooses the next match (below, "The loser's choice") |
+| `online_menu.cpp` | the game's own online menus (`SC5_MENUS=1`): the main menu's SCV Online entry in Xbox LIVE's place, the screens, the player's pad, the asks (below, "The game's online menus") |
+| `online_draw.cpp` | the online menus drawn over the main menu in the look of the game's own menus |
+| `ui_link.cpp` | the online menus' files: `ui.json` from the launcher read, `ask.txt` to it written from a queue (docs\PROTOCOL.md 3.8) |
 | `rerun_profile.cpp` | tests (`SC5_TEST_RERUN_PROFILE`): the game's tasks timed one by one in frames run again (below, "Netplay") |
 | `select.cpp` | the character select screen: cursors, picks, the 32 slots and their characters |
 | `creation.cpp` | created characters online: the player's own brought into the online game's save, this PC's tables read, the other PC's record checked and placed with SCV Online's own VS card (below, "Created characters online") |
@@ -1596,6 +1599,105 @@ packages and each index it read, and with `SC5_DBG_DLC_IDS=<hex>,...` asks the g
 ids the first time the game asks about one (the select screen asks about Dampierre). The copy-on-write design of MK9 Online
 (mk9/net/rollback.cpp: every page the simulation writes kept in an undo log, the heap's allocator with it) would also
 put back the cosmetic objects above; nothing in the fight needs it so far.
+
+
+## The game's online menus (online_menu.cpp, online_draw.cpp, ui_link.cpp)
+
+From 0.1.8 the launcher starts one game for everything (`SC5_NET=1` `SC5_MENUS=1`, the player's own save) and the
+player does everything online inside it: the launcher keeps the connection to the server and tells the game what it
+knows in `ui.json`; the game draws the menus and tells the launcher what the player chose in `ask.txt`
+(docs\PROTOCOL.md 3.8). Without `SC5_MENUS` nothing of this is there and the game behaves as before (the hold point is
+the main menu, the pad the autopilot's).
+
+**The entry.** AstralHome's top-level list has five entries in a fixed order: Offline Play 0, Xbox LIVE 1, Story 2,
+Creation 3, Options 4 (the menu's cursor at +0x94, above). Their number is in the code: the top level's update
+(sub_8220B6A0, called from the menu's update sub_8220B428 at depth 0) stops DOWN at 5 (`cmpwi r11,5` then `li r11,4`)
+and UP at 0, and the entries are movie clips of the menu's own movie (`mc_sel_offline`, `mc_sel_4` ...), which the
+update plays by name (`up`, `down`, `StoB`, `BtoS`). A sixth entry would need a new clip in the menu's data and the
+update's limits patched in several places, so the entry takes Xbox LIVE's place, which cannot work on a PC. The texts
+come from the game's text tables through sub_82347670 (dlc.cpp's hook; `SC5_DBG_TEXT_ALL=1` logs every string asked
+for, once each, with its caller): the entries' labels are table 1's strings 10, 2, 1, 8, 9 (`$mOffline Play`,
+`$mXbox LIVE`, `$mStory -1607 A.D.-` ...; `$m` is the menu's style), asked for when the menu is made (from 0x8248D7D4),
+and the description under the cursor is table 1's string 13 + the entry (`$z0.875/0.875/Play the game on Xbox LIVE
+against other players ...`, string 14; `$z` the text's scale), asked for when the cursor comes to it (from
+0x8248D58C). While the game is at its main menu (sequence 4 or 18) strings 2 and 14 are ours: `$mSCV Online` (the name
+is one constant, `online::kName`) and "Fight other players online with rollback netcode. Ranked and casual matches,
+lobbies, the leaderboard and online practice." (guest memory of ours, kept for the run). The right panel still says
+"Total Xbox LIVE Play Time" with the cursor on the entry (table 19's string 83, its value the console's): left as it is.
+A on the entry, with the main menu's list up (its state 6), at the top level and the cursor on 1, never reaches the
+game: the autopilot's pad override at the hold point gives the game a still pad from that frame until every button is
+let go, and the menus open.
+
+**The pad.** While the menus are up the game gets a still pad on both ports (online::HoldPad) and the main menu holds
+still behind them; the menus read the player's own: the first controller and the keyboard as the launcher's
+`controls.toml` gives them (input::ReadPhysical(0)), or a test's script (`SC5_INPUT_LIVE_P1` and the others). UP and
+DOWN (the d-pad or the left stick) move, again after a third of a second held and then ten times a second; LEFT and RIGHT
+change a setting; A chooses, B goes back, X and Y as the legend says. A button that opened or closed the menus is held
+back from the game until it is let go (B closing them would otherwise go on to the main menu's own B, Return to Title).
+The sounds are the game's: sub_821DAD90(handle, id) plays a menu sound as AstralHome's update does (8 the cursor, 10 a
+choice, 11 back), called from the frame's top with a 16-byte handle of ours.
+
+**The hold point.** With `SC5_MENUS=1` the autopilot still takes the game from boot to the main menu (Phase Hold), but
+there the game is the player's: the pad goes through (autopilot.cpp's Override asks online::HoldPad), and the player
+leaving the main menu (Story, Creation, Options, VS Battle offline) is no longer taken back to it. `status.txt` says
+`ready` only while the online menus are up (autopilot::AtHoldPoint), `away` otherwise (link.cpp). A `start` then goes
+as before: the autopilot takes the main menu's cursors from the SCV Online entry to Offline Play, VS Battle and the
+select screen, the menus are hidden while it does (they stay open), and `park` brings the game back to the main menu,
+where the menus show again with the series (`series`) or the lobby's room. Practice closes the menus and sends the
+autopilot to Training as the plain game's practice goes there (autopilot::ToTraining: Offline Play, Training, its select
+screen handed to the player, the autopilot resting at its hold point again).
+
+**The screens** (each a title top left, the entries as bars with the chosen one's description under it, the player's
+card on the right, the buttons' legend bottom right; the launcher's word decides what shows):
+
+| screen | entries | asks |
+|---|---|---|
+| SCV Online | Ranked Match, Casual Match, Lobbies, Practice, Leaderboard, Preferred Side (Off / Left / Right, LEFT and RIGHT or A), Back | `queue kind=ranked\|casual`, `lobbies`, `leaderboard`, `side value=...`; Back (or B) closes the menus |
+| Ranked / Casual Match | searching: the time, Cancel; `found`: the opponent, rank, ping, the seconds left, Accept / Decline (B declines); `accepted`, `connecting`, `starting`: what goes on | `cancel`, `accept`, `decline` |
+| Lobbies | Refresh, Create a Lobby, then each open lobby (name, players; LOCKED ones cannot be joined) | `lobbies`, `lobby_join code=` (A), `lobby_join code= watch=1` (X) |
+| Create a Lobby | Name (the player's own lobby or six ready-made names), Mode (Versus, Online Practice), King of the Hill, Private, Create Lobby, Back | `lobby_create name= mode= koth= private=` |
+| a lobby's room | Ready (Yes / No), Leave Lobby; the card: the code, mode, each member READY (a tick) or NOT READY (an empty box) or WATCHING, wins | `lobby_ready value=`, `lobby_leave` |
+| Leaderboard | the rows, the player's own marked YOU in gold, the cursor on it; X asks again | `leaderboard` |
+| after a match | the series' score, first to how many, what is going on (`series.text`: what the other player chose); Leave while it goes on, Continue once over | `leave` |
+
+The launcher's own changes are followed: a search going on (one it started again by itself after a series too) shows
+the search, a lobby joined its room, a room gone the list, a search back to idle the top level with the launcher's word
+(`queue.text`). For two and a half seconds after the player left a search or a lobby the old word in `ui.json` is not
+followed back into it (the launcher takes the ask a moment later). Whatever stops online play shows in a banner over
+the list and the online entries say NOT AVAILABLE (A on one says why): the launcher not answering (no `ui.json`, or its
+`t` the same for 5 s), not signed in ("Sign in in the launcher first"), connecting, offline (with the launcher's
+error). An update waiting and the server's notice show under the player's card; the launcher's `message` shows once
+per id in a box that A closes (an error with "!", a notice with "i"). Leaving the menus (Back, Practice) sends `cancel`
+or `decline` first when a search is on, and `lobby_leave` in a lobby.
+
+**The look** (online_draw.cpp). Astral Home and Offline Play were photographed first: the title on a long band with a
+bright flare at its left end, the entries as blade-shaped bars (the chosen one wide and bright with dark text and a
+glow, the others narrower, set further in the further they are from it, the list moving so the chosen one stays near
+the middle), the description under it, the license cards on the right with a coloured band, the legend bottom right.
+The menus draw the same, larger for a player who sees poorly: the entries in Palatino Linotype Bold (the game's are a
+classical serif) at a 20th of the screen's height (the chosen one's an 18th), everything else in Segoe UI Semibold at
+least a 27th, both Windows' own fonts (Georgia Bold and Segoe UI Bold where missing), light on dark or dark on light.
+Nothing is said by colour alone: a button's letter is in its circle, a member is READY or NOT READY in words, the
+player's row says YOU, a locked lobby LOCKED. The main menu behind is covered whole (a trace of its own entries behind
+ours was noise) by an astral backdrop of ours in its colours: deep blue, a glowing dark orb with slowly turning orbits
+where the game's is, streaks of light.
+
+**Tests** (2026-11-26). `tools\fake_launcher.py` stands in for the launcher: it writes `ui.json` and answers every ask
+from a small model (a search finds an opponent after 6 s, a match found counts 15 s down, lobbies have members, the
+leaderboard 20 rows), with a timeline or a control file to set any field, send a message or stop answering. A script
+drove one game through every screen with `SC5_INPUT_LIVE_P1` (the pad as a file it writes) and checked each ask the
+stand-in took, in order: `queue kind=ranked`, `accept` (searching, found, accepted, connecting, starting, then the
+search ended with the launcher's word), `queue kind=casual` and `cancel` (B), `queue kind=ranked` and `decline` (B on
+the match found), `lobbies`, `lobby_join code=K7Q2`, `lobby_ready value=1`, `lobby_leave`, `lobby_join code=M3X9
+watch=1`, a locked lobby refused with why, `lobby_create name=Casual%20Sets mode=sparring koth=1 private=1`,
+`leaderboard` (the cursor on the player's row), `side value=left` and `value=right`, the update and the notice, a
+message, signed out, connecting, offline, the launcher not answering, a ranked set's score after a `park` and `leave`,
+a casual series over, a search the launcher started again by itself and B cancelling it, and Practice to Training's
+select screen (`away`). `tools\linktest.py --menus`: two games with their own copies of the save, each opening its
+menus at its hold point (`SC5_TEST_ONLINE_MENU=1`), both `ready` 33 s after boot, the start line, Siegfried against
+Mitsurugi best of 1 in sync to the same result line in both (both net logs the same byte for byte), `park`, both back
+in their online menus (`ready`) 20 s later showing the series, quit. The old way (`tools\linktest.py` without `--menus`)
+went the same way, and `tools\synctest.sh` still gave 1,800 checks, 549 in the game's snapshot, none in the fight.
 
 
 ## From title update 1 to title update 3

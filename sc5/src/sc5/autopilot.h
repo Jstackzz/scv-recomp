@@ -36,7 +36,17 @@ void Init(bool launcher);
 void InitPlain(const Plan& plan);
 // the practice the launcher started runs (Training's fight is up)
 bool Practicing();
+// The hold point: the main menu, where a `start` is taken. With the online menus (SC5_MENUS=1) only while they are up:
+// elsewhere the player roams the game (Holding, Away).
 bool AtHoldPoint();
+// the autopilot rests at its hold point (with the online menus: the player has the game)
+bool Holding();
+// with the online menus: resting, the menus closed (status.txt's `away`)
+bool Away();
+// the main menu's list up (its state 6): its depth (0 the top level) and the top level's cursor
+bool HomeCursor(int& depth, int& top);
+// from the hold point to Training's select screen, which is the player's from there (the online menus' Practice)
+void ToTraining();
 // from the hold point to a fight
 void Begin(const Plan& plan);
 // back to the hold point

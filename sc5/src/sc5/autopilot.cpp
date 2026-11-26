@@ -41,6 +41,7 @@
 #include "sc5/game.h"
 #include "sc5/input.h"
 #include "sc5/net/netplay.h"
+#include "sc5/online_menu.h"
 #include "sc5/select.h"
 #include "sc5/testinput.h"
 
@@ -87,6 +88,8 @@ struct Press {
 };
 
 bool g_launcher = false;
+// SC5_MENUS=1 (sc5/online_menu.h): at the hold point the game is the player's, but while the online menus are up
+bool g_menus = false;
 Phase g_phase = Phase::Off;
 uint64_t g_since = 0;
 Plan g_plan;
@@ -1080,6 +1083,8 @@ void NewMatch() {
 // the first pad while the autopilot holds the menus; the netplay's inputs once a match's frames run in sync
 bool Override(uint32_t user, input::Pad& out) {
   if (g_phase == Phase::Off) return false;
+  // the game's own menus online: the player's pad at the hold point, but while the online menus are up
+  if (g_phase == Phase::Hold && g_menus) return online::HoldPad(user, out);
   if (net::InSync()) return false;
   // practice: the player's own controllers once it runs (but while a test's script plays)
   if (g_plan.mode == Mode::Practice && g_phase == Phase::Fight && !g_practice_script) return false;
@@ -1103,6 +1108,7 @@ bool Override(uint32_t user, input::Pad& out) {
 void Init(bool launcher) {
   g_launcher = launcher;
   if (!launcher) return;
+  g_menus = online::On();
   Enter(Phase::Boot);
   input::SetOverride(&Override);
 }
@@ -1123,7 +1129,30 @@ void InitPlain(const Plan& plan) {
 
 bool Practicing() { return g_plan.mode == Mode::Practice && g_phase == Phase::Fight && g_fought; }
 
-bool AtHoldPoint() { return g_phase == Phase::Hold; }
+bool AtHoldPoint() { return g_phase == Phase::Hold && (!g_menus || online::Open()); }
+bool Holding() { return g_phase == Phase::Hold; }
+bool Away() { return g_menus && g_phase == Phase::Hold && !online::Open(); }
+
+bool HomeCursor(int& depth, int& top) {
+  const Home h = ReadHome();
+  if (!h.ok || g_home_step != kHomeMenu) return false;
+  depth = h.depth;
+  top = h.top;
+  return true;
+}
+
+void ToTraining() {
+  if (g_phase != Phase::Hold) return;
+  // Training's select screen as the plain game's practice goes there, then the player's (back at the hold point:
+  // the player roams, sc5/online_menu.h)
+  Plan plan;
+  plan.mode = Mode::Practice;
+  plan.hand_over = true;
+  g_plan = plan;
+  NewMatch();
+  REXLOG_INFO("sc5 autopilot: to Training for the player (the online menus' Practice)");
+  Enter(Phase::ToVersus);
+}
 
 namespace {
 void PublishChoiceView() {
@@ -1421,7 +1450,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
           return;
         }
       }
-      if (!InHome(seq)) {
+      if (!InHome(seq) && !g_menus) {
         REXLOG_WARN("sc5 autopilot: the game left the main menu (sequence {}) at frame {}: back to it",
                     game::SequenceName(seq), Now());
         Enter(Phase::Boot);
@@ -1501,7 +1530,7 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
         // a plain game: the players pick on their own from here
         if (select::Object() && select::Age() > 30) {
           REXLOG_INFO("sc5 autopilot: the select screen is the players' now (frame {})", Now());
-          Enter(Phase::Off);
+          Enter(g_menus ? Phase::Hold : Phase::Off);  // with the online menus: the player roams from here
         } else if (In() > 1200) {
           Enter(Phase::Lost);
         }

@@ -1236,6 +1236,7 @@ sound variables, `controls.toml`; `tools/linktest.py` runs two games, and a spec
 | `SC5_CONTROLS` | the launcher's `controls.toml`: what keys and controller buttons press (below) |
 | `SC5_TRAINING` | `1`, a plain game for practice (the PRACTICE button, or practice while a search waits): the autopilot goes to training's character select with every character unlocked and hands it to the player (port 0 picks both; only player 1 takes part) |
 | `SC5_VERSUS` | `1`, a plain game for the offline versus (the VERSUS button): the two-player select screen with every character and stage unlocked, player 2 on the controller `controls.toml` names |
+| `SC5_MENUS` | `1` with `SC5_NET=1` (SCV 0.1.8): the game's own online menus (3.8); the hold point is those menus, the rest of the game the player's |
 | `SC5_NET_LOG` | with `SC5_NET=1`, unless already set: `<session>\net-{match}.log`, every online match's frames (both players' inputs, the state checks; `{match}` becomes the match id) |
 
 The working directory is the folder of the game executable. The launcher creates one session folder per game
@@ -1456,7 +1457,8 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 | first line | meaning |
 |---|---|
 | `booting` | process started, loading |
-| `ready` | parked at the hold point, able to take `start` |
+| `ready` | parked at the hold point, able to take `start` (with `SC5_MENUS=1`: the game's online menus are up, 3.8) |
+| `away` | with `SC5_MENUS=1` only (SCV 0.1.8): the game is the player's, elsewhere than its online menus (the main menu, single player, Creation, Training ...); it takes no `start` until it says `ready` again (3.8) |
 | `starting match=<id>` | took a `start`: off the hold point, setting the match up (picks, loading), until `in_match`; `held_out=N` after it (and after `in_match`'s) when N of the player's own created characters cannot be picked in this online game (3.3, *Created characters*; the game's log says which and why); `refused=N refused_why=<name>: <why>` last (SCV 0.1.7; `refused_why` is the rest of the line) when the player's A on N of their own created characters was held back this match, once each, the last one's name and why in plain words: the launcher sends a `pick_refused` for each (1.13.3) |
 | `in_match match=<id>` | a match (or practice: `match=practice`) is running; `again=N again_frame=F` after it once the two games went out of step and played the round again N times this match (SCV 0.1.4; the check of frame F failed last): the launcher sends a `desync_report` with `again` for each (1.13.1) |
 | `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
@@ -1659,3 +1661,11 @@ connected; the game leaves its online menu, the fight is set up and played, `res
 `park` brings the game back to its online menu. Searching and a lobby's waiting happen while the player is in the
 game's online menu: leaving that menu sends `cancel` (or `lobby_leave`) first. The player's account is signed in
 in the launcher before PLAY (a name and password are typed there, never in the game).
+
+**The game's state with its menus** (SCV 0.1.8, added by the game's side). `status.txt` says `ready` only while the
+online menus are up, the game at its main menu behind them, and `away` while the player is anywhere else in the game
+(the main menu itself, single player, Creation, Options, Training); `booting` until the game first reaches its main
+menu, the match states as before. A `start` that comes while the game is `away` waits until it is `ready` (as one that
+comes before the hold point does), so the launcher sends `start` on `ready`. After `park` the game is back in its
+online menus, `ready`, showing the series (`series`) or the lobby's room (`lobby`). The menus' Practice is the game's
+own Training, reached by the game alone (no ask, no `start`): the game says `away` there.
