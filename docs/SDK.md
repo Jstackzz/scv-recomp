@@ -123,6 +123,21 @@ commit `c94f5eb`) with this project's changes on top, in `patches\rexglue-sdk-v0
   picture, on both paths and at render scale 2. In fights the small targets (bloom, the exposure's tiles) are drawn
   every frame and resolve no depth: whole matches (load, fight, result) read none back.
 
+- A player's preferred side (`include\rex\system\interfaces\graphics.h`, `MirrorSceneFromNow` and
+  `LogDrawsFromNow`; `src\graphics\command_processor.cpp`, the marks; `src\graphics\d3d12\command_processor.cpp`,
+  `IssueDraw`, `SceneMirrorKind`, `IssueCopy`, 2026-11-25; docs\GAME.md "A player's preferred side"). The game marks
+  where in its commands the frames it shows mirrored start and end, as `SkipDrawsFromNow` does (a mark at the ring's
+  write index, taken when the worker reaches it). Between the marks the D3D12 backend draws the frame's first
+  full-screen quad that samples a texture of the screen's size (not the last swap's image nor a copy made of a
+  picture already mirrored) reflected about the middle of the screen (`ndc_scale.x` negated and `ndc_offset.x`
+  reflected): that is Soulcalibur V's composite, which puts its picture of the 3D scene on the screen, so the scene
+  shows mirrored and the HUD and text drawn after it do not. Draws of the screen's size after the frame's half-size
+  post effects and before that composite (the round calls' layer, which the composite lays over the scene) are
+  reflected too, with the guest's face register turned for the draw (so its culling holds), and come out as they
+  were. The screen's size is the last swap's. The Vulkan backend has neither (SCV Online runs D3D12). The draw log:
+  every draw (shaders' hashes, primitive, target, depth, cull, viewport, scissor, textures) and resolve of the next
+  frames into the log; the game asks for it with `SC5_DBG_DRAWLOG`.
+
 ## Where it lives
 
 | folder | what |
@@ -165,8 +180,8 @@ from the repository; the other diffs add the files this project created, which a
 `resolve_unscale_cs.h` is built from `resolve_unscale.cs.hlsl` with the Windows SDK's `fxc` (the command is at the
 top of the `.hlsl`).
 
-(Last refreshed 2026-11-19: 40 files, with texture-making draws waiting for their pipelines, the Xbox 360's 16-bit
-floats and the pictures Creation takes.)
+(Last refreshed 2026-11-25: with a player's preferred side, the mirrored picture and the draw log; it applies to a
+clean v0.10.0 with `git apply --check`.)
 
 A change to the code generator needs `rexglue codegen` run again (`sc5\codegen.cmd`) before the game is
 built; a change to the runtime needs only the game linked again.
