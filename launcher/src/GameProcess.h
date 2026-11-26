@@ -23,6 +23,10 @@ public:
     void setEnv(const QString& name, const QString& value) { extraEnv_.insert(name, value); }
     // more command-line arguments for the next start (--prepare)
     void setArgs(const QStringList& args) { extraArgs_ = args; }
+    // the player's own game (PLAY, docs/PROTOCOL.md 3.8): SC5_NET=1 and SC5_MENUS=1 on the player's own save, the
+    // game's online menus talking to the launcher through ui.json and ask.txt in the session folder
+    void setMenus(bool on) { menus_ = on; }
+    bool menus() const { return menus_; }
     // "quit" command (a plain game: its window is closed, as the player would), then kill after 5 s
     void quit();
     void kill();
@@ -46,6 +50,10 @@ public:
     // Write one command line; if the previous command has not been taken yet it waits up to 2 s
     // (a newer command replaces a waiting one).
     void command(const QString& line);
+
+    // status.txt read now, not at the next tick: what the game wrote before an ask of its menus (a match's result,
+    // then leaving the lobby) is taken first (docs/PROTOCOL.md 3.8)
+    void readStatusNow() { poll(); }
 
     static QHash<QString, QString> parseKeys(const QString& line);  // key=value tokens after the verb
 
@@ -88,6 +96,7 @@ private:
     QString pendingCmd_;
     QElapsedTimer lastWrite_;
     bool netMode_ = true;
+    bool menus_ = false;
     bool quitting_ = false;
     int exitCode_ = 0;
     QByteArray outBuf_;

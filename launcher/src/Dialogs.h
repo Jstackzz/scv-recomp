@@ -1,6 +1,6 @@
 #pragma once
-// Account sign-in/registration, the match-found accept prompt, the Casual rematch prompt, lobby creation, and the
-// update offer.
+// Account sign-in and registration, and the update offer. (The game draws MATCH FOUND, the rematch choice and the
+// lobbies itself since SCV 0.1.8: docs/PROTOCOL.md 3.8.)
 
 #include <QDialog>
 #include <QJsonObject>
@@ -44,43 +44,6 @@ private:
     int pendingId_ = -1;
 };
 
-class MatchFoundDialog : public QDialog {
-    Q_OBJECT
-public:
-    // rankText: ranked, the player's own rank and Elo (the opponent's stay hidden until both accept)
-    MatchFoundDialog(const QJsonObject& found, const QString& gameTitle, const QString& modeName,
-                     const QString& characterName, const QString& rankText = {}, QWidget* parent = nullptr);
-    QString matchId() const { return matchId_; }
-
-private:
-    QString matchId_;
-    QProgressBar* bar_;
-    QLabel* countdown_;
-    QTimer tick_;
-    qint64 deadlineMs_ = 0;
-};
-
-// After a Casual match, over the game once it has played the match's end: the score against the opponent and what
-// comes next, REMATCH (in versus both go back to character select and pick again, when both choose it) or LEAVE, as
-// on the Casual page's series card, which it mirrors
-class RematchDialog : public QDialog {
-    Q_OBJECT
-public:
-    explicit RematchDialog(QWidget* parent = nullptr);
-    // the card's state: its title, score and info line, whether a choice can still be made
-    void update(const QString& title, const QString& score, const QString& info, bool canChoose);
-
-signals:
-    void chose(const QString& choice);  // "rematch" (the same fighters), "select" (both pick again) or "leave"
-
-private:
-    QLabel* title_;
-    QLabel* score_;
-    QLabel* info_;
-    QPushButton* rematch_;
-    QPushButton* select_;
-};
-
 // A newer release the server names (Updater): what it is and what is new, UPDATE NOW or LATER; while it downloads and
 // installs, how far it is (CANCEL until the files go in). `required`: this launcher is too old for the server;
 // `blocker`: why it cannot update itself (UPDATE NOW opens the release's page instead).
@@ -102,23 +65,4 @@ private:
     QPushButton* now_;
     QPushButton* later_;
     bool running_ = false;
-};
-
-class CreateLobbyDialog : public QDialog {
-    Q_OBJECT
-public:
-    // kingOfTheHill: the server has King of the Hill lobbies (the box is greyed out otherwise; Online Practice has none)
-    CreateLobbyDialog(const Game& game, const QString& defaultName, bool kingOfTheHill, QWidget* parent = nullptr);
-    QString name() const;
-    QString mode() const;
-    QString password() const;
-    int rounds() const;
-    bool kingOfTheHill() const;
-
-private:
-    QLineEdit* name_;
-    QComboBox* mode_;
-    QLineEdit* password_;
-    QComboBox* rounds_;
-    QCheckBox* koth_;
 };

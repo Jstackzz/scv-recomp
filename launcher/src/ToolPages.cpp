@@ -19,7 +19,6 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QSlider>
 #include <QSpinBox>
 #include <QStorageInfo>
 #include <QThread>
@@ -28,6 +27,7 @@
 #include "AppPaths.h"
 #include "GameData.h"
 #include "GameProcess.h"
+#include "KeyboardBox.h"
 #include "ServerClient.h"
 #include "Upnp.h"
 #include "WinUtil.h"
@@ -779,7 +779,7 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     auto* port = new QSpinBox;
     port->setRange(1024, 65535);
     port->setValue(cfg::gamePort());
-    auto* strict = new QCheckBox(tr("Strict ranked matchmaking by default"));
+    auto* strict = new QCheckBox(tr("Strict ranked matchmaking (your region only, a close rank only)"));
     strict->setChecked(cfg::strict());
     auto* upnp = new QCheckBox(tr("Open the game port on the router (UPnP)"));
     upnp->setChecked(cfg::upnp());
@@ -821,7 +821,7 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     connect(server_, &ServerClient::loggedIn, this, updateHideIpCost);
     auto* matchSound = new QCheckBox(tr("Play a sound when a match is found"));
     matchSound->setChecked(cfg::matchSound());
-    matchSound->setToolTip(tr("A short chime with the MATCH FOUND window, heard over the game you wait in."));
+    matchSound->setToolTip(tr("A short chime when the game shows MATCH FOUND, heard over the game."));
     routerState_ = ui::label(tr("Router: not asked"), "Muted");
     routerState_->setWordWrap(true);
     of->addRow(tr("Region"), region);
@@ -926,46 +926,11 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     df->addRow(QString(), displayNote);
     grid->addWidget(displayBox, 1, 1);
 
-    // sound: each level a percent of the game's own, as the game plays them at 100 %
-    auto* soundBox = new QGroupBox(tr("SOUND"));
-    auto* soundForm = new QFormLayout(soundBox);
-    const struct {
-        const char* key;
-        const char* label;
-        const char* tip;
-    } levels[] = {
-        {"master", QT_TR_NOOP("Master"), QT_TR_NOOP("Everything the game plays, movies too. Above 100 % is louder "
-                                                    "than the game itself.")},
-        {"music", QT_TR_NOOP("Music"), QT_TR_NOOP("The menus' and the stages' music.")},
-        {"effects", QT_TR_NOOP("Sound effects"), QT_TR_NOOP("Hits, guards, weapons, the stages and the menus' sounds.")},
-        {"voices", QT_TR_NOOP("Voices"), QT_TR_NOOP("The characters' shouts and lines, and the announcer.")},
-    };
-    for (const auto& lv : levels) {
-        const QString key = QString::fromLatin1(lv.key);
-        auto* slider = new QSlider(Qt::Horizontal);
-        slider->setRange(0, 150);
-        slider->setSingleStep(5);
-        slider->setPageStep(10);
-        slider->setValue(cfg::volume(key));
-        slider->setToolTip(tr(lv.tip));
-        auto* value = ui::label(QStringLiteral("%1 %").arg(slider->value()), "Muted");
-        value->setMinimumWidth(48);
-        auto* row = new QHBoxLayout;
-        row->addWidget(slider, 1);
-        row->addWidget(value);
-        soundForm->addRow(tr(lv.label), row);
-        connect(slider, &QSlider::valueChanged, this, [key, value](int v) {
-            value->setText(QStringLiteral("%1 %").arg(v));
-            cfg::set(QStringLiteral("display/volume_") + key, v);  // a running game follows it (the display file)
-        });
-    }
-    auto* soundNote = ui::label(tr("100 % is the game as it sounds on its own (its own Sound options still apply "
-                                   "on top); the master makes everything louder still. A running game follows at "
-                                   "once, sounds already playing too."), "Muted");
-    soundNote->setWordWrap(true);
-    soundForm->addRow(QString(), soundNote);
-    grid->addWidget(soundBox, 2, 0, 1, 2);
-
+    // the keyboard's keys, for a player without a controller (the Controls page's before 0.1.8); the sound is the
+    // game's own Options' business since then (no levels here)
+    grid->addWidget(new KeyboardBox, 2, 0, 1, 2);
+    auto* soundNote = ui::label(tr("Sound and music: set them in the game's own Options."), "Muted");
+    grid->addWidget(soundNote, 3, 0, 1, 2);
     // the game's folder and executable, and what compiles its code
     auto* gamesBox = new QGroupBox(tr("GAME FOLDER"));
     auto* gf = new QFormLayout(gamesBox);
@@ -1004,7 +969,7 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
             cfg::set(QStringLiteral("games/%1/exe").arg(id), f);
         });
     }
-    grid->addWidget(gamesBox, 3, 0, 1, 2);
+    grid->addWidget(gamesBox, 4, 0, 1, 2);
 
     // tools and development
     auto* toolsBox = new QGroupBox(tr("TOOLS AND DEVELOPMENT"));
@@ -1028,7 +993,7 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
         h->addStretch();
         return w;
     }());
-    grid->addWidget(toolsBox, 4, 0, 1, 2);
+    grid->addWidget(toolsBox, 5, 0, 1, 2);
     toolsBox->setVisible(!paths::isPackage());  // a player package has no repository or Python to point at
     root->addStretch();
 
@@ -1092,6 +1057,22 @@ SettingsPage::SettingsPage(ServerClient* server, QWidget* parent) : Page(parent)
     });
     connect(server_, &ServerClient::stateChanged, this, [this] { reloadServer(); });
     reloadServer();
+    // the mouse wheel scrolls the page: a list or number box under the pointer changes only once it was clicked
+    // (before, scrolling down the page changed the region or the resolution it passed over)
+    auto* guard = new WheelGuard(scroll->viewport(), this);
+    for (QWidget* w : content->findChildren<QWidget*>())
+        if (qobject_cast<QComboBox*>(w) || qobject_cast<QAbstractSpinBox*>(w)) {
+            w->setFocusPolicy(Qt::StrongFocus);
+            w->installEventFilter(guard);
+        }
+}
+
+bool WheelGuard::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() != QEvent::Wheel) return false;
+    const auto* w = qobject_cast<QWidget*>(watched);
+    if (!w || w->hasFocus()) return false;
+    QCoreApplication::sendEvent(page_, event);  // to the page's scroll area instead
+    return true;
 }
 
 void SettingsPage::setGame(const QString& gameId) { Page::setGame(gameId); }

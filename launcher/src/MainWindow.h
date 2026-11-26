@@ -1,65 +1,30 @@
 #pragma once
-// The launcher window: header (title, the game, account), navigation, pages, footer.
+// The launcher window (SCV 0.1.8): the header, four pages (Play, Build game, Settings, Support) and a footer. Everything
+// online is in the game's own menus (docs/PROTOCOL.md 3.8): the window builds the game, starts it (PLAY), signs the
+// player in and offers updates; the connection, the matchmaking, the lobbies and the matches run in the background
+// (ServerClient, MatchController) for the game, through MenuBridge.
 
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QPointer>
 #include <QTimer>
 
+#include "TestDriver.h"
+
 class QButtonGroup;
 class QLabel;
 class QPushButton;
 class QStackedWidget;
-class GamepadNav;
-class LobbyPage;
-class MatchController;
-class MatchFoundDialog;
-class RematchDialog;
-class Page;
-class QueuePage;
 class BuildPage;
-class SinglePlayerPage;
+class GamepadNav;
+class MatchController;
+class MenuBridge;
+class Page;
+class PlayPage;
 class ServerClient;
 class SettingsPage;
 class UpdateDialog;
 class Updater;
-
-struct LaunchOptions {
-    QString server;
-    QString fingerprint;
-    QString user;
-    QString passwordEnv = QStringLiteral("SC5_DEV_PASSWORD");
-    bool registerAccount = false;
-    QString queue;  // "casual" or "ranked"
-    QString game;
-    QString mode;
-    QString character;
-    QString page;
-    int autoAcceptSeconds = -1;
-    int cancelSearchSeconds = -1;  // --queue: cancel the search after this many seconds (what it opened closes)
-    bool localTest = false;  // start the two-instance loopback test right away
-    QString extractImage;    // open "Build game" and extract this disc image right away
-    QString lobby;           // "host": create a lobby and start it once both are ready; "join": join it by name
-    QString lobbyName;
-    QString lobbyCodeFile;   // the host writes its lobby's code here, a joiner reads it (lobbies the list leaves out)
-    int lobbyMatches = 1;    // matches to play there, one after the other
-    bool leaveLobby = false; // once they are played, leave the lobby (its game closes once idle)
-    int leaveLobbyInMatch = 0;  // seconds into its first match: leave the lobby then (its game closes at once)
-    bool koth = false;       // --lobby host: a King of the Hill lobby (join: one that is full puts you in line)
-    int rate = 0;            // King of the Hill: rate each match watched, 1 to 10, once the game showed it (0: never)
-    QString snapDir;         // development: pictures of the window as the lobby changes, and of the leaderboard
-    int rematches = 0;       // --queue casual: rematches to choose after the first match
-    QStringList rematchChoices;  // what each of them chooses, "rematch" or "select" (the last one repeats)
-    bool leaveSeries = false;    // once those are chosen, leave the series at once instead of letting it run out
-    bool solo = false;           // --queue: single player first, the search running alongside it (standby); --lobby
-                                 // join: single player first, open when the lobby's match comes
-    bool lobbyOwnFirst = false;  // --lobby join: a lobby of one's own first, left by joining the named one
-    QString practice;            // "on" / "off": practice while a search waits, saved (cfg::practiceWhileWaiting)
-    QString searchAgain;         // "on" / "off": search again once a set or series is over, saved (cfg::searchAgain)
-    bool upnpProbe = false;  // find the router and its public address, open nothing
-    QString updatedFrom;     // --updated: the version this launcher just replaced (Updater)
-    bool autoUpdate = false; // development: an update offered installs at once, without asking
-};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -74,90 +39,54 @@ private:
     QWidget* buildHeader();
     QWidget* buildNav();
     QWidget* buildFooter();
-    void selectGame(const QString& id);
     void selectPage(int index);
-    bool wasInMatch_ = false;  // the last phase change was during a match (MatchController::inMatch)
     void connectServer();
     void updateFooter();
-    void updateAccountButton();
-    void onAccountButton();
-    void openAccountDialog(bool firstTime);
+    void play();  // PLAY: the player's own game, or its window to the front when it runs
+    void openAccountDialog(bool newAccount);
     void askForAccount();
     void warnSmartAppControl();  // it blocks the games: what it is and where to switch it off
+    void checkGameBuilt();       // the Play page says when the game must be built (again) first
     void onServerMessage(const QJsonObject& msg);
-    void onMatchFound(const QJsonObject& found);
-    // the Casual series card's state: the rematch prompt over the game once its match's end has played
-    void onCasualSeries(const QJsonObject& series, const QString& title, const QString& score, const QString& info,
-                        bool canChoose);
-    void popUp(QWidget* dialog);  // in front of the game, the launcher's window restored first when minimized
-    void focusGame();             // the game's window in front again: the player is back in it
-    void frontSoloWhenUp();       // single player's (practice's) new game window in front once it has one
+    void popUp(QWidget* dialog);  // in front, the launcher's window restored first when minimized
+    void focusGame();             // the game's window in front: the player is back in it
     void showNotice(const QString& text, bool warn);
     // a release newer than this launcher (welcome, an update push, or the reply turning away a launcher too old)
     void offerUpdate(const QJsonValue& release, bool required);
     void showUpdateDialog(bool required);
     void startUpdate();
     void installUpdateWhenFree();
-    // what keeps the games in use (an update waits for it: no window over a match or a game, no install under one),
-    // as the end of "once ..."; empty when nothing does
+    // what keeps the game's files in use (an update waits for it: no install under a running game), as the end of
+    // "once ..."; empty when nothing does
     QString gamesBusy() const;
-    void cliLogin();
-    void cliQueue();
-    void cliLobby();
-    void cliJoin(const QString& code, bool watch);
-    void cliLobbyMessage(const QJsonObject& msg);
+    void snap(const QString& name);
 
     LaunchOptions opts_;
     ServerClient* server_;
     MatchController* controller_;
+    MenuBridge* bridge_;
+    TestDriver* driver_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     QList<Page*> pages_;
-    QueuePage* ranked_ = nullptr;
-    QueuePage* casual_ = nullptr;
+    PlayPage* play_ = nullptr;
     SettingsPage* settings_ = nullptr;
-    class UpnpMapper* upnp_ = nullptr;
     BuildPage* build_ = nullptr;
+    class UpnpMapper* upnp_ = nullptr;
     QButtonGroup* navGroup_ = nullptr;
-    QPushButton* account_ = nullptr;
     QLabel* notice_ = nullptr;
     QLabel* connDot_ = nullptr;
     QLabel* connText_ = nullptr;
-    QLabel* onlineText_ = nullptr;
-    QLabel* gameText_ = nullptr;
-    QLabel* phaseText_ = nullptr;
     QTimer noticeTimer_;
     GamepadNav* pad_ = nullptr;  // the launcher with a controller
-    QTimer soloFrontTimer_;  // frontSoloWhenUp's tries, 30 s at most
-    int soloFrontTries_ = 0;
-    QString gameId_;
     QString lastError_;
-    QJsonObject online_;
-    QPointer<MatchFoundDialog> matchDialog_;
-    QPointer<RematchDialog> rematchDialog_;
+    QString playError_;  // why PLAY could not start the game, last (cleared once it runs)
     Updater* updater_ = nullptr;
     QPointer<UpdateDialog> updateDialog_;
-    QPushButton* updateButton_ = nullptr;  // the footer's, once a release is offered (LATER leaves it)
     QJsonObject update_;                   // the release offered
     QString updateDismissed_;              // the version LATER was chosen for this run
-    bool installPending_ = false;          // downloaded, waiting for the match or the game to be over
-    bool offerPending_ = false;            // offered during a match or a game: its window comes once that is over
+    bool installPending_ = false;          // downloaded, waiting for the game to be closed
+    bool offerPending_ = false;            // offered while the game runs: its window comes once it is closed
     bool offerRequired_ = false;
-    QString rematchShownFor_;  // the series and matches played the prompt last came up for (once each)
     bool askedForAccount_ = false;  // the account window opened by itself this run
-    int cliLoginId_ = -1;
-    bool cliTriedRegister_ = false;
-    bool cliQueued_ = false;
-    int cliRematches_ = 0;  // rematches chosen
-    bool cliLobbyBegun_ = false, cliLobbyJoined_ = false, cliLobbyInMatch_ = false, cliLobbyLeft_ = false;
-    bool cliOwnLobbyIn_ = false;  // --lobby-own-first: the lobby of one's own is there
-    bool cliLobbyCodeWritten_ = false;  // --lobby host --lobby-code-file: written
-    int cliLobbyDone_ = 0, cliLobbyReadyFor_ = -1, cliLobbyStarts_ = 0;  // matches over, ready sent for, starts sent
-    QTimer* cliLobbyPoll_ = nullptr;
-    QJsonObject cliLastLobby_;  // the lobby's last state, looked at again once the controller is idle
-    QString cliRatedMatch_;     // --rate: the last match rated
-    QString snapKey_;           // --snap-dir: what the last lobby picture showed
-    int snaps_ = 0;
-    void snap(const QString& name);
-    void snapCreateLobby();  // --snap-dir on the Lobby page: the Create lobby window, then the leaderboard
     bool darkApplied_ = false;
 };

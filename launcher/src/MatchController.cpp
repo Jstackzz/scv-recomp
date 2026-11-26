@@ -770,8 +770,8 @@ void MatchController::openUdpThen(std::function<void()> next, int tries) {
     // the port held by this launcher's own game, which never left its last match (it did not take the park, which
     // lets go of the port at once): it goes, at once, a fresh one starts for the match, and the port is tried again
     // (before, the match declined itself: "a player declined", and both players closed their games by hand)
-    if (tries <= 20 && game_ && game_->isRunning() && !game_->betweenMatches() && !replacedForPort_ &&
-        phase_ != Phase::AtResult) {
+    if (tries <= 20 && game_ && game_->isRunning() && !game_->menus() && !game_->betweenMatches() &&
+        !replacedForPort_ && phase_ != Phase::AtResult) {
         replacedForPort_ = true;
         GameProcess* old = game_;
         const QString gameId = old->gameId();
@@ -825,57 +825,68 @@ QString MatchController::opponentName() const {
     return opp.isEmpty() ? tr("opponent") : str(opp, "name");
 }
 
+// The game a match, a lobby's Ready or a match to watch needs: the player's own game, which PLAY started (SCV 0.1.8,
+// docs/PROTOCOL.md 3.8). Before 0.1.8 the launcher started a game of its own here, hidden, for each online session;
+// now nothing is started: a game that is not running is said to be so.
 GameProcess* MatchController::ensureGame(const QString& gameId, QString* error) {
     closeWhenIdle_ = false;  // wanted again before a lobby left could close it
     leaveQuit_ = false;
-    // one game runs at a time: an accepted queue match freezes single player (standby) before it gets here; anything
-    // else that needs the online game (a lobby's Ready or match, a series' next match) closes it, saying so
-    if (solo_ && !soloFrozen_) closeSoloForMatch();
     if (phase_ == Phase::Finishing) {
         if (error) *error = tr("Your game is still playing the last match's ending: a moment.");
         return nullptr;
     }
-    // a game left at an old match's state with nothing of this launcher's on it, parked long ago or never (it never
-    // took the park after a desync, say): the next match would wait for it in vain, so it goes and a fresh one starts
-    bool wasLobbys = false;
-    if (game_ && game_->isRunning() && game_->gameId() == gameId && !game_->betweenMatches() &&
-        (!parkClock_.isValid() || parkClock_.elapsed() > kStuckMs) &&
-        (phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching) && !gameFrozen_) {
-        wasLobbys = lobbyGame_ == game_;
-        closeGame(tr("The game never came back from its last match (it says \"%1\"): closed").arg(game_->status()));
-        emit notice(tr("Your game was stuck after the last match, so the launcher closed it. A fresh one is starting "
-                       "for the next match: give it a moment."));
-    }
-    if (game_ && game_->isRunning() && game_->gameId() == gameId) {  // it built its own code, if it had to
-        if (gameFrozen_) {
-            thawGame();
-            showWhenReady_ = soloFrozen_;
-            if (game_->isReady()) emit gameShown();  // at its hold point: up at once
-        }
-        return game_;
-    }
-    if (!codeReady(gameId, error)) return nullptr;
-    if (game_) {
-        thawGame();  // a frozen game would not see its quit command
-        game_->quit();
+    if (game_ && game_->isRunning() && game_->gameId() == gameId) return game_;
+    if (error) *error = tr("Your game is not running: press PLAY in SCV Online to start it.");
+    return nullptr;
+}
+
+bool MatchController::playerGameRunning() const { return game_ && game_->menus() && game_->isRunning(); }
+
+bool MatchController::startPlayerGame(QString* error) {
+    const QString gameId = QStringLiteral("sc5");  // SCV Online's one game
+    if (playerGameRunning()) return true;
+    if (!codeReady(gameId, error)) return false;
+    if (game_) {  // one that ended: its exit has been dealt with
+        disconnect(game_, nullptr, this, nullptr);
+        if (game_->isRunning()) game_->quit();
         game_->deleteLater();
         game_ = nullptr;
     }
-    showWhenReady_ = soloFrozen_;
     auto* g = new GameProcess(gameId, 1, this);
+    g->setMenus(true);
     watchForCrash(g);  // first: it says what was going on before onGameExited moves the match on
     connect(g, &GameProcess::statusChanged, this, &MatchController::onGameStatus);
     connect(g, &GameProcess::exited, this, &MatchController::onGameExited);
+    connect(g, &GameProcess::exited, this, [this, g] {
+        if (game_ == g) emit playerGameChanged(false);
+    });
     if (!g->start(cfg::gameExe(gameId), error)) {
         delete g;
-        return nullptr;
+        return false;
     }
     game_ = g;
-    if (wasLobbys) lobbyGame_ = g;
     gamePlayed_ = false;
     gamePlayedKey_.clear();
-    log(tr("Game %1 starting (session %2)").arg(gameId, g->sessionDir()));
-    return game_;
+    parkClock_.invalidate();
+    log(tr("Your game is starting (session %1)").arg(QDir::toNativeSeparators(g->sessionDir())));
+    emit playerGameChanged(true);
+    emit gameStatusChanged(gameStatus());
+    return true;
+}
+
+void MatchController::leaveLobbyMatch() {
+    if (str(found_, "lobby").isEmpty()) return;
+    if (phase_ == Phase::Starting || phase_ == Phase::Playing) {
+        // the match ends for this player: reported as left (a lobby match keeps no record of it), and the game back
+        // to its online menu, its fight left
+        log(tr("Left the lobby: its match ends for you, and your game goes back to its online menu"));
+        pendingStart_.clear();
+        reportResult({{QStringLiteral("outcome"), QStringLiteral("left")},
+                      {QStringLiteral("exit"), QStringLiteral("left the lobby")}});
+        parkGame();
+    } else if (phase_ == Phase::AtResult) {
+        finishMatch();  // the next match there will not come: the game leaves its result screen
+    }
 }
 
 bool MatchController::needsFreshGame(const QJsonObject& found) const {
@@ -1058,6 +1069,7 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         const bool standby = solo_ && !soloFrozen_ && msg.value(QStringLiteral("accept_required")).toBool();
         if (!standby && !matchGame(msg, &err)) {
             log(err);
+            emit notice(tr("A match came, but it could not be played: %1").arg(err));
             phase_ = Phase::Found;
             decline();
             return;
@@ -1981,8 +1993,27 @@ void MatchController::parkGame() {
     stuckTimer_.start(kStuckMs);
 }
 
+void MatchController::checkStuckPlayerGame() {
+    const bool free = phase_ == Phase::Idle || phase_ == Phase::Searching || phase_ == Phase::Found ||
+                      phase_ == Phase::Connecting || (phase_ == Phase::Starting && !pendingStart_.isEmpty());
+    if (!free || !parkClock_.isValid() || parkClock_.elapsed() < kStuckMs - 1000) {
+        stuckTimer_.start(10000);
+        return;
+    }
+    log(tr("The game did not come back to its online menu %1 s after the park (it says \"%2\"): parked again")
+            .arg(parkClock_.elapsed() / 1000).arg(game_->status()));
+    game_->command(QStringLiteral("park"));
+    parkClock_.start();
+    emit notice(tr("Your game did not go back to its online menu after the last match. If it stays stuck, close the "
+                   "game and press PLAY again."));
+}
+
 void MatchController::checkStuckGame() {
     if (!game_ || !game_->isRunning() || game_->betweenMatches()) return;  // back at its hold point, or gone
+    if (game_->menus()) {  // the player's own game is never closed by the launcher
+        checkStuckPlayerGame();
+        return;
+    }
     // the game is in use (a match it took the start of, its result screen, a match watched): not now
     const bool waitedFor = phase_ == Phase::Starting && !pendingStart_.isEmpty();  // the start waits for its ready
     const bool free = phase_ == Phase::Idle || phase_ == Phase::Solo || phase_ == Phase::Searching ||
@@ -2018,6 +2049,10 @@ void MatchController::checkStuckGame() {
 void MatchController::closeGame(const QString& why) {
     GameProcess* g = game_;
     if (!g) return;
+    if (g->menus()) {  // the player's own game (3.8) holds their single player too: it stays
+        log(why.section(QLatin1Char(':'), 0, 0) + tr(" (your game stays open)"));
+        return;
+    }
     if (gameFrozen_) winutil::thawProcess(g->pid(), {});  // a frozen game would not see its quit
     gameFrozen_ = false;
     gameHidden_.clear();
@@ -2122,6 +2157,10 @@ void MatchController::stopGame() {
 
 void MatchController::closeGameWhenIdle() {
     lobbyGame_ = nullptr;
+    if (game_ && game_->menus()) {  // the player's own game stays: only the lobby's match, if any, ends for them
+        leaveLobbyMatch();
+        return;
+    }
     closeWhenIdle_ = true;
     maybeCloseIdleGame();
 }
