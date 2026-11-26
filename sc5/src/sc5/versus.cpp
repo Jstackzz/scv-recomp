@@ -70,6 +70,8 @@ void SetOnline(bool on, int side, int wins) {
   g_online = on;
 }
 
+int OnlineSide() { return g_online ? g_side.load() : -1; }
+
 }  // namespace sc5::versus
 
 // the VS settings copied into the battle setup

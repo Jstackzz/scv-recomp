@@ -21,6 +21,8 @@
 
 #include "sc5/controls.h"
 #include "sc5/frame.h"
+#include "sc5/mirror.h"
+#include "sc5/testinput.h"
 
 namespace sc5::input {
 namespace {
@@ -75,7 +77,9 @@ Pad ReadPhysical(uint32_t user) {
   auto* is = System();
   if (!is || user >= 4) return pad;
   rex::input::X_INPUT_STATE state{};
-  if (is->GetState(user, &state) == kErrorSuccess) {
+  if (testinput::DevicePad(user, pad)) {
+    // tests: a script in place of the controller (SC5_TEST_DEVICE_Pn), taken the way the controller's state is
+  } else if (is->GetState(user, &state) == kErrorSuccess) {
     pad.connected = true;
     pad.buttons = state.gamepad.buttons;
     pad.left_trigger = state.gamepad.left_trigger;
@@ -87,6 +91,8 @@ Pad ReadPhysical(uint32_t user) {
   }
   // the launcher's controls file: the buttons remapped, the keyboard as player 1 (sc5/controls.h)
   controls::Apply(user, pad);
+  // a preferred side: left and right swapped in a fight this game shows mirrored (sc5/mirror.h)
+  mirror::OwnPad(user, pad);
   return pad;
 }
 

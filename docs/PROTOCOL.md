@@ -1230,8 +1230,9 @@ sound variables, `controls.toml`; `tools/linktest.py` runs two games, and a spec
 | `SC5_ADAPTIVE_SYNC` | `0` or `1`: with v-sync, a G-SYNC or FreeSync monitor: the swap chain allows tearing, which such a monitor needs to follow the game; `0`: nothing makes a frame tear while v-sync is on |
 | `SC5_BRIGHTNESS` | `50` to `200`, percent (100: as the game draws it): a gamma curve over the game's own ramp, blacks and whites kept |
 | `SC5_FRAMEDATA` | `0` or `1`: the frame meter in practice (Training and Online Practice): both players' frames as Street Fighter 6's (startup, impact, recovery, stun), each player's startup, impact, recovery, total and advantage, and the damage panel; F7 in the game shows or hides it |
+| `SC5_PREFERRED_SIDE` | `off` (the default), `left` or `right`: the side the player wants to start every fight on, whichever player they are (the Controls page's *Preferred side*, as Tekken 8's). The game shows the fight mirrored when its player would otherwise start on the other side, with the player's own left and right and the sound's swapped with it; nothing it computes or sends changes (below) |
 | `SC5_VOLUME_MASTER`, `SC5_VOLUME_MUSIC`, `SC5_VOLUME_EFFECTS`, `SC5_VOLUME_VOICES` | `0` to `150`, percent of the game's own level (voices include the announcer) |
-| `SC5_DISPLAY_FILE` | the launcher's `display.txt` (beside its settings file): the display and sound settings again, as `key=value` lines (`mode`, `resolution`, `render_scale`, `anti_aliasing`, `anisotropic`, `vsync`, `adaptive_sync`, `brightness`, `frame_data`, `volume_master`, `volume_music`, `volume_effects`, `volume_voices`), replaced whole (3.2) at every change; see below |
+| `SC5_DISPLAY_FILE` | the launcher's `display.txt` (beside its settings file): the display and sound settings again, as `key=value` lines (`mode`, `resolution`, `render_scale`, `anti_aliasing`, `anisotropic`, `vsync`, `adaptive_sync`, `brightness`, `frame_data`, `preferred_side`, `volume_master`, `volume_music`, `volume_effects`, `volume_voices`), replaced whole (3.2) at every change; see below |
 | `SC5_CONTROLS` | the launcher's `controls.toml`: what keys and controller buttons press (below) |
 | `SC5_TRAINING` | `1`, a plain game for practice (the PRACTICE button, or practice while a search waits): the autopilot goes to training's character select with every character unlocked and hands it to the player (port 0 picks both; only player 1 takes part) |
 | `SC5_VERSUS` | `1`, a plain game for the offline versus (the VERSUS button): the two-player select screen with every character and stage unlocked, player 2 on the controller `controls.toml` names |
@@ -1266,7 +1267,14 @@ four main sound categories in CRI (sc5/src/sc5/sound.cpp): music is BGM (and the
 music level), effects SE and SYSTEMSE (the menus' sounds), voices VOICE (the fighters and the announcer). They
 multiply the game's own Sound options, which stay as the player set them. `SC5_FRAMEDATA` (and `frame_data`, at once)
 shows or hides the frame meter over Training and Online Practice (sc5/src/sc5/framemeter.cpp, docs/GAME.md "Frame data
-in practice"): it only reads the fighters' memory, so two players may set it differently too.
+in practice"): it only reads the fighters' memory, so two players may set it differently too. `SC5_PREFERRED_SIDE` (and
+`preferred_side`, from the next frame) mirrors only what this PC shows, hears and reads from its own player
+(sc5/src/sc5/mirror.cpp, docs/GAME.md "A player's preferred side"): online (a match, Online Practice) the game of a
+`side=2` player who prefers the left, or of a `side=1` player who prefers the right, shows the fight's 3D scene mirrored
+left to right, the HUD and every text as they are, and swaps the left and right of its player's own controller and
+keyboard in the fight before the netplay sends them (so both games, and the spectators, get the input the player
+meant); a spectator's game never mirrors; offline it is for the one player on a controller (the other the CPU's), and
+off with two players on one PC. Both players may choose the same side.
 
 **`controls.toml`** (the Controls page writes it; a running game reads it again within a second of a change):
 

@@ -6,6 +6,7 @@
 
 #include "sc5/display.h"
 #include "sc5/framemeter.h"
+#include "sc5/mirror.h"
 #include "sc5/sound.h"
 
 #include <algorithm>
@@ -58,6 +59,8 @@ struct Settings {
   int brightness = 100;  // percent
   bool frame_data = true;  // the frame meter in practice (framemeter.h): the launcher's default
   int volume_master = 100, volume_music = 100, volume_effects = 100, volume_voices = 100;
+  // a preferred side (mirror.h) when the settings name one: off, left, right
+  std::string preferred_side;
 };
 
 // one key=value (the file's names, or the environment's without SC5_ and in lower case)
@@ -80,6 +83,7 @@ void Take(Settings& s, const std::string& key, const std::string& v) {
   else if (key == "volume_music") s.volume_music = num(0, 150, 100);
   else if (key == "volume_effects") s.volume_effects = num(0, 150, 100);
   else if (key == "volume_voices") s.volume_voices = num(0, 150, 100);
+  else if (key == "preferred_side") s.preferred_side = v;
 }
 
 bool FromEnvironment(Settings& s) {
@@ -278,6 +282,7 @@ void Apply(const Settings& s, bool at_start) {
                         float(s.volume_voices) / 100.0f);
   g_brightness = s.brightness;
   sc5::framemeter::SetEnabled(s.frame_data);
+  if (!s.preferred_side.empty()) sc5::mirror::SetPreferred(sc5::mirror::SideFromText(s.preferred_side.c_str()));
   if (at_start) return;
   rex::cvar::SetFlagByName("vsync", s.vsync ? "true" : "false");
   rex::cvar::SetFlagByName("anisotropic_override", std::to_string(AnisotropicCvar(s.anisotropic)));
@@ -337,6 +342,8 @@ void Watch(fs::path file) {
 }  // namespace
 
 void ConfigureFromEnvironment() {
+  // the preferred side (SC5_PREFERRED_SIDE: off, left, right), whatever else the start sets
+  if (const char* v = std::getenv("SC5_PREFERRED_SIDE"); v && *v) sc5::mirror::SetPreferred(sc5::mirror::SideFromText(v));
   Settings s;
   if (!FromEnvironment(s)) return;  // a game started by hand keeps its own configuration
   {
@@ -411,7 +418,7 @@ uint32_t Sc5XAudioSubmitRenderDriverFrame(mapped_void driver_ptr, mapped_void sa
     return v && v[0] == '1';
   }();
   if (rms_test && samples) {
-    static double sum = 0, peak = 0;
+    static double sum = 0, peak = 0, side[2] = {};
     static uint32_t frames = 0;
     const auto* p = REX_KERNEL_STATE()->memory()->TranslateVirtual<const uint32_t*>(samples);
     for (int i = 0; i < 6 * 256; i++) {
@@ -419,16 +426,20 @@ uint32_t Sc5XAudioSubmitRenderDriverFrame(mapped_void driver_ptr, mapped_void sa
       float f;
       std::memcpy(&f, &bits, 4);
       sum += double(f) * f;
+      if (i < 2 * 256) side[i / 256] += double(f) * f;  // front left, front right
       peak = std::max(peak, double(std::fabs(f)));
     }
     if (++frames == 188) {  // 48000 samples a second, 256 a frame
       const double rms = std::sqrt(sum / (188.0 * 6 * 256));
-      REXLOG_INFO("sc5 audio test: loudness {:.1f} dB (peak {:.1f} dB)", 20 * std::log10(rms + 1e-9),
-                  20 * std::log10(peak + 1e-9));
-      sum = peak = 0;
+      REXLOG_INFO("sc5 audio test: loudness {:.1f} dB (peak {:.1f} dB), front left {:.1f} dB, front right {:.1f} dB",
+                  20 * std::log10(rms + 1e-9), 20 * std::log10(peak + 1e-9),
+                  10 * std::log10(side[0] / (188.0 * 256) + 1e-18), 10 * std::log10(side[1] / (188.0 * 256) + 1e-18));
+      sum = peak = side[0] = side[1] = 0;
       frames = 0;
     }
   }
+  // a preferred side: left and right swapped while the fight is shown mirrored (sc5/mirror.h)
+  if (samples) sc5::mirror::SwapSound(REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(samples));
   if (gain != 1.0f && samples) {
     auto* p = REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(samples);
     for (int i = 0; i < 6 * 256; i++) {

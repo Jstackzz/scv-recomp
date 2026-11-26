@@ -9,6 +9,10 @@
 //                     while a select screen is up: a player's picks however long the way there took
 //   SC5_INPUT_LIVE_P1..P4=<file>  a script read again whenever the file changes, its frames counted from then
 //                     ("0:A,+6:-"): a tool driving the menus as it looks at them (tools\py\winshot.py)
+//   SC5_TEST_DEVICE_P1..P4  a script timed in fight frames for the PC's own controller of that user: what
+//                     input::ReadPhysical reads in a fight in place of the SDK's controller, so that it goes the way a
+//                     real player's input goes (the launcher's controls, a preferred side's swap: sc5/mirror.h); the
+//                     scripts above are the simulation's inputs and never go that way
 //   SC5_PADS=<n>     users 0..n-1 connected even without a controller
 //   SC5_NO_PHYSICAL=1 the PC's own controllers are not read at all
 #include <cstdint>
@@ -22,5 +26,7 @@ void Init();
 bool Active();
 // a scripted user's pad now (its fight script in a fight, else its menu script): the netplay's local input in tests
 bool ScriptedPad(uint32_t user, input::Pad& out);
+// SC5_TEST_DEVICE_Pn's pad now, in a fight (false: the SDK's controller)
+bool DevicePad(uint32_t user, input::Pad& out);
 
 }  // namespace sc5::testinput

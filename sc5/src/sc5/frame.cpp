@@ -2,6 +2,7 @@
 
 #include "sc5/frame.h"
 #include "sc5/game.h"
+#include "sc5/mirror.h"
 #include "sc5/rerun_profile.h"
 #include "sc5/rng.h"
 
@@ -169,6 +170,9 @@ bool ReplayDraws() {
 // rollback, Elysium against Edge Master with 40 ms each way, 2026-11-18; net/netplay.cpp ReseedAtStateChange).
 REX_HOOK_RAW(sub_824AAC38) {
   if (sc5::frame::Replaying() && !ReplayDraws()) return;
+  // a preferred side: whether this frame's fight is drawn mirrored, marked in the GPU's commands where its drawing
+  // starts (sc5/mirror.h)
+  if (!sc5::frame::Replaying()) sc5::mirror::BeforeDraw();
   sc5::rng::EnterVisual(ctx, base);
   __imp__sub_824AAC38(ctx, base);
   sc5::rng::LeaveVisual();

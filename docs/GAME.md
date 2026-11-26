@@ -71,6 +71,7 @@ main menu (`ready`) in 41 s.
 | `controls.cpp` | the launcher's `controls.toml`: the keyboard as player 1, every controller's buttons, player 2's controller, the buttons in a fight (`[fight]`, below "Controls in a fight") |
 | `display.cpp` | the launcher's display and sound settings at the start and from `SC5_DISPLAY_FILE` as it changes |
 | `framemeter.cpp` | frame data in practice: a frame meter as Street Fighter 6's over Training and Online Practice (below) |
+| `mirror.cpp` | a player's preferred side: the fight shown mirrored on this PC, the player's left and right and the sound's swapped with it (below, "A player's preferred side") |
 | `result_overlay.cpp` | the panel over a lobby match's result screen where its loser chooses the next match (below, "The loser's choice") |
 | `rerun_profile.cpp` | tests (`SC5_TEST_RERUN_PROFILE`): the game's tasks timed one by one in frames run again (below, "Netplay") |
 | `select.cpp` | the character select screen: cursors, picks, the 32 slots and their characters |
@@ -1258,6 +1259,79 @@ bind goes, and F7 shows or hides the meter, with a notice for 2.5 s; the launche
 Each exchange is logged once (`sc5 framemeter: fight frames 263-304: P1 startup 13 impact 3 recovery 25 total 40
 advantage +2, damage 12 (100%) combo 12 (1 hit), High | P2 ...`); `SC5_FRAMEMETER_TRACE=1` (or `<from>:<to>`, fight
 frames) logs every reading, a frame run again's marked `(again)`.
+
+## A player's preferred side (mirror.cpp)
+
+As in Tekken 8: a player who always wants to start a fight on the left (or on the right) sets the launcher's
+*Preferred side* (Controls page; `SC5_PREFERRED_SIDE` and `preferred_side` in the display file, docs\PROTOCOL.md 3.1),
+and their game shows the fight mirrored whenever they would otherwise start on the other side: player 2 who prefers the
+left, player 1 who prefers the right. It is a view of that player's own game only: the fight, everything rollback
+saves and puts back, everything the two games compare and everything the netplay sends stay exactly as they are, so
+both players may prefer the same side and each sees the fight their own way. Whose side it is: online (a match,
+Online Practice) the start line's side, kept through the match's end (a game parked after its result while the
+winner's pose plays does not turn back); a spectator's game never mirrors; offline the one player on a controller
+(each player's +628 says 1 a pad, 2 the CPU, +432 which pad: VS CPU, Training, Arcade), none with two players on the
+PC. From the intro to the result screen after the winner's pose (battle states other than none, idle 0x18 and loading
+0xD0; 0xBC is the pose, 0x160 the result screen) the fight is shown mirrored; the menus, the select screens and the
+VS loading screen never are.
+
+**The picture.** Seen in the GPU's draws of a fight's frames (the SDK's draw log, `SC5_DBG_DRAWLOG=<fight
+frame>[:<frames>],...`): the game draws its 3D scene into its own targets (at 1280x720, in tiles or whole), resolves
+it into a texture of the screen's size, makes its post effects from that at half the size (the blur, the glow, the
+auto exposure's tiles), then puts the picture on the screen with one full-screen quad sampling that texture (pixel
+shader 533C56023E787E53 while the round is fought, B4677417C6247A64 with the calls' layer below, E06477FDEFDA2FE4 on
+the result screen), then draws the HUD and every text over it from small textures of their own (7ABDFEFBCADB4BF9,
+DD03F15D927F8AAF, the text 931017D6617FD425 from a 2048x2048 font). The GPU (the SDK's `MirrorSceneFromNow`,
+docs\SDK.md) draws that one quad reflected about the middle of the screen: the whole scene is a mirror image (into
+the screen stays into the screen, up stays up, nothing is culled otherwise: the scene itself is drawn as it always
+is) and the HUD, the subtitles and the menus over it are drawn as they are. The round's calls ("BATTLE 1", "FINAL
+BATTLE", "FIGHT!", "PERFECT", "K.O.", "YOU WIN") are 3D letters and sparkles the game draws after its post effects
+into a layer of their own (a target with its own depth, resolved into a texture the composite lays over the scene
+with a glow): those draws are reflected too, their triangles' front face turned with them, so that the composite's
+reflection puts them back as they were, readable and where they were. Where in its commands the mirrored frames start
+and end the game marks at the top of each frame's drawing (sub_824AAC38, before the frame gives the GPU anything), so
+the switch falls exactly between two frames. The camera, which is part of the fight here (each player's +0xC4, "The
+battle's cameras"), is left alone: turning it around the fighters would have swapped the depth directions of the
+8-way run too.
+
+**The HUD stays where the game draws it**: player 1's health bar, name, gauges and round markers on the left, player
+2's on the right, whichever fighter is shown where. Its two sides are hard-wired in the game's HUD (the task with
+update sub_82182568 and draw sub_82183070): each side has its own layout elements and its own code (player 1's
+gauge from sub_821800E8, player 2's from sub_82180140), reading the players through the table at 0x8293B244 (player
+1's object, then player 2's) and per-side fields of its own (+0x94 and +0x98 the round markers, +0x110 and +0x114
+read by the bars' code, sub_82180BB8), while its update, in the step's tasks, reads the same table and writes the
+HUD's object and a static block at 0x835FC1xx. Swapping the
+sides would mean swapping that table and those fields around the HUD's draw (memory the fight reads, if only for the
+time of the draw) and around its update, which runs in the step with the fight and in frames run again; that is not
+safe, so it is not done. Every text stays readable, and the frame meter's damage panel (framemeter.cpp) puts each
+player's values on the side their fighter is shown on.
+
+**The controls.** While the fight is mirrored and runs (not stood still in a menu: Training's, the pause menu, the
+fight's count at 0x82949D54 standing for two frames), the left and right of the player's own controller and keyboard
+are swapped where the PC's controller is read (input::ReadPhysical: the d-pad's left and right, the left stick's x),
+after the launcher's controls: offline the game takes them so, online the netplay sends them so, and "forward" stays
+toward the other fighter as the player sees them. The other game and the spectators get that input as any other.
+Scripted test inputs (`SC5_INPUT_Pn`, `SC5_FIGHT_INPUT_Pn`, linktest's `--fight1/--fight2`) are the simulation's and
+never come this way; `SC5_TEST_DEVICE_Pn` (testinput.h) plays a script as the PC's own controller, which does.
+
+**The sound**: the front and surround channels' left and right swapped in what the game hands the system
+(display.cpp's hook of XAudioSubmitRenderDriverFrame) while the fight is mirrored. The game does place its sounds:
+`SC5_TEST_AUDIO_RMS=1` (which now logs the front left and right too) gave the fight's seconds up to 3 dB apart one
+way or the other, where the menus' music keeps within 1 dB.
+
+**Checked** (2026-11-25, two games linked with tools\linktest.py, game 2 preferring the left so mirrored, game 1 not;
+pictures of both at the same moments): the intro, the round's call, the fight, a KO's "PERFECT", the KO's replay, the
+winner's pose with its "YOU WIN" and the result screen were mirrored in game 2 with every text and the HUD as in game
+1; in Online Practice the frame meter's damage panel had player 2's values on the left in game 2. Game 2's own
+controller (`SC5_TEST_DEVICE_P1`) holding RIGHT and the stick left reached both games' net logs as LEFT and the stick
+right. Sync: tools\synctest.sh with `SC5_PREFERRED_SIDE=right` (player 1 mirrored offline) gave the same battle events
+on the same fight frames as without, plain and with every frame run again, and the same counts (1,800 checks, 549 in
+the game's snapshot, 0 in the fight); linktest with game 2 mirrored, 40 ms each way, a first to 2 and its rematch: 0
+checks apart, the same results; both games mirrored (player 1 preferring the right, player 2 the left), 40 ms, a
+desync forced at frame 400 (`SC5_TEST_DESYNC_AT=400:1`) in the match and its rematch: each round played again and
+both matches ended alike; tools\pairsweep.sh pairs 0 to 2 with game 2 mirrored (60 ms, jitter, loss): 0 checks apart.
+In that sweep, pair 1's game 2 once stopped in round 2 with six games on the PC (four of them another worker's);
+the same pair again played its five rounds to the end in sync.
 
 ## Sound levels (sound.cpp)
 

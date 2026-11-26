@@ -237,7 +237,12 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    the game folder's `build-game.cmd` (a player package's, sc5/player/README.md: codegen and clang from the package,
    nothing installed) and shows what it prints; without that script (a source build's `game\`) it says the step is
    not ready.
-7. **Controls**: **In a fight**: what each of the Xbox 360 controller's A, B, X, Y, bumpers, triggers and stick clicks
+7. **Controls**: **Preferred side** (first, in large white text: three big buttons *Off*, *Left*, *Right*, the one
+   chosen bright blue in a gold frame, `SideChoice` in `Style.cpp`; *Off* the default): the side the player wants to
+   start every fight on, whichever player they are, as in Tekken 8. Kept as `display/preferred_side`, passed as
+   `SC5_PREFERRED_SIDE` and `preferred_side` in `display.txt` (PROTOCOL.md 3.1), so a running game follows a change at
+   once. When the player would start on the other side, their game shows the fight mirrored and swaps their left and
+   right in the fight; only their own screen changes (GAME.md, "A player's preferred side"). **In a fight**: what each of the Xbox 360 controller's A, B, X, Y, bumpers, triggers and stick clicks
    presses in a fight, in every mode, online and offline: any combination of the game's own A (horizontal attack), B
    (vertical attack), K (kick) and G (guard), all 16, where the game's own Control Settings offer 13 and none on the
    stick clicks; *Default fight buttons* puts the console's Type A back. Online the other player's game sees the

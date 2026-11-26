@@ -65,6 +65,7 @@
 
 #include "sc5/frame.h"
 #include "sc5/game.h"
+#include "sc5/mirror.h"
 #include "sc5/sparring.h"
 
 REX_EXTERN(__imp__sub_824A25C0);  // the game's step (frame.cpp): pads, sequences, the battle
@@ -566,7 +567,9 @@ class MeterDialog final : public rex::ui::ImGuiDialog {
       Line(dl, ts, x0, y_p2_line, bar_w - label_w, v.stats[1]);
       Text(dl, ts, ImVec2(x0 + bar_w - TextWidth(ts, "Player 1"), y_p1_line), kWhite, "Player 1");
       Text(dl, ts, ImVec2(x0 + bar_w - TextWidth(ts, "Player 2"), y_p2_line), kWhite, "Player 2");
-      // the damage panel, as SF6's: player 1's values, the row's name, player 2's
+      // the damage panel, as SF6's: player 1's values, the row's name, player 2's; each player's values on the side
+      // of the screen their fighter is shown on, so swapped while this game shows the fight mirrored (sc5/mirror.h)
+      const bool mirrored = sc5::mirror::Mirrored();
       const float pt = ts * 0.8f;
       const char* names[3] = {"Damage", "Combo Damage", "Attack Type"};
       std::string vals[2][3];
@@ -589,8 +592,10 @@ class MeterDialog final : public rex::ui::ImGuiDialog {
         if (r) dl->AddLine(ImVec2(px0, py0 + r * row_h), ImVec2(px0 + panel_w, py0 + r * row_h), IM_COL32(255, 255, 255, 70));
         const float name_x = px0 + val_w + pt + (name_w - TextWidth(pt, names[r])) * 0.5f;
         Text(dl, pt, ImVec2(name_x, y), IM_COL32(255, 230, 140, 255), names[r]);
-        Text(dl, pt, ImVec2(px0 + val_w + pt * 0.5f - TextWidth(pt, vals[0][r].c_str()), y), kWhite, vals[0][r].c_str());
-        Text(dl, pt, ImVec2(px0 + val_w + pt * 1.5f + name_w, y), kWhite, vals[1][r].c_str());
+        const std::string& left = vals[mirrored ? 1 : 0][r];
+        const std::string& right = vals[mirrored ? 0 : 1][r];
+        Text(dl, pt, ImVec2(px0 + val_w + pt * 0.5f - TextWidth(pt, left.c_str()), y), kWhite, left.c_str());
+        Text(dl, pt, ImVec2(px0 + val_w + pt * 1.5f + name_w, y), kWhite, right.c_str());
       }
     }
     if (notice) {

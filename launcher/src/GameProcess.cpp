@@ -237,6 +237,9 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
     env.insert(QStringLiteral("SC5_ADAPTIVE_SYNC"), cfg::adaptiveSync() ? QStringLiteral("1") : QStringLiteral("0"));
     env.insert(QStringLiteral("SC5_BRIGHTNESS"), QString::number(cfg::brightness()));
     env.insert(QStringLiteral("SC5_FRAMEDATA"), cfg::frameData() ? QStringLiteral("1") : QStringLiteral("0"));
+    // the side the player wants to start on (Controls, PREFERRED SIDE): the game mirrors its own picture, controls
+    // and sound, never what it computes
+    env.insert(QStringLiteral("SC5_PREFERRED_SIDE"), cfg::preferredSide());
     for (const QString& level : cfg::volumeNames())  // the sound levels (Settings, SOUND)
         env.insert(QStringLiteral("SC5_VOLUME_") + level.toUpper(), QString::number(cfg::volume(level)));
     // the same settings again whenever the player changes them, for the game that runs on (it keeps watching the file)

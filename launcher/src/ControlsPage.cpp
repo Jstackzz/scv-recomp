@@ -1,5 +1,6 @@
 #include "ControlsPage.h"
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -16,6 +17,7 @@
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include "AppPaths.h"
 #include "WinUtil.h"
 
 namespace {
@@ -146,6 +148,58 @@ ControlsPage::ControlsPage(QWidget* parent) : Page(parent) {
         tr("Controls"), tr("For the game on this PC: they only change what your own keys and buttons press, so "
                            "they work the same in online matches. A game that is running picks up a change within a "
                            "second.")));
+
+    // the side the player wants to start every fight on, whichever player they are (as Tekken 8's): the game shows
+    // the fight mirrored when they would start on the other side; three large buttons, white on dark, the one chosen
+    // bright blue with a gold frame (SideChoice, Style.cpp)
+    auto* sideBox = new QGroupBox(tr("PREFERRED SIDE"));
+    auto* sv = new QVBoxLayout(sideBox);
+    sv->addWidget(ui::label(tr("Start every fight on the side you choose"), "Big"));
+    auto* sideRow = new QHBoxLayout;
+    sideRow->setSpacing(12);
+    auto* sideGroup = new QButtonGroup(sideBox);
+    sideGroup->setExclusive(true);
+    const struct {
+        const char* value;
+        const char* text;
+        const char* say;
+    } sides[] = {
+        {"off", QT_TR_NOOP("Off"), QT_TR_NOOP("Preferred side off: fights are shown as they are.")},
+        {"left", QT_TR_NOOP("Left"), QT_TR_NOOP("Preferred side: left. You start every fight on the left.")},
+        {"right", QT_TR_NOOP("Right"), QT_TR_NOOP("Preferred side: right. You start every fight on the right.")},
+    };
+    const QString chosen = cfg::preferredSide();
+    for (const auto& s : sides) {
+        auto* b = new QPushButton(tr(s.text));
+        b->setObjectName(QStringLiteral("SideChoice"));
+        b->setCheckable(true);
+        b->setChecked(chosen == QLatin1String(s.value));
+        b->setMinimumWidth(150);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setAccessibleName(tr("Preferred side: %1").arg(tr(s.text)));
+        sideGroup->addButton(b);
+        sideRow->addWidget(b);
+        const QString value = QString::fromLatin1(s.value), said = tr(s.say);
+        connect(b, &QPushButton::toggled, this, [this, value, said](bool on) {
+            if (!on) return;
+            cfg::set(QStringLiteral("display/preferred_side"), value);  // a running game follows it (the display file)
+            say(said);
+        });
+    }
+    sideRow->addStretch();
+    sv->addLayout(sideRow);
+    auto* sideNote = ui::label(tr("Off: player 1 starts on the left and player 2 on the right, as always. Left or "
+                                  "Right: when you would start on the other side, your game shows the fight mirrored, "
+                                  "so you start on your side, and your left and right in the fight are swapped with "
+                                  "it, so forward is still toward your opponent. The text stays readable; the health "
+                                  "bars stay where the game puts them (player 1's on the left). Only your screen "
+                                  "changes: your opponent may choose the same side, and each of you sees it your own "
+                                  "way. Online, Online Practice, and offline with one player (VS CPU, Training, "
+                                  "Arcade); not with two players on one PC, and never when watching."),
+                              "Muted");
+    sideNote->setWordWrap(true);
+    sv->addWidget(sideNote);
+    root->addWidget(sideBox);
 
     // in a fight: what each button presses of the game's own four, any of them together
     auto* fightBox = new QGroupBox(tr("IN A FIGHT"));

@@ -33,6 +33,7 @@ struct Step {
 std::array<std::vector<Step>, 4> g_script;
 std::array<std::vector<Step>, 4> g_fight_script;  // SC5_FIGHT_INPUT_Pn: by fight frame (game::FightFrame)
 std::array<std::vector<Step>, 4> g_select_script;  // SC5_SELECT_INPUT_Pn: by the select screen's frames (select::Age)
+std::array<std::vector<Step>, 4> g_device_script;  // SC5_TEST_DEVICE_Pn: the PC's own controller in fights
 std::array<bool, 4> g_scripted{};
 int g_pads = 0;
 bool g_no_physical = false;
@@ -217,6 +218,18 @@ void Init() {
   }
   for (int u = 0; u < 4; u++) {
     char name[24];
+    std::snprintf(name, sizeof name, "SC5_TEST_DEVICE_P%d", u + 1);
+    const char* text = std::getenv(name);
+    if (!text || !*text) continue;
+    if (!ParseScript(text, g_device_script[u])) {
+      REXLOG_ERROR("sc5: {} could not be read: {}", name, text);
+      g_device_script[u].clear();
+      continue;
+    }
+    REXLOG_INFO("sc5: user {}'s own controller plays a script of {} steps in fights", u, g_device_script[u].size());
+  }
+  for (int u = 0; u < 4; u++) {
+    char name[24];
     std::snprintf(name, sizeof name, "SC5_INPUT_LIVE_P%d", u + 1);
     if (const char* p = std::getenv(name); p && *p) {
       g_live_path[u] = p;
@@ -242,6 +255,14 @@ bool ScriptedPad(uint32_t user, Pad& out) {
   if (user >= 4 || !g_scripted[user]) return false;
   out = Scripted(user);
   out.connected = true;
+  return true;
+}
+
+bool DevicePad(uint32_t user, Pad& out) {
+  if (user >= 4 || g_device_script[user].empty()) return false;
+  const int64_t fight = game::FightFrame();
+  if (fight < 0) return false;
+  out = ScriptAt(g_device_script[user], user, uint64_t(fight));
   return true;
 }
 

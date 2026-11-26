@@ -213,6 +213,10 @@ bool vsync() { return get(QStringLiteral("display/vsync"), true).toBool(); }
 bool adaptiveSync() { return get(QStringLiteral("display/adaptive_sync"), false).toBool(); }
 int brightness() { return qBound(50, get(QStringLiteral("display/brightness"), 100).toInt(), 200); }
 bool frameData() { return get(QStringLiteral("display/frame_data"), true).toBool(); }
+QString preferredSide() {
+    const QString v = get(QStringLiteral("display/preferred_side"), QStringLiteral("off")).toString();
+    return v == QLatin1String("left") || v == QLatin1String("right") ? v : QStringLiteral("off");
+}
 QStringList volumeNames() {
     return {QStringLiteral("master"), QStringLiteral("music"), QStringLiteral("effects"), QStringLiteral("voices")};
 }
@@ -229,7 +233,8 @@ void writeDisplayFile() {
                              .arg(vsync() ? 1 : 0)
                              .arg(adaptiveSync() ? 1 : 0)
                              .arg(brightness())
-                             .arg(frameData() ? 1 : 0);
+                             .arg(frameData() ? 1 : 0) +
+                         QStringLiteral("preferred_side=%1\n").arg(preferredSide());
     QString volumes;
     for (const QString& name : volumeNames()) volumes += QStringLiteral("volume_%1=%2\n").arg(name).arg(volume(name));
     winutil::writeFileAtomic(paths::displayFile(), (text + volumes).toLatin1());
