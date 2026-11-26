@@ -824,16 +824,25 @@ the next match (CHOICE).
   4 began 266 frames apart, Cervantes against Yoshimitsu); and a button held on into the replay is not a press there
   (`ReplaySkipHeld`). The KO state after the replay stays on neutral inputs. `SC5_NET_NO_KO_PLAY` (tests): as before;
   `SC5_DBG_KO=1` logs where a round's end stands at each change.
-- **Open: the side of the screen at a crossing over** (found 2026-11-25, in 0.1.6 too). Ivy against Kilik,
-  `tools/linktest.py --p1 Ivy --p2 Kilik --rounds 3 --lag 60 --fight1 "$(python -I tools/py/mash.py 5 9000)"
-  --fight2 "$(python -I tools/py/mash.py 6 9000)" --env SC5_NET_JITTER=25 --env SC5_NET_LOSS=3`: the check of match
-  frame 2490 fails in every run, the round is played again and the match ends alike. Dumps of every frame
-  (`SC5_NET_DUMP_AT`, `tools/py/cmpsnap.py`): the fights are alike to frame 2485; at 2488 each player's +0xC4 (the
-  side of the screen, 1 and 0 in one game, 0 and 1 in the other) and the directions that follow from it differ. The
-  cameras' director and both camera arrays are the same in both games at every frame dumped up to 2460, so the
-  cameras did not drift: one game's rerun of the frames at the crossing decides the side otherwise than their first
-  run. Drawing in frames run again (`SC5_REPLAY_DRAW=1`) changes nothing. Not found yet what the decision takes in
-  that a rerun has otherwise.
+- **The cameras' blends** (battle.cpp, at its end; 0.1.8). Ivy against Kilik, `tools/linktest.py --p1 Ivy --p2 Kilik
+  --rounds 3 --lag 60 --fight1 "$(python -I tools/py/mash.py 5 9000)" --fight2 "$(python -I tools/py/mash.py 6 9000)"`:
+  the check of match frame 2490 failed in every run, in 0.1.6 and 0.1.7 too, the round was played again and the match
+  ended alike; without lag (no rollbacks) it did not. Dumps of every frame (`SC5_NET_DUMP_AT`, `tools/py/cmpsnap.py`):
+  the fights alike to frame 2485; at 2488 each player's +0xC4 (the side of the screen, 1 and 0 in one game, 0 and 1 in
+  the other) and the directions that follow from it differ. The fighters' places, the cameras' director and both
+  camera arrays were the same in both games to frame 2486; at 2487 the weights (+0x9C) of cameras 0 and 2 were 0.9045
+  and 0.0955 in one game and 0 in the other. A write watch on camera 0's weight (`SC5_DBG_WATCH=DE33169C:4`): the
+  first run of frame 2486 left it at 0.9045 (sub_8247A138's own ramp), its rerun then had sub_82479CD0 set it to 0,
+  and frame 2487's rerun took the cross product where the first run, and the other game, kept player 1's rule
+  (sub_8216C890: the camera with the greatest weight in its modes 1 and 3). sub_82479CD0 is the update of a task of 152
+  bytes that sub_82479E08 makes when the camera logic wants a camera at another weight (as the camera's mode changes:
+  frame 2487 here): it moves the weight there over a fixed length of the game's time and ends itself. A heap task is
+  not in the game's snapshot, so rollback did not put it back: made at frame 2487, it was still there when the frames
+  from 2485 were run again, and it ran a frame early. The blends are now kept by our own code instead of in tasks
+  (noted by sub_82479E08's hook, moved on after the battle scene's step, sub_824968A8, kept and put back with every
+  snapshot's raw memory): that match plays through with every check alike, the fight test's counts are as they were
+  (1,800 checks, 549 in the snapshot, 0 in the fight), and the camera frames the fight as before. Other camera tasks
+  (sub_82479FB8's, made from sub_8247B3A0, sub_8247BEE4 and sub_8247C238) have not been looked at.
 - **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
   that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
   is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that

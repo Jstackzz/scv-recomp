@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -171,10 +172,20 @@ std::vector<Region> DynamicRegions() {
   return out;
 }
 
+// A camera's blend, see "The cameras' blends" at the end of this file.
+struct Blend {
+  uint32_t system;  // the cameras' system ([the manager + 8]): its mode at +0x2C, the director at +0x28
+  int32_t camera;   // which of the director's eight cameras
+  float from, to, length, done;
+  bool fresh;       // made in this frame: it moves on from the next one, as the game's task did
+};
+std::vector<Blend> g_blends;
+
 struct Kept {
   std::vector<uint8_t> fixed;  // kRaw, in order
   std::vector<Region> dynamic;
   std::vector<uint8_t> dynamic_bytes;
+  std::vector<Blend> blends;
 };
 std::unordered_map<uint32_t, Kept> g_raw;  // stream -> its raw memory
 std::mutex g_raw_lock;
@@ -205,6 +216,7 @@ void KeepRaw(PPCContext& ctx, uint8_t* base, uint32_t stream) {
     const uint8_t* p = Mem()->TranslateVirtual<const uint8_t*>(r.address);
     k.dynamic_bytes.insert(k.dynamic_bytes.end(), p, p + r.size);
   }
+  k.blends = g_blends;
 }
 
 void PutRawBack(uint32_t stream) {
@@ -212,6 +224,7 @@ void PutRawBack(uint32_t stream) {
   auto it = g_raw.find(stream);
   if (it == g_raw.end()) return;
   const Kept& k = it->second;
+  g_blends = k.blends;
   const uint8_t* p = k.fixed.data();
   for (const Region& r : kRaw) {
     std::memcpy(Mem()->TranslateVirtual<uint8_t*>(r.address), p, r.size);
@@ -621,4 +634,102 @@ REX_EXTERN(__imp__sub_8211A9E8);
 REX_HOOK_RAW(sub_8211A9E8) {
   sc5::battle::g_replay_manager.store(ctx.r3.u32, std::memory_order_relaxed);
   __imp__sub_8211A9E8(ctx, base);
+}
+
+// The cameras' blends. When the fight's camera logic wants one of the director's eight cameras at another weight
+// (sub_82480D50, as the camera's mode changes), the game makes a task of 152 bytes for it (sub_82479E08: r3 the
+// cameras' manager, r4 the camera, f1 the weight wanted; a child of the task running then, vtable 0x820DA848) whose
+// update (sub_82479CD0, once a frame from the battle scene's step, sub_824968A8) moves the camera's weight (+0x9C)
+// from where it was to the weight wanted over a fixed length of the game's time (0x820B8E90), and ends itself. The
+// camera with the greatest weight decides which rule gives each player's side of the screen (sub_8216C890: player 1
+// while that camera is in its modes 1 and 3, else the sign of a cross product), which turns left and right into
+// forward and back: the weights are the fight's.
+//   The task is a heap object the game's snapshot does not carry, so rollback did not put it back: a task made at
+// frame n was still there when the frames from n - 2 were run again, moved the weight on a frame early, and the frame
+// that made it made a second one. Ivy against Kilik with 60 ms each way: the first run of frame 2486 left camera 0
+// at 0.9045 and its rerun at 0, frame 2487's rerun took the cross product where the first run and the other game
+// had player 1's rule, player 1's +0xC4 was 1 in one game and 0 in the other, and the check of frame 2490 failed, in
+// every run (0.1.6 and 0.1.7 too; the round was played again). The cameras themselves were alike in both games to
+// frame 2486 (SC5_NET_DUMP_AT, the director and both camera arrays).
+//   So the blends are kept here instead of in tasks: sub_82479E08 notes one, the battle scene's step moves each on
+// after the game's own work (one made in this frame from the next frame on, as a new task was first run then), and
+// the list is kept and put back with every snapshot's raw memory (Kept). The arithmetic is the task's.
+namespace {
+constexpr uint32_t kBlendLength = 0x820B8E90;   // the length of a blend, in the game's time
+constexpr uint32_t kBlendZero = 0x820B8DE0;     // 0.0
+constexpr uint32_t kGameClock = 0x8293BA40;     // +0x14 the time a frame adds; +0xE2A8, +0xE2B0, +0xE2B4: stopped
+float GetF(uint32_t a) {
+  const uint32_t v = sc5::battle::Get32(a);
+  float f;
+  std::memcpy(&f, &v, 4);
+  return f;
+}
+// the weight of one of the director's cameras, 0 for one that is not there (as sub_82479E08 reads it)
+float BlendWeight(uint32_t system, int32_t camera) {
+  if (camera < 0 || camera >= 8) return GetF(kBlendZero);
+  const uint32_t director = sc5::battle::Get32(system + 0x28);
+  const uint32_t cam = sc5::battle::Get32(director + 4 * (uint32_t(camera) + 152));
+  return cam ? GetF(cam + 0x9C) : GetF(kBlendZero);
+}
+bool ClockStopped() {
+  return (sc5::battle::Get32(kGameClock + 0xE2A8) | sc5::battle::Get32(kGameClock + 0xE2B0) |
+          sc5::battle::Get32(kGameClock + 0xE2B4)) != 0;
+}
+}  // namespace
+
+REX_EXTERN(sub_824B4158);  // sets a camera's weight: r3 the cameras' system, r4 the camera, f1 the weight
+REX_HOOK_RAW(sub_82479E08) {
+  const uint32_t manager = ctx.r3.u32;
+  const int32_t camera = ctx.r4.s32;
+  const float want = float(ctx.f1.f64);
+  const uint32_t system = sc5::battle::Get32(manager + 8);
+  const float now = BlendWeight(system, camera);
+  if (now == want) return;
+  sc5::battle::Put32(manager + 0x88, 1);
+  sc5::battle::g_blends.push_back({system, camera, now, want, GetF(kBlendLength), GetF(kBlendZero), true});
+}
+
+REX_EXTERN(__imp__sub_824968A8);
+REX_HOOK_RAW(sub_824968A8) {
+  __imp__sub_824968A8(ctx, base);
+  auto& blends = sc5::battle::g_blends;
+  if (blends.empty()) return;
+  const uint32_t state = sc5::game::BattleState();
+  if (state == sc5::game::kBattleIdle || state == sc5::game::kBattleLoading) {
+    blends.clear();  // the battle is over (its tasks went with it)
+    return;
+  }
+  const PPCContext saved = ctx;
+  auto set = [&](const sc5::battle::Blend& b, float weight) {
+    ctx.r3.u64 = b.system;
+    ctx.r4.s64 = b.camera;
+    ctx.f1.f64 = weight;
+    sub_824B4158(ctx, base);
+  };
+  for (size_t i = 0; i < blends.size();) {
+    sc5::battle::Blend& b = blends[i];
+    if (b.fresh) {
+      b.fresh = false;
+      i++;
+      continue;
+    }
+    if (ClockStopped()) {
+      i++;
+      continue;
+    }
+    bool over = false;
+    const uint32_t mode = sc5::battle::Get32(b.system + 0x2C);
+    if (mode == 0) {
+      set(b, float(std::fma(double((b.to - b.from) / b.length), double(b.done), double(b.from))));
+      if (b.length <= b.done) over = true;
+      else if (!ClockStopped()) b.done = b.done + GetF(kGameClock + 0x14);
+    } else {
+      if (mode == 1) set(b, b.to);
+      else if (mode == 2) set(b, GetF(kBlendZero));
+      over = true;
+    }
+    if (over) blends.erase(blends.begin() + i);
+    else i++;
+  }
+  ctx = saved;
 }
