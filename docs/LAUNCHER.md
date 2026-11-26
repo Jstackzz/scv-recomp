@@ -313,8 +313,10 @@ the stand-in's docstring has the rest), and its `game.log` says `asks script: do
 The switches that play a part (`--queue`, `--lobby`, `--auto-accept`, `--rematches` and the rest) stand in for the
 player in the game's menus: the launcher starts its game first, as PLAY does, and once the game is up and the account
 signed in they go through the same asks the game's menus send (`TestDriver`, `MenuBridge::ask`). The one thing the
-game's menus do not ask for is a casual rematch: the game's result screen chooses it (PROTOCOL.md 3.3, *The loser's
-choice*); `--rematches` stands in for that.
+game's menus do not ask for is the next match of a series: the game's result screen chooses it, its loser's REMATCH,
+CHARACTER SELECT or LEAVE (PROTOCOL.md 3.3, *The loser's choice*: the game says `chose`, `MatchController::readyInPlace`
+readies the series or the lobby with it, and the loser's launcher alone leaves a series). `--rematches` stands in for
+it only where the game offers no choice (the stand-in's is `SC5_FAKE_CHOICE`).
 
 | option | effect |
 |---|---|
@@ -343,7 +345,8 @@ offscreen platform (no window on the screen) and the stand-in games they start (
 status line, what the launchers did and the database's records. Its settings files turn UPnP off.
 
 ```
-powershell -File tools\online-e2e.ps1 -Queue casual -Rematches 1      # match found, accept, match, result, rematch
+powershell -File tools\online-e2e.ps1 -Queue casual -Rematches 1      # match found, accept, match, result, rematch, leave
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Choices select,select  # the loser's CHARACTER SELECT
 powershell -File tools\online-e2e.ps1 -Queue ranked                   # a ranked set, Elo and titles
 powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Watch  # a lobby, two matches, a spectator
 powershell -File tools\online-e2e.ps1 -Queue lobby -Mode sparring     # Online Practice
@@ -353,6 +356,10 @@ powershell -File tools\online-e2e.ps1 -Queue casual -DelayB 3        # input del
 powershell -File tools\online-e2e.ps1 -Queue asks                    # the stand-in games drive it by asks alone
 powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps                 # King of the Hill, Respect Points, leaderboard
 ```
+
+The stand-in games' losers choose on their result screens as the real game's do (`-Choices`, the stand-in's
+`SC5_FAKE_CHOICE`, one per result in turn): by default a casual series' `-Rematches` rematches and then LEAVE, a ranked
+set's CHARACTER SELECT (its winner keeping their fighter, `keep=` in the next line) until it is won, a lobby's REMATCH.
 
 `-Queue asks` starts the launchers with `--play` only: each stand-in game runs a script of asks (`SC5_FAKE_ASKS`)
 against its launcher's `ui.json`, as a player in the game's menus would: asks that do not fit (accept with no match,
@@ -374,9 +381,9 @@ launcher never closes the player's game, so it parks it again and tells the play
   aside to watch, a spectator taking a free place, King of the Hill's line), or for rating a King of the Hill win:
   the launcher's pages that had them are gone, so those wait for asks of their own. A spectator joins to watch
   (`lobby_join watch=1`) and a King of the Hill lobby still plays, its line and its king as before.
-- A casual series' next match is chosen at the game's result screen (3.3, *The loser's choice*); until the game
-  offers that choice after a queue match, a casual series ends when its 60 s run out (`--rematches` stands in for it in
-  the tests).
+- A series' next match is chosen at the game's result screen (3.3, *The loser's choice*) only when the two games
+  reached each other straight; through the relay or the tunnel the launchers go on by themselves with CHARACTER SELECT
+  (the winner keeping their fighter), and a player leaves such a series from the game's online menu (`leave`).
 
 - The game speaks all of section 3 (2026-11-17): versus, Online Practice (`sparring`), practice and watching (the
   spectator feed), the display and sound settings (`SC5_DISPLAY_FILE`) and `controls.toml` (docs\GAME.md, "The

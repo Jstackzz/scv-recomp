@@ -9,7 +9,8 @@ line both games write, with the time.
                                 [--park-after S] [--back-at FRAME] [--watch] [--dlc2 DIR] [--env NAME=VALUE]
                                 [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
                                 [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
-                                [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select]
+                                [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select,leave]
+                                [--series casual] [--set 3] [--save1 USERDIR] [--save2 USERDIR]
 
 --fight1/--fight2: other fight scripts (tools/py/netlog2script.py makes them from a match's net log, so a desync between
 two PCs plays again here; tools/py/mash.py makes varied ones); --heap-shift2 moves game 2's heap, as a second PC's lies
@@ -17,10 +18,15 @@ elsewhere; --exe a copy of the game, so a build can go on meanwhile; --args1/--a
 --env1/--env2 its own variables (two PCs' display settings side by side: --env2 SC5_RENDER_SCALE=2, as the launcher
 passes them, docs/PROTOCOL.md 3.1); --port-base and --runs let two tests run at once (tools/heapsweep.sh).
 
---choose: a lobby's matches (choose=1): after each result the match's loser chooses the next one on the game's result
-screen (SC5_TEST_RESULT_CHOICE stands in for them, one choice per result in turn), both games say it (`chose`), and the
+--choose: matches whose loser chooses the next one on the game's result screen (choose=1; SC5_TEST_RESULT_CHOICE stands
+in for them, rematch, select, leave or wait, one per result in turn), both games say it (`chose ... chooser=N`), and the
 next match goes on from there as the launchers would start it (rematch: the result line's fighters and stage=keep;
-select: both pick again, --pick1/--pick2 then pick for the players).
+select: the winner keeps their fighter, keep=N, and the loser picks again, --pick1/--pick2 for them; leave, or a
+ranked set won: both parked). --series ranked|casual|lobby and --set N give the lines the series' keys and score.
+
+--save1/--save2: that game plays with its own copy of a save (a user folder, as the launcher's one game has the
+player's own, docs/PROTOCOL.md 3.8) instead of an empty one; afterwards each copy's changed bytes are listed.
+--fight1/--fight2 none: no fight script, the player's own controller (SC5_TEST_DEVICE_Pn) plays.
 
 --p1/--p2 "-": that side picks on the game's own select screen; --pick1/--pick2 then stand in for each PC's player
 there (SC5_TEST_LOCAL_PICK). The fight's inputs are tools/synctest.sh's scripted ones (player 1's in game 1, player
@@ -330,6 +336,12 @@ def main():
                 # the loser's choice on the result screens: both games say it (and who chose), then the launchers'
                 # next match: REMATCH the same fighters on the same stage, CHARACTER SELECT the winner keeping theirs
                 # (player 2 after a draw) while the loser picks again, LEAVE (or a ranked set won) both games parked
+                if any(x.startswith(("error", "desync", "disconnected")) for x in st[:2]):
+                    for s in sessions:
+                        write_atomic(os.path.join(s, "cmd.txt"), "park")
+                    print(f"{time.time() - t0:7.1f}s no result to choose after: park sent", flush=True)
+                    stage = "park"
+                    continue
                 fighters = dict(kv.split("=", 1) for kv in last_result.split()[1:] if "=" in kv)
                 if last_result and counted != match_now:
                     counted = match_now

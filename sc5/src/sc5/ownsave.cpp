@@ -11,10 +11,12 @@
 // the player's file (2026-11-26: +0x183, +0x4CF, +0x557, +0x51C9-0x51D7, +0x22C1F8) and memory dumps before and after
 // the Options were changed.
 //
-// The save task writes the file with sub_824A0990 (r3 its object): the two files (savedata.bin, replay.bin) opened
-// with CREATE_ALWAYS and written whole, through message boxes when something fails; its outcome goes to the object's
-// +48 (7 written, 15 failed or given up) and it returns 0. Online it returns at once with 7: the game takes the save as
-// done, and the player's files keep what they had.
+// The save task writes the files in two routines (sub_8249FD78 and sub_824A0990, the second through message boxes when
+// something fails), each opening savedata.bin and replay.bin with CREATE_ALWAYS and writing them whole through
+// sub_824D83A8 (r3 the file, r4 the buffer, r5 its size; called from 0x8249FFE4 and 0x824A0E98): the game saved on its
+// way back to the main menu after an online match (2026-11-26, the play time, VS Battle's counts, the options as the
+// session had them). Online, savedata.bin's write takes the image as the session found it in place of the image now:
+// the game takes the save as done, and the file gets what it would have got before the session.
 
 #include "sc5/ownsave.h"
 
@@ -32,7 +34,7 @@
 #include "sc5/frame.h"
 #include "sc5/unlocks.h"
 
-REX_EXTERN(__imp__sub_824A0990);  // the save task: savedata.bin and replay.bin written (r3 the task's object)
+REX_EXTERN(__imp__sub_824D83A8);  // a file's write (r3 the file, r4 the buffer, r5 its size, r6 the bytes written)
 
 namespace sc5::ownsave {
 namespace {
@@ -52,7 +54,8 @@ std::atomic<bool> g_online{false};
 uint32_t g_image = 0;          // where the kept image goes back to
 std::vector<uint8_t> g_kept;   // the image and the release table as the session found them
 uint32_t g_options[2] = {0, 0};  // the pinned options' own values
-std::atomic<int> g_held_back{0};  // the game's saves answered without writing, this session
+std::atomic<int> g_held_back{0};  // the game's saves of this session that wrote the kept image
+uint32_t g_guest_copy = 0;        // a guest buffer for the kept image (the write's buffer must be guest memory)
 
 uint8_t* Host(uint32_t guest) { return REX_KERNEL_STATE()->memory()->TranslateVirtual<uint8_t*>(guest); }
 uint32_t Get32(uint32_t a) { return __builtin_bswap32(*REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(a)); }
@@ -95,7 +98,7 @@ void EndOnline() {
     for (size_t i = 0; i < g_kept.size(); i++) changed += image[i] != g_kept[i];
     std::memcpy(image, g_kept.data(), g_kept.size());
     REXLOG_INFO("sc5 own save: the online session is over at frame {}: the save put back as it was ({} bytes the "
-                "session had changed; {} of the game's saves held back)",
+                "session had changed; {} of the game's saves wrote the save as it was)",
                 frame::Count(), changed, g_held_back.load());
   } else if (g_image) {
     REXLOG_WARN("sc5 own save: the online session is over but the save image moved: not put back");
@@ -108,17 +111,28 @@ void EndOnline() {
 
 bool Online() { return g_online; }
 
+// The buffer savedata.bin is written from: the image the session found in place of the image now (ownsave.cpp)
+uint32_t WriteBuffer(uint32_t lr, uint32_t buffer, uint32_t size) {
+  if (!g_online || (lr != 0x8249FFE8 && lr != 0x824A0E9C) || !g_image || buffer != g_image || size != kImageSize ||
+      g_kept.size() < kImageSize)
+    return buffer;
+  if (!g_guest_copy) g_guest_copy = REX_KERNEL_STATE()->memory()->SystemHeapAlloc(kImageSize, 0x1000);
+  if (!g_guest_copy) {
+    REXLOG_ERROR("sc5 own save: no guest memory for the kept save: this save writes the session's");
+    return buffer;
+  }
+  std::memcpy(Host(g_guest_copy), g_kept.data(), kImageSize);
+  REXLOG_INFO("sc5 own save: the game saves in an online session ({}): the save as it was before the session written",
+              ++g_held_back);
+  return g_guest_copy;
+}
+
 }  // namespace sc5::ownsave
 
-// The save task's write of the player's files: held back in an online session (ownsave.h), its outcome "written"
-REX_HOOK_RAW(sub_824A0990) {
-  if (sc5::ownsave::Online()) {
-    const uint32_t task = ctx.r3.u32;
-    *REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(task + 48) = __builtin_bswap32(7);
-    ctx.r3.u64 = 0;
-    const int n = ++sc5::ownsave::g_held_back;
-    REXLOG_INFO("sc5 own save: the game's save {} of this online session held back: nothing written", n);
-    return;
-  }
-  __imp__sub_824A0990(ctx, base);
+// A file's write: the game's save of savedata.bin in an online session writes the kept image (ownsave.h)
+REX_HOOK_RAW(sub_824D83A8) {
+  const uint32_t buffer = ctx.r4.u32;
+  const uint32_t use = sc5::ownsave::WriteBuffer(ctx.lr ? uint32_t(ctx.lr) : 0, buffer, ctx.r5.u32);
+  if (use != buffer) ctx.r4.u64 = use;
+  __imp__sub_824D83A8(ctx, base);
 }

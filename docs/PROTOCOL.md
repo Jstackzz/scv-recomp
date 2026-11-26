@@ -409,6 +409,13 @@ S: {"type":"queue_left","reason":"left"}
        "p1":"Siegfried","p2":"Astaroth","p1_name":"Taki","p2_name":"Kilik","p1_title":"Wanderer",
        "p2_title":"Squire","lobby":null,"death_traps":true,"feed":false}
    ```
+   SCV 0.1.8 adds what the games' result and select screens show of the run of
+   matches: `series_kind` (`ranked`, `casual`, `lobby`, `null` none), `set`
+   (a ranked set's wins to take it, 0 otherwise), `set_p1` and `set_p2` (each
+   side's wins before this match), `keep` (1 or 2: the side whose fighter the
+   last match's winner keeps through CHARACTER SELECT; 0 none); the launcher
+   passes them on in its start and rematch lines (3.3). A queue match's
+   `match_found` says `result_choice` (true in `versus`), as a lobby's does.
    `p1_title`, `p2_title`: each player's ranked title in the match's game and
    mode, in a casual or lobby match too (someone who never played it ranked:
    the starting one; 1.3 `ranks`), for the badges the games draw beside the
@@ -537,9 +544,23 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
 - `state`: `between` (the server waits for both players' `series_ready`),
   `playing` (a match of it runs), `over`. `you`/`them` count each player's
   agreed match wins in the series; `seconds_left` is the time left between
-  matches: 60 s for a casual rematch, 90 s for a set's next match (the last
-  match's ending plays first). The server sends the state to both players at
+  matches: 75 s for a casual rematch (60 until SCV 0.1.8), 90 s for a set's next
+  match (the last match's ending plays first, then the loser's 40 s on the
+  game's result screen). The server sends the state to both players at
   every change, and to a player who logs in again in the middle of one.
+- **The loser's choice** (SCV 0.1.8, ranked and casual alike, `versus`): the
+  match's loser (player 1 after a draw) chooses the next match on the game's
+  result screen (3.3, *The loser's choice*): REMATCH (both launchers send
+  `choice` `rematch`: the same two fighters on the same stage, in a ranked set
+  too), CHARACTER SELECT (`select`: the last counted match's winner keeps their
+  fighter and costume, `match_go` `keep`, and only the loser picks again; after
+  a draw player 2 keeps theirs) or LEAVE (the loser's launcher alone sends
+  `series_ready` false: a casual series ends `left`; a ranked set is lost by
+  the loser, `forfeit`, once a match of it counted). A match that wins a set
+  offers no choice. Where the games offer none (a match through the relay or the
+  tunnel, one that did not count, a game no longer at its result screen) both
+  launchers send `select` by themselves. Before SCV 0.1.8 a ranked set went on
+  by itself and a casual rematch was asked of both players in the launcher.
 - A launcher sends `series_ready` true for a ranked set by itself, for a casual
   rematch when the player chose one: with `"in_place":true` while its game
   still waits at the last match's result screen, connected to the other game
@@ -646,7 +667,8 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   a match its two games played straight (no relay, no tunnel) ends with both
   games at their result screens, where the match's loser (player 1 after a
   draw) chooses REMATCH or CHARACTER SELECT with their own controller
-  (section 3.3, `choose=1`). Each launcher then sends `lobby_ready` with
+  (section 3.3, `choose=1`; SCV 0.1.8: or LEAVE, which parks both games, the
+  players staying in the lobby to ready again). Each launcher then sends `lobby_ready` with
   `"in_place":true` and that `"choice"` (`rematch` or `select`); once both
   players are ready in place the next match starts at once, without the
   countdown, from where the two games wait: `match_found` with
@@ -654,8 +676,10 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   and `rtt_ms`, a new `match` and `seed`) and the game's `rematch` (as a
   series' next match in place, 1.9.1). `rematch` plays the fighters both
   games' results named again (`match_go` `p1`/`p2` the game's ids, the same
-  stage: the game's own Rematch); `select` (or fighters the two results did
-  not agree on) sends both back to the select screen (`-`). A player who
+  stage: the game's own Rematch); `select` keeps the last match's winner's
+  fighter (player 2's after a draw; `match_go` `keep`, SCV 0.1.8) and sends the
+  loser back to the select screen (`-`), and fighters the two results did not
+  agree on send both there. A player who
   readies in the lobby instead (or one launcher that is not at the result
   screen) takes both the usual way, `in_place` false, its game parked first.
   Nobody choosing in a minute parks both games (the players ready again).
@@ -1217,8 +1241,8 @@ sound variables, `controls.toml`; `tools/linktest.py` runs two games, and a spec
 | `SC5_GAME_DIR` | the extracted disc, `<game folder>\disc` (3.7): `default.xex` with the title update's `default.xexp` beside it, which the runtime applies as it loads the executable; mounted as `game:` |
 | `SC5_UPDATE_DIR` | `<game folder>\update`: the title update's other files (`patch.cpk`), mounted as `update:` |
 | `SC5_DLC_DIR` | `<game folder>\dlc`: the player's own downloadable content, one folder per package with its files and the package's header beside it (3.7); empty or missing: none |
-| `SC5_USER_DIR` | the saves: `<game folder>\user` for a plain game; with `SC5_NET=1` a fresh `<session>\user`, so both players' games start from the same (empty) save and nothing online changes the player's own |
-| `SC5_CREATION_SAVE` | with `SC5_NET=1`: the player's own save, `<game folder>\user\<profile>\4E4D083D\00000001\SC5SaveData\savedata.bin` (the newest of the profiles'), where Creation keeps their created characters. The game only reads it (shared, never locked or written) and brings their characters into its fresh save in memory (3.3, *Created characters*); missing: none |
+| `SC5_USER_DIR` | the saves: `<game folder>\user`, the player's own (SCV 0.1.8: the launcher's one game, 3.8, plays everything with it). Online the game keeps that save out of the match: both games simulate alike whatever each save holds, and an online match writes nothing to it (*The player's own save online*, below). Until 0.1.7 an online game had a fresh `<session>\user`, which the game still takes (tools/linktest.py) |
+| `SC5_CREATION_SAVE` | until 0.1.7, with a fresh session save: the player's own save, `<game folder>\user\<profile>\4E4D083D\00000001\SC5SaveData\savedata.bin` (the newest of the profiles'), where Creation keeps their created characters. The game only reads it (shared, never locked or written) and brings their characters into its fresh save in memory (3.3, *Created characters*); missing: none. From 0.1.8 not needed (the launcher sends none): the player's characters are in the game's own save, and a file inside `SC5_USER_DIR` is not read |
 | `SC5_CACHE_DIR` | `<game folder>\cache`: the shader cache, kept between sessions (the game's default is `<SC5_USER_DIR>\cache`, which online would start empty every time) |
 | `SC5_CAPTURE_DIR` | `<session>\captures`: F3 in the game saves what it drew there (1.13.2) |
 | `SC5_DISPLAY` | `windowed`, `borderless` or `fullscreen` |
@@ -1276,6 +1300,24 @@ keyboard in the fight before the netplay sends them (so both games, and the spec
 meant); a spectator's game never mirrors; offline it is for the one player on a controller (the other the CPU's), and
 off with two players on one PC. Both players may choose the same side.
 
+**The player's own save online** (SCV 0.1.8, sc5/src/sc5/ownsave.cpp; docs/GAME.md "The player's own save online").
+From a `start` of an online match (or a spectator's) until the game is at its hold point again after `park`, an
+online session:
+
+- nothing of the save reaches the fight: what a button does comes from each player's own settings on their own PC
+  (below); VS Battle's settings the game kept from earlier are overridden at the battle setup (the rounds from the
+  start line, the round time 60, both sides pads'); the two display options that could touch the fight (Battle
+  Messages, Custom Effects) are held at their defaults; everything on the disc is unlocked whatever the save earned
+  (and `SC5_UNLOCK_ALL=0`); the sound, brightness, subtitles and stage music only change what is heard and seen;
+- nothing of the session reaches the save: the game keeps its records in its save image as it goes (play time, VS
+  Battle's time and counts, the player's level, the unlocks it records); the session keeps the image as it found it
+  and puts it back when it ends, and a save the game makes meanwhile (it saves on its way back to the main menu)
+  writes the image as the session found it. So an online match writes nothing to the player's save: its records are
+  the server's;
+- the player's created characters are the save's own, as they are when the session starts (one made a minute ago in
+  Creation too); slots 49 and 50 hold the other player's for the match, so the player's own there wait offline
+  (said in the game), and the save's slots are put back at the end.
+
 **`controls.toml`** (the launcher writes it: Settings, *Keyboard*, from SCV 0.1.8, where the Controls page set all of
 it before; a running game reads it again within a second of a change). From 0.1.8 the launcher writes no `[fight]`
 (the game's own Options set what the buttons do) and takes out what an older launcher wrote there; `[buttons]` and
@@ -1292,19 +1334,17 @@ right_shoulder = "rb"            # dpad_up dpad_down dpad_left dpad_right, start
 paddle1 = ""                     # misc, paddle1-4, touchpad
 [ports]
 player2 = ""                     # player 2's controller (offline versus) by its name; "" the second plugged in
-[fight]                          # what a button presses in a fight: the game's own four together ("" nothing)
-lb = "A+B+K+G"                   # a b x y lb rb lt rt ls rs; A horizontal, B vertical, K kick, G guard
 ```
 
-`[fight]` is the player's own button settings for fights, in every mode, in place of the game's Control Settings (an
-online game's fresh save keeps those at the console's Type A, and they offer only 13 of the 16 combinations of A, B, K
-and G; the stick clicks none). A button it does not list keeps what the game's own Control Settings give it: Type A
-online (A guard, B kick, X horizontal attack, Y vertical attack, LB A+G, LT B+G, RB A+B, RT A+B+K, the stick clicks
-nothing), offline what the player set in the game. Online the game turns the player's own pad into Type A's face
-buttons before its netplay sends it (each listed button presses the face buttons that make its combination: X for A,
-Y for B, B for K, A for G, and nothing of its own), so the other game and the spectators see exactly the combination
-the player meant whatever each of them set; offline the battle's own conversion of player 1's pad takes it
-(sc5/src/sc5/controls.cpp, docs/GAME.md "Controls in a fight"). Menus never see it.
+**What a button does in a fight** is the game's own Options, Control Settings (Type A, B, C or the player's own), in
+every mode, as on the console; the game reads no `[fight]` any more (0.1.7's launcher wrote one). Online each player's
+settings apply to their own inputs on their own PC: the game turns its player's own pad into Type A's face buttons by
+those settings before its netplay sends it (each of A B X Y LB LT RB RT pressed presses the face buttons of what it
+does: X for A, Y for B, B for K, A for G; the triggers and shoulder buttons nothing of their own), and both games
+convert every player's inputs with Type A (A guard, B kick, X horizontal attack, Y vertical attack), whatever their
+saves say, so the other game and the spectators see exactly the combinations the player meant and neither game's
+settings play any part in the other player's inputs (sc5/src/sc5/controls.cpp, docs/GAME.md "Controls in a fight").
+Menus never see it.
 
 With `SC5_NET=1` the game reports a controller on port 2 whether one is plugged in or not: the autopilot picks
 player 2 there, and online the other player's inputs play it. SCV's game (sc5/src/sc5/controls.cpp) reads the
@@ -1357,8 +1397,14 @@ show them over the health bars), `p1_rank`, `p2_rank` (each player's ranked titl
 `ranks/<rank>.png` beside the launcher in a player package), `stage` (ignored: the players pick the stage on the
 game's stage select, below), `feed` (`127.0.0.1:port`, a TCP port of the launcher's: the game writes its spectator
 feed there, 3.6; a lobby match's), `watch=1` (a spectator: no `side`, `local_port` or `remote`; the game reads both
-players' feed from `feed`), `choose=1` (a lobby's match the launcher keeps at its result screen, 1.10: the match's
-loser chooses the next one there, below). Both sides get the same line except for `side`, `local_port`, `remote` and
+players' feed from `feed`), `choose=1` (a match the launcher keeps at its result screen, its two games reached straight: from SCV 0.1.8 every
+versus match of a queue, a series and a versus lobby but King of the Hill (1.9.1, 1.10); the match's loser chooses the
+next one there, below), and SCV 0.1.8's `series=ranked|casual|lobby` (the run of matches it belongs to), `set=N` (a
+ranked set's wins to take it, 0 otherwise), `set_p1=N set_p2=N` (each side's wins in the set or series before this
+match), `keep=1|2` (the side whose fighter the last match's winner keeps through CHARACTER SELECT: that side is named
+and picked by the autopilot in both games, the other is `-`; both games show it locked over the select screen, in
+large type: "PLAYER 1 WINNER / KEEPS Siegfried / LOCKED"), all from `match_go` (1.8). A `rematch` line takes them too
+(`keep` is each match's own). Both sides get the same line except for `side`, `local_port`, `remote` and
 `feed`. (MK3D's start line had `traps`, the death traps; SCV's has none.)
 
 **Picks on the game's select screen** (`p1` and/or `p2` = `-`, the launcher's *Pick my character on the game's own
@@ -1444,13 +1490,24 @@ play, as on the console, unless a player presses START on their own controller: 
 spectators', from the feed). A KO's replay plays too, and a player's START or A cuts it short in both games and the
 spectators' on a frame the two games agree on (docs/GAME.md, "Netplay").
 
-**The loser's choice** (`choose=1`, a lobby's match, 1.10): after the match the game stays at its result screen. Once
-the Results screen is up, the match's loser (player 1 after a draw) chooses REMATCH or CHARACTER SELECT with their own
+**The loser's choice** (`choose=1`; SCV 0.1.8: ranked, casual and lobbies alike): after the match the game stays at
+its result screen. Once the Results screen is up (12 s after the match's end), the match's loser chooses with their own
 controller (UP, DOWN, then A) on a panel the game draws over the Results screen, which both players see with the
-loser's cursor on it; the other game follows the choice over the netplay. Both games then write `chose
-choice=rematch|select match=<id>` (3.4) and wait for the launcher's `rematch`, whose way through the game's own menu
-(Rematch, or Character Select) the two games take on the same frames. No choice: the launcher's `park` after a
-minute.
+loser's cursor on it, the series' score (`series`, `set`, `set_p1`, `set_p2`) and the seconds left:
+
+- REMATCH: the same two fighters on the same stage (VS Battle's own Rematch);
+- CHARACTER SELECT: only the loser picks again: the winner keeps their fighter and costume, whatever the winner would
+  like (the next line names the winner's side, `keep`), and the loser picks the stage;
+- LEAVE: no next match. A ranked set left so is lost by the one who leaves, whatever its score (1.9.1: a set left
+  after a match of it counted is a forfeit; the loser cannot leave a set to save its rating), a casual series ends,
+  and a lobby's players go back to their lobby, as when nobody readies there.
+
+After a draw player 1 chooses, and counts as the loser in all of it (player 2 keeps their fighter, player 1 picks the
+stage). 40 s without a choice is LEAVE (an absent loser ends the series; the server's own limits come later). A
+match that wins a ranked set offers nothing: the panel says who won the set, and the launchers park both games. The
+other game follows the choice over the netplay. Both games then write `chose choice=rematch|select|leave
+chooser=1|2 match=<id>` (3.4) and wait for the launcher's `rematch` (whose way through the game's own menu, Rematch
+or Character Select, the two games take on the same frames) or `park`.
 
 ### 3.4 `status.txt` (game -> launcher)
 
@@ -1464,7 +1521,7 @@ The launcher polls `status.txt` every 100 ms and acts on every change of the fir
 | `in_match match=<id>` | a match (or practice: `match=practice`) is running; `again=N again_frame=F` after it once the two games went out of step and played the round again N times this match (SCV 0.1.4; the check of frame F failed last): the launcher sends a `desync_report` with `again` for each (1.13.1) |
 | `result winner=1 p1_rounds=2 p2_rounds=1 p1_char=12.1 p2_char=7.0 match=<id>` | the match ended normally (`winner` is 1 or 2, or 0 for a draw: a drawn round, the time running out even or a double KO, took both to the rounds to win; `p1_rounds`/`p2_rounds`, each side's round points as the game counts them, a won round and a drawn one, which gives both players the point; `p1_char`/`p2_char`, the characters as the game's own ids with the costume after a dot, `3.0` Siegfried in his first costume, which `start` takes as `p1`/`p2` and the launcher names from `game_id` in its `data/sc5.json`; a created character as `c.<its checksum>`, 8 hex digits, the same in both games); the game stays on its result screen until `park`, `rematch` or `quit` |
 | `sparring_over match=<id>` | Online Practice: the match in sync is over, a player pressed BACK (the launcher reports the outcome `sparring`) |
-| `chose choice=rematch match=<id>` | after a `result` with `choose=1` (3.3, *The loser's choice*): the match's loser chose the next match on the result screen, `rematch` or `select` (Character Select); both games say it, and wait at their result screens for `rematch` or `park` |
+| `chose choice=rematch chooser=2 match=<id>` | after a `result` with `choose=1` (3.3, *The loser's choice*): the match's loser (`chooser`, its side; player 1 after a draw) chose the next match on the result screen, `rematch`, `select` (Character Select) or `leave` (SCV 0.1.8; also when their 40 s ran out); both games say it, and wait at their result screens for `rematch` or `park` |
 | `desync frame=N match=<id>` | the two simulations diverged at frame N and the match is aborted: from SCV 0.1.4 only when the round could not be played again (`in_match ... again=`, above: three times a match at most, not in Online Practice) |
 | `disconnected match=<id>` | the peer stopped answering |
 | `error <text>` | something failed (`error no connection`, `error bad command`); free text to the end of the line |

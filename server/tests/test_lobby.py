@@ -357,14 +357,15 @@ async def test_the_loser_chooses_the_next_lobby_match_at_the_result_screens(serv
                             "p1_char": "3.0", "p2_char": "0.1"})
     await guest.expect("match_result", match=go["match"])
 
-    # CHARACTER SELECT: both pick again on the select screen, still from the result screens
+    # CHARACTER SELECT: still from the result screens, the loser (player 1) picks again on the select screen while the
+    # winner keeps their fighter (SCV 0.1.8), which match_go says (keep) for the game to show it locked
     for conn in (host, guest):
         await conn.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "select"})
     for conn in (host, guest):
         found = await conn.expect("match_found")
         assert found["in_place"] is True
         go = await conn.expect("match_go", match=found["match"])
-        assert (go["p1"], go["p2"]) == ("-", "-")
+        assert (go["p1"], go["p2"]) == ("-", "0.1") and go["keep"] == 2 and go["series_kind"] == "lobby"
     for conn in (host, guest):
         await conn.request({"type": "result", "match": go["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0})
     await host.expect("match_result", match=go["match"])

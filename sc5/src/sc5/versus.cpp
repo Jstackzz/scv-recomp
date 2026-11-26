@@ -88,8 +88,8 @@ REX_HOOK_RAW(sub_8244C6A8) {
     const std::vector<uint32_t> addresses = SetupAddresses();
     if (g_side == 0) {
       for (uint32_t s = 0; s < 2; s++) Put(rec + s * kSide + kRounds, uint32_t(g_wins.load()));
-      // the console's round time online, whatever player 1 set in VS Battle earlier in this game (the autopilot
-      // pressed VS Battle's Default on the way; this holds should that have been missed)
+      // the console's round time online, whatever player 1 set in VS Battle's settings earlier in this game (the
+      // settings stay as long as the game runs; a fresh save's game always had 60)
       if (Get(rec + kRoundTime) != 60) {
         REXLOG_WARN("sc5 versus: round time {} in player 1's VS settings: 60 online", Get(rec + kRoundTime));
         Put(rec + kRoundTime, 60);
@@ -136,8 +136,16 @@ REX_HOOK_RAW(sub_8244C838) {
   __imp__sub_8244C838(ctx, base);
   static const bool test_human = [] { const char* v = std::getenv("SC5_TEST_P2_HUMAN"); return v && v[0] == '1'; }();
   if (!sc5::versus::g_online && !sc5::net::Active() && !test_human) return;
-  constexpr uint32_t kP2 = 0x829A8740;
+  constexpr uint32_t kP1 = 0x8294AC10, kP2 = 0x829A8740;
   sc5::versus::Put(kP2 + 628, 1);  // the input: a pad
   sc5::versus::Put(kP2 + 432, 1);  // which: the second
+  // and player 1 the first pad's, should VS Battle's Player setting (set earlier in this game, and kept while it runs)
+  // have made it the CPU
+  if (sc5::versus::Get(kP1 + 628) != 1 || sc5::versus::Get(kP1 + 432) != 0) {
+    REXLOG_WARN("sc5 versus: player 1 was input {} pad {}: the first pad's", sc5::versus::Get(kP1 + 628),
+                sc5::versus::Get(kP1 + 432));
+    sc5::versus::Put(kP1 + 628, 1);
+    sc5::versus::Put(kP1 + 432, 0);
+  }
   REXLOG_INFO("sc5 versus: player 2 is the second pad's");
 }

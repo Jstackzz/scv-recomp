@@ -47,8 +47,10 @@ async def draw(c1, c2, match, fighters=(None, None)):
     return await c1.expect("series"), await c2.expect("series")
 
 
-async def next_match(server, sides, series_id, choices=(None, None)):
-    """Both choose the next match (a rematch unless a choice is given, by side); returns both match_go by side."""
+async def next_match(server, sides, series_id, choices=("select", "select")):
+    """Both choose the next match (CHARACTER SELECT, the loser's usual choice on the game's result screen, unless
+    others are given, by side; None: the message without a choice, which is a rematch); returns both match_go by
+    side."""
     (c1, u1), (c2, u2) = sides[1], sides[2]
     for c, choice in zip((c1, c2), choices):
         msg = {"type": "series_ready", "series": series_id, "ready": True}
@@ -214,12 +216,13 @@ async def test_versus_rematch_keeps_the_fighters_and_select_picks_again(server, 
     gos2 = await next_match(server, sides, s1["series"], choices=("rematch", "rematch"))
     assert (gos2[1]["p1"], gos2[1]["p2"]) == ("12", "7") and (gos2[2]["p1"], gos2[2]["p2"]) == ("12", "7")
     s1, _ = await play(c1, c2, gos2[1]["match"], 2, fighters=(("3", "4"), ("3", "4")))
-    # one wants character select: the other sees it, and both pick again
+    # one wants character select: the other sees it, and the loser picks again while the winner (player 2, with
+    # fighter 4) keeps theirs (SCV 0.1.8)
     await c2.request({"type": "series_ready", "series": s1["series"], "ready": True, "choice": "select"})
     waiting = await c1.expect("series", state="between", them_ready=True)
     assert waiting["them_choice"] == "select" and waiting["you_choice"] == ""
     gos3 = await next_match(server, sides, s1["series"], choices=("rematch", None))
-    assert (gos3[1]["p1"], gos3[1]["p2"]) == ("-", "-")
+    assert (gos3[1]["p1"], gos3[1]["p2"]) == ("-", "4") and gos3[1]["keep"] == 2 and gos3[2]["keep"] == 2
     # the games did not agree on the fighters: a rematch picks again too
     s1, _ = await play(c1, c2, gos3[1]["match"], 1, fighters=(("3", "4"), ("3", "5")))
     assert s1["same_fighters"] is False
@@ -303,8 +306,9 @@ async def test_ranked_winner_keeps_their_created_character(server, connect, udp_
 
 
 async def test_a_draw_in_a_set_is_nobodys_point(server, connect, udp_peers):
-    # a drawn match counts for neither player: the set's next match goes as the drawn one did (the last winner keeping
-    # their fighter), and draws never end a set as matches that did not count do
+    # a drawn match counts for neither player, and draws never end a set as matches that did not count do; player 1
+    # chooses the next match on the result screen as a loser would (SCV 0.1.8), so through CHARACTER SELECT player 2
+    # keeps the fighter of the draw and player 1 picks again
     sides, gos = await first_match(server, connect, udp_peers, ["Sophitia", "Cassandra"], ranked=True)
     (c1, _), (c2, _) = sides[1], sides[2]
     p1 = gos[1]["p1_name"]
@@ -314,9 +318,9 @@ async def test_a_draw_in_a_set_is_nobodys_point(server, connect, udp_peers):
     for n in range(server.cfg.series_max_no_contest + 1):
         s1, s2 = await draw(c1, c2, match, fighters=(("3", "21.1"), ("3", "21.1")))
         assert s1["state"] == "between" and (s1["you"], s1["them"], s2["you"], s2["them"]) == (1, 0, 0, 1)
-        assert s1["keeps"] == p1 and s1["played"] == n + 2
+        assert s1["keeps"] == gos[1]["p2_name"] and s1["played"] == n + 2
         gos2 = await next_match(server, sides, s1["series"])
-        assert (gos2[1]["p1"], gos2[1]["p2"]) == ("3", "-")
+        assert (gos2[1]["p1"], gos2[1]["p2"]) == ("-", "21.1") and gos2[1]["keep"] == 2
         match = gos2[1]["match"]
     s1, _ = await play(c1, c2, match, 1, fighters=(("3", "21.1"), ("3", "21.1")))
     assert s1["state"] == "between" and (s1["you"], s1["them"]) == (2, 0)
@@ -503,3 +507,39 @@ async def test_casual_rematches_go_on_through_matches_that_do_not_count(server, 
         c2.take_all("series")
         gos = await next_match(server, sides, between["series"])
     assert between["played"] == server.cfg.series_max_no_contest + 1
+
+
+async def test_the_losers_choice_in_a_ranked_set(server, connect, udp_peers):
+    """SCV 0.1.8: the loser of each match chooses on the game's result screen, and both launchers send that choice.
+    match_go says what the game shows: the run's kind, a set's wins to take it and each side's wins before the match,
+    and the side whose fighter is kept. REMATCH plays the same two fighters again in a ranked set too; CHARACTER
+    SELECT keeps the winner's; LEAVE (the loser's launcher: series_ready false) loses the set."""
+    sides, gos = await first_match(server, connect, udp_peers, ["Hilde", "Natsu"], ranked=True, character="")
+    (c1, _), (c2, _) = sides[1], sides[2]
+    for side in (1, 2):
+        assert (gos[side]["series_kind"], gos[side]["set"], gos[side]["set_p1"], gos[side]["set_p2"],
+                gos[side]["keep"]) == ("ranked", 3, 0, 0, 0)
+    s1, _ = await play(c1, c2, gos[1]["match"], 1, fighters=(("3", "4"), ("3", "4")))
+    gos2 = await next_match(server, sides, s1["series"], choices=("rematch", "rematch"))
+    assert (gos2[1]["p1"], gos2[1]["p2"], gos2[1]["keep"]) == ("3", "4", 0)
+    assert (gos2[1]["set_p1"], gos2[1]["set_p2"]) == (1, 0)
+    s1, _ = await play(c1, c2, gos2[1]["match"], 1, fighters=(("3", "4"), ("3", "4")))
+    gos3 = await next_match(server, sides, s1["series"])
+    assert (gos3[2]["p1"], gos3[2]["p2"], gos3[2]["keep"]) == ("3", "-", 1)
+    assert (gos3[2]["set_p1"], gos3[2]["set_p2"]) == (2, 0)
+    s1, s2 = await play(c1, c2, gos3[1]["match"], 2, fighters=(("3", "7"), ("3", "7")))
+    # player 1 lost and chose LEAVE: their launcher leaves the set, which they lose 1-2 whatever its score
+    await c1.request({"type": "series_ready", "series": s1["series"], "ready": False})
+    over = await c2.expect("series", state="over")
+    assert over["outcome"] == "forfeit" and over["winner"] == gos[1]["p2_name"] and over["left"] == gos[1]["p1_name"]
+
+
+async def test_the_queue_match_offers_the_losers_choice(server, connect, udp_peers):
+    sides, gos = await first_match(server, connect, udp_peers, ["Leixia", "Xiba"], ranked=False, character="")
+    assert gos[1]["series_kind"] == "casual" and gos[1]["set"] == 0
+    (c1, _), (c2, _) = sides[1], sides[2]
+    s1, _ = await play(c1, c2, gos[1]["match"], 2, fighters=(("21.0", "22.1"), ("21.0", "22.1")))
+    assert s1["keeps"] == gos[1]["p2_name"]  # casual too: the winner keeps their fighter through CHARACTER SELECT
+    gos2 = await next_match(server, sides, s1["series"])
+    assert (gos2[1]["p1"], gos2[1]["p2"], gos2[1]["keep"]) == ("-", "22.1", 2)
+    assert (gos2[1]["set_p1"], gos2[1]["set_p2"]) == (0, 1)

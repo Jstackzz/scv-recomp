@@ -1226,11 +1226,21 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         const bool wasReady = str(series_, "state") == QLatin1String("between") &&
                               (series_.value(QStringLiteral("you_ready")).toBool() || wantNext_);
         series_ = msg;
-        // a ranked set goes on by itself: its next match from the result screen (or once the game is back at its hold
-        // point), where only the last match's loser picks again
-        if (state == QLatin1String("between") && msg.value(QStringLiteral("ranked")).toBool() &&
-            !msg.value(QStringLiteral("you_ready")).toBool())
+        // The next match of a set or series is the loser's choice on the game's result screen (SCV 0.1.8: `chose`,
+        // onGameStatus). Where the game offers none (a match through the relay or the tunnel, one that did not count,
+        // a game no longer at its result screen) the series goes on by itself the usual way: CHARACTER SELECT, the
+        // last winner keeping their fighter and the loser picking again
+        if (state == QLatin1String("between") && !msg.value(QStringLiteral("you_ready")).toBool() && !awaitChoice_ &&
+            !wantNext_) {
             wantNext_ = true;
+            nextChoice_ = QStringLiteral("select");
+        }
+        // the loser chose LEAVE before the series' "between" came (sent now)
+        if (state == QLatin1String("between") && leaveSeries_) {
+            leaveSeries_ = false;
+            wantNext_ = false;
+            seriesReady(false);
+        }
         if (phase_ == Phase::AtResult) {
             if (state == QLatin1String("between")) atResultTimer_.stop();
             else if (state == QLatin1String("over")) finishMatch();  // no next match: the game leaves its result screen
@@ -1509,8 +1519,26 @@ QString MatchController::startLine(const QJsonObject& go) const {
     };
     QString line = tokens.join(QLatin1Char(' '));
     if (resultChoice()) line += QStringLiteral(" choose=1");  // the loser chooses the next match on the result screen
+    line += seriesKeys(go);
     if (feed_) line += QStringLiteral(" feed=") + feed_->endpoint();
     return line;
+}
+
+// What match_go says of the run of matches the match belongs to (SCV 0.1.8), for the game's result and select screens:
+// series=ranked|casual|lobby, a ranked set's set=N and each side's wins before the match, keep=1|2 the side whose
+// fighter the last winner keeps
+QString MatchController::seriesKeys(const QJsonObject& go) {
+    QString keys;
+    const QString kind = str(go, "series_kind");
+    if (!kind.isEmpty()) keys += QStringLiteral(" series=") + kind;
+    if (go.contains(QStringLiteral("set_p1")))
+        keys += QStringLiteral(" set=%1 set_p1=%2 set_p2=%3")
+                    .arg(go.value(QStringLiteral("set")).toInt())
+                    .arg(go.value(QStringLiteral("set_p1")).toInt())
+                    .arg(go.value(QStringLiteral("set_p2")).toInt());
+    const int keep = go.value(QStringLiteral("keep")).toInt();
+    if (keep == 1 || keep == 2) keys += QStringLiteral(" keep=%1").arg(keep);
+    return keys;
 }
 
 // The series' next match from the last one's result screen (docs/PROTOCOL.md 3.3, rematch): its id and seed, the picks
@@ -1523,9 +1551,13 @@ QString MatchController::rematchLine(const QJsonObject& go) const {
                        .arg(str(go, "match"))
                        .arg(go.value(QStringLiteral("seed")).toInteger())
                        .arg(p1, p2);
-    if (!go.value(QStringLiteral("ranked")).toBool() && p1 != QLatin1String("-") && p2 != QLatin1String("-"))
+    // both fighters named and neither kept through CHARACTER SELECT: the loser's REMATCH, VS Battle's own (a ranked
+    // set's too from SCV 0.1.8)
+    const int keep = go.value(QStringLiteral("keep")).toInt();
+    if (p1 != QLatin1String("-") && p2 != QLatin1String("-") && keep != 1 && keep != 2)
         line += QStringLiteral(" stage=keep");
     if (resultChoice()) line += QStringLiteral(" choose=1");
+    line += seriesKeys(go);
     return line;
 }
 
@@ -1615,7 +1647,9 @@ void MatchController::onGameStatus(const QString& line) {
     } else if (st == QLatin1String("chose") && forThisMatch && !go_.isEmpty()) {
         // (before the server's match_result put this launcher at the result screen too: taken then, afterResult)
         const QString choice = keys.value(QStringLiteral("choice"));
-        if (choice == QLatin1String("rematch") || choice == QLatin1String("select")) pendingChoice_ = choice;
+        if (choice == QLatin1String("rematch") || choice == QLatin1String("select") || choice == QLatin1String("leave"))
+            pendingChoice_ = choice;
+        pendingChooser_ = keys.value(QStringLiteral("chooser")).toInt();
         if (phase_ == Phase::AtResult) readyInPlace(pendingChoice_);
     } else if (st == QLatin1String("sparring_over") && inOnline && forThisMatch) {
         // Online Practice: a player went back to the select screen (BACK); the lobby's next match brings both there
@@ -1765,7 +1799,7 @@ void MatchController::afterResult(const QJsonObject& result) {
     // a versus lobby's match its games played straight: they stay at their result screens, where the match's loser
     // chooses REMATCH or CHARACTER SELECT on the game's own menu with their own controller (the start line's
     // choose=1) and both games say what they chose (status `chose`): both launchers ready in place with it
-    const bool choice = !str(found_, "lobby").isEmpty() && resultChoice();
+    const bool choice = resultChoice();
     if ((status == QLatin1String("agreed") || status == QLatin1String("draw")) &&
         (str(found_, "lobby").isEmpty() || choice) && straightRoute() && game_ && game_->isRunning() &&
         !game_->isReady() && watch_.isEmpty()) {
@@ -1775,9 +1809,10 @@ void MatchController::afterResult(const QJsonObject& result) {
         finishText_.clear();
         inPlace_ = false;
         lobbyChoice_ = choice;
-        // the series' "between" comes right after the result; the loser has a minute to choose, then the game parks
+        awaitChoice_ = choice;
+        // the series' "between" comes right after the result; the loser has 40 s to choose (then the game says LEAVE)
         atResultTimer_.start(choice ? kChoiceMs + 15000 : 8000);
-        setPhase(Phase::AtResult, choice ? tr("Match over: the loser chooses REMATCH or CHARACTER SELECT in the game")
+        setPhase(Phase::AtResult, choice ? tr("Match over: the loser chooses REMATCH, CHARACTER SELECT or LEAVE in the game")
                                          : tr("Match over: your game waits at its result screen"));
         if (choice && !pendingChoice_.isEmpty()) readyInPlace(pendingChoice_);
         return;
@@ -1790,18 +1825,46 @@ bool MatchController::straightRoute() const {
     return (lastVia_ == QLatin1String("lan") || lastVia_ == QLatin1String("public")) && !tunnel_;
 }
 
-// the lobby's match ends at the result screens with its loser's choice of the next one (match_found's result_choice:
-// a versus lobby, not King of the Hill), its games reached straight
+// the match ends at the result screens with its loser's choice of the next one (match_found's result_choice: a versus
+// lobby but King of the Hill, and from SCV 0.1.8 every versus queue match and its series' next ones), its games
+// reached straight
 bool MatchController::resultChoice() const {
     return found_.value(QStringLiteral("result_choice")).toBool() && straightRoute();
 }
 
-// the game says what the match's loser chose on its result screen (`chose choice=rematch|select`): this launcher
-// readies for the lobby's next match from there, as the other's does with the same choice
+// The game says what the match's loser chose on its result screen (`chose choice=rematch|select|leave chooser=N`):
+// REMATCH or CHARACTER SELECT, this launcher readies for the next match from there (a lobby's, or the series' or set's)
+// as the other's does with the same choice; LEAVE parks both games: a lobby's players stay in their lobby, a series
+// ends, left by the loser (whose launcher alone says so: a ranked set left after a match counted is theirs lost)
 void MatchController::readyInPlace(QString choice) {  // by value: it is often pendingChoice_, cleared below
     if (phase_ != Phase::AtResult || !lobbyChoice_ || choice.isEmpty() || !server_->isLoggedIn()) return;
+    const int chooser = pendingChooser_;
     pendingChoice_.clear();
     lobbyChoice_ = false;
+    awaitChoice_ = false;
+    const bool lobby = !str(found_, "lobby").isEmpty();
+    if (choice == QLatin1String("leave")) {
+        const bool mine = chooser == go_.value(QStringLiteral("side")).toInt();
+        log(mine ? tr("You chose LEAVE on the result screen") : tr("%1 chose LEAVE on the result screen").arg(opponentName()));
+        if (!lobby && mine) {
+            if (!series_.isEmpty() && str(series_, "state") == QLatin1String("between")) {
+                wantNext_ = false;
+                seriesReady(false);
+            } else {
+                leaveSeries_ = true;  // sent with the series' "between"
+            }
+        }
+        finishMatch();
+        return;
+    }
+    if (!lobby) {
+        // a set's or series' next match from the result screen: series_ready in place with the loser's choice
+        seriesReady(true, choice);
+        setPhase(Phase::AtResult, choice == QLatin1String("select")
+                                      ? tr("Character Select chosen: the next match starts from the result screen")
+                                      : tr("Rematch chosen: the next match starts from the result screen"));
+        return;
+    }
     atResultTimer_.start(30000);  // the next match comes at once once both are ready
     QJsonObject ready{{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), true},
                       {QStringLiteral("relay"), cfg::hideIp()},
@@ -1822,6 +1885,7 @@ void MatchController::finishMatch() {
     atResultTimer_.stop();
     inPlace_ = false;
     lobbyChoice_ = false;
+    awaitChoice_ = false;
     pendingChoice_.clear();
     go_ = {};
     found_ = {};

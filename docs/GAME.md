@@ -72,7 +72,8 @@ main menu (`ready`) in 41 s.
 | `display.cpp` | the launcher's display and sound settings at the start and from `SC5_DISPLAY_FILE` as it changes |
 | `framemeter.cpp` | frame data in practice: a frame meter as Street Fighter 6's over Training and Online Practice (below) |
 | `mirror.cpp` | a player's preferred side: the fight shown mirrored on this PC, the player's left and right and the sound's swapped with it (below, "A player's preferred side") |
-| `result_overlay.cpp` | the panel over a lobby match's result screen where its loser chooses the next match (below, "The loser's choice") |
+| `result_overlay.cpp` | the panel over a match's result screen where its loser chooses the next match, and over the select screen the fighter its winner keeps (below, "The loser's choice") |
+| `ownsave.cpp` | an online session with the player's own save: the save kept out of the match and put back after it, the game's saves meanwhile writing it as it was (below, "The player's own save online") |
 | `rerun_profile.cpp` | tests (`SC5_TEST_RERUN_PROFILE`): the game's tasks timed one by one in frames run again (below, "Netplay") |
 | `select.cpp` | the character select screen: cursors, picks, the 32 slots and their characters |
 | `creation.cpp` | created characters online: the player's own brought into the online game's save, this PC's tables read, the other PC's record checked and placed with SCV Online's own VS card (below, "Created characters online") |
@@ -1460,20 +1461,30 @@ select came up (a press before it takes them was lost in one game and not the ot
 autopilot goes RIGHT 1 + seed % 27 times from Random, A. `SC5_TEST_STAGE=<place>|random` stands in for the chooser
 in tests (a press every half second).
 
-**The loser's choice** (autopilot.cpp `OnResultChoice`, result_overlay.cpp; 0.1.4). After a lobby's match
-(`choose=1`) both games stay at their result screens. Once the Results screen is up (12 s after the match's end), the
-match's loser (player 1 after a draw: both games know the rounds) chooses REMATCH or CHARACTER SELECT with their own
-controller: UP and DOWN (the stick too) move the choice, A takes it, on a panel the game draws over the Results
-screen with the SDK's ImGui drawer, large and high-contrast (the frame meter's bold font, its lines a 22nd of the
-window's height), which both players see with the loser's cursor on it.
-The other game follows the cursor and the choice (CHOICE packets for the coming match, repeated). Both games write
-`chose` and wait for the launcher's `rematch`, which takes them through the game's own menu as before: Next, the menu
-150 frames later, DOWN for Character Select, A. The game's menu itself is not opened for the choice: with it open for
-as long as the choice took, which the two games count a frame or two apart, a player's animation went on in one game
-and not the other, and the rematch parted at its first check (2026-11-20: one game's snapshot had a block of player
-2's object, +0x1C360, the other's had not; the same two games with the menu pressed on the same frames stayed in
-step, as 0.1.3's rematches did). No choice in a minute: the launcher parks the game (Return to Astral Home).
-`SC5_TEST_RESULT_CHOICE=rematch|select,...` stands in for the loser, one choice per match.
+**The loser's choice** (autopilot.cpp `OnResultChoice`, result_overlay.cpp; 0.1.4, every match from 0.1.8). After a
+match whose start line says `choose=1` (a ranked set's, a casual series', a versus lobby's: docs\PROTOCOL.md 3.3) both
+games stay at their result screens. Once the Results screen is up (12 s after the match's end), the match's loser
+(player 1 after a draw: both games know the rounds) chooses REMATCH, CHARACTER SELECT or LEAVE with their own
+controller: UP and DOWN (the stick too) move the choice, A takes it, on a panel the game draws over the Results screen
+with the SDK's ImGui drawer, large and high-contrast (the frame meter's bold font, its lines a 22nd of the window's
+height), which both players see with the loser's cursor on it, what the item under it does ("Player 2 keeps Siegfried;
+player 1 picks again"), the series' score (`series`, `set_p1`, `set_p2` of the start line plus this match) and the
+seconds left. 40 s without a choice is LEAVE. A match that wins a ranked set (`set`) offers no choice: the panel says
+who won the set. The other game follows the cursor and the choice (CHOICE packets for the coming match, repeated; the
+netplay passes the cursor's 0, 1 or 2 as it is). Both games write `chose choice=... chooser=N` and wait for the
+launcher's `rematch` (REMATCH, CHARACTER SELECT) or `park` (LEAVE), which takes them through the game's own menu as
+before: Next, the menu 150 frames later, DOWN for Character Select, A. The game's menu itself is not opened for the
+choice: with it open for as long as the choice took, which the two games count a frame or two apart, a player's
+animation went on in one game and not the other, and the rematch parted at its first check (2026-11-20: one game's
+snapshot had a block of player 2's object, +0x1C360, the other's had not; the same two games with the menu pressed on
+the same frames stayed in step, as 0.1.3's rematches did). Through CHARACTER SELECT the next line names the winner's
+fighter and `keep=`, so the autopilot picks it on both PCs whatever the winner presses (their pad is not let through
+for a named side), the loser picks on their own PC, and a panel on the winner's side of the select screen says
+"PLAYER 1 WINNER / KEEPS Siegfried / LOCKED" (KeepDialog). `SC5_TEST_RESULT_CHOICE=rematch|select|leave|wait,...`
+stands in for the loser, one choice per match (wait: none, the time runs out). Two games with saves that differ
+(tools\linktest.py `--save1 --save2 --choose select,rematch,leave --series casual`, 40 ms each way, 2026-11-26):
+player 2 lost and chose CHARACTER SELECT (player 1 kept Siegfried, player 2 picked Xiba), then REMATCH (the game's
+own Rematch), then LEAVE, both games in step to every result.
 
 **The battle setup** (versus.cpp, sub_8244C6A8 copying the VS settings record into the battle setup; the record:
 per side 88 bytes: +0 1 a player / 2 the CPU, +4 the input, +8 the rounds to win (Battle Count), +12 and +16 health
@@ -1561,27 +1572,29 @@ the players', its 221 checks agreed with theirs, the same result line, also with
 **The match's stats**: `stats-<match>.json` in the session folder every 10 s and at the match's end (docs\PROTOCOL.md
 3.4), from net::MatchStatsJson.
 
-**Controls in a fight** (controls.cpp, 0.1.4). The battle's input task (sub_8213E538) turns each player's pad into the
-game's buttons, A 0x1 (horizontal attack), B 0x2 (vertical), K 0x4 (kick), G 0x8 (guard), through sub_82172068(pad,
-bits): the d-pad and START let through (0xBC00 of the pad manager's bits, 0x82784B80 + 128 a pad: +0 held, +4 newly
-pressed), and for each of eight buttons pressed (their bits in the table at 0x8276FC1C: LT 0x2, LB 0x4, RT 0x10, B 0x20,
-A 0x40, RB 0x80, Y 0x100, X 0x200) the combination its option says: the pad's layout at 0x82911094 + 12 a pad, eight
-option indices into the table at 0x82768E44 (0 nothing, A, B, K, G, A+G, B+G, A+B, K+G, A+K, B+K, A+B+K, A+B+K+G: 13 of
-the 16; A+B+G, A+K+G and B+K+G cannot be set). The layout comes from the save's Control Settings (0x82925630: 60 bytes
-a pad, four 15-byte records, byte 12 the type chosen; a record's first 8 bytes in the menu's order A B X Y LB LT RB RT,
-which sub_8213E538 copies in the table's order when the type changes): a fresh save has Type A, A G, B K, X A, Y B, LB
-A+G, LT B+G, RB A+B, RT A+B+K. The stick clicks (0x1, 0x8) press nothing. The launcher's `[fight]` (PROTOCOL.md 3.1)
-sets any combination on any of those buttons and the stick clicks. Online the netplay turns the player's own pad into
-Type A's face buttons before it sends it (`controls::ToDefaultLayout`): every button `[fight]` sets presses the face
-buttons of its combination and nothing of its own, which both games' Type A (an online game's save is fresh) turn into
-that combination, and the spectators see the same. Equivalent to the game's own shortcut: the battle ORs the buttons
-pressed and takes newly pressed ones from the change of that set, so a shortcut and its buttons at once come out the
-same. Offline the hook of sub_82172068 takes player 1's pad (pad 0, the first controller and the keyboard; the
-netplay not active): the bits of the buttons `[fight]` sets go out of what the game converts, their combinations in.
-Only the battle's conversion sees any of it: the menus read the pads as they are. `SC5_DBG_FIGHT=1` logs the game's
-buttons each pad newly pressed. Checked 2026-11-20: offline Training (LB A+B+K+G, LS K, X B, RT nothing; Y and RB the
-game's own), and two games with 40 ms each way, player 1's LB K+G, LS A+B+K+G, X B: both games saw those presses on
-the same frames, in sync to the result.
+**Controls in a fight** (controls.cpp, 0.1.4; the game's own settings from 0.1.8). The battle's input task
+(sub_8213E538) turns each player's pad into the game's buttons, A 0x1 (horizontal attack), B 0x2 (vertical), K 0x4
+(kick), G 0x8 (guard), through sub_82172068(pad, bits): the d-pad and START let through (0xBC00 of the pad manager's
+bits, 0x82784B80 + 128 a pad: +0 held, +4 newly pressed), and for each of eight buttons pressed (their bits in the table
+at 0x8276FC1C: LT 0x2, LB 0x4, RT 0x10, B 0x20, A 0x40, RB 0x80, Y 0x100, X 0x200) the combination its option says: the
+pad's layout at 0x82911094 + 12 a pad, eight option indices into the table at 0x82768E44 (0 nothing, A, B, K, G, A+G,
+B+G, A+B, K+G, A+K, B+K, A+B+K, A+B+K+G: 13 of the 16; A+B+G, A+K+G and B+K+G cannot be set). The layout is the
+Options' Control Settings: their live copy at 0x82925630 (60 bytes a pad: four 15-byte records, the types A, B, C and
+the player's own, each the option of A B X Y LB LT RB RT in the menu's order; byte 12 of each the type chosen), which
+sub_8213E538 copies in the table's order, and the save image's +0x90 for a save (sub_8246C258). Type A: A G, B K, X A, Y
+B, LB A+G, LT B+G, RB A+B, RT A+B+K. The stick clicks (0x1, 0x8) press nothing.
+Online (from 0.1.8, with the player's own save) each player's settings apply to their own inputs on their own PC and
+nowhere else: the netplay turns the player's own pad into Type A's face buttons by their own settings (pad 0's, their
+controller and keyboard) before it sends it (`controls::ToDefaultLayout`: each of the eight pressed presses the face
+buttons of its combination, X for A, Y for B, B for K, A for G, and nothing of its own), and the hook of sub_82172068
+converts every pad with Type A in a match (net::Active, a spectator's too) by putting Type A in the pad's layout for
+that call only. So both games, and the spectators, see the combinations each player meant whatever either save says.
+Equivalent to the game's own shortcut: the battle ORs the buttons pressed and takes newly pressed ones from the change
+of that set, so a shortcut and its buttons at once come out the same. Offline the game converts every pad with its own
+settings. Until 0.1.7 the online games had fresh saves (Type A) and the launcher's `[fight]` did the player's part.
+`SC5_DBG_FIGHT=1` logs the game's buttons each pad newly pressed. Checked 2026-11-26 (tools\linktest.py, player 1's
+save on Type B, player 2's on Type C for its own pad, player 1's controller a script, `SC5_TEST_DEVICE_P1`, 40 ms each
+way): player 1's B, X, Y and A pressed A, B, K and G in both games (Type B's), never Type C's.
 
 **Controls and display** (controls.cpp, display.cpp; docs\PROTOCOL.md 3.1): the keyboard and the controllers' button
 map from `controls.toml`, the controllers assigned to players by the SDK's DeviceAssignment interface (player 2's by
@@ -1606,6 +1619,50 @@ ids the first time the game asks about one (the select screen asks about Dampier
 (mk9/net/rollback.cpp: every page the simulation writes kept in an undo log, the heap's allocator with it) would also
 put back the cosmetic objects above; nothing in the fight needs it so far.
 
+
+## The player's own save online (ownsave.cpp, creation.cpp, controls.cpp, versus.cpp)
+
+From 0.1.8 the launcher's one game plays everything with the player's own save (docs\PROTOCOL.md 3.8), where until
+0.1.7 every online game started from an empty save in its session folder, so that both games of a match were alike and
+the player's own save was never touched. What a save carries, and what reaches a fight:
+
+- **The save image** is live: the save object ([0x8274EF10], 0x82A2D970) keeps savedata.bin's 0x22C200 bytes from +0x48
+  and the game writes its records there as it goes (hardware write watches on the bytes one online match changed in
+  the player's file, 2026-11-26): the play time in seconds at +0x180 (sub_8246D668, every second), VS Battle's time at
+  +0x51CC (sub_82164650), a match's counts at its end (+0x4CC from the battle's state machine, sub_82332108; +0x554 at
+  its result, sub_82166EC0), the flag at +0x22C1F8 that a save is due. The game saved them on its way back to the main
+  menu after the match (sub_8249FD78 or sub_824A0990 open savedata.bin and replay.bin with CREATE_ALWAYS and write each
+  whole through sub_824D83A8). Online (ownsave.cpp) the session keeps the image and the release table after it as it
+  found them, puts them back at the hold point, and a save meanwhile writes the kept image (the write's buffer swapped
+  for a guest copy of it): an online match writes nothing to the save. Its records are the server's.
+- **The options**: a table of 92-byte objects at 0x827551E8 (each one's value at +8: brightness, subtitles, Battle
+  Messages, Custom Effects, then the sound's), copied into the image's +0x18 for a save (sub_8246C258, with the live
+  Control Settings into +0x90). Brightness, subtitles and the sound only change what is drawn and heard; Battle
+  Messages and Custom Effects put things on the fight's screen, so they are held at their defaults (0) for the session
+  in both games and given back after. The Options' Stage Music Settings choose the music.
+- **Control Settings**: what a button does, each player's own on their own PC (above, "Controls in a fight").
+- **VS Battle's settings** (Player, Battle Count, Round Time, CPU Strength) are not in the save, but stay as the player
+  left them for as long as the game runs: the battle setup (versus.cpp) takes the rounds from the start line, makes
+  the round time 60 in player 1's game (player 2's takes player 1's) and both sides pads' (a "CPU VS Player" left from
+  earlier would have made player 1 the CPU). VS Battle's own Default asks "Return to default settings?", which took no
+  press of the autopilot's in a test, so it is not used.
+- **Unlocks**: everything on the disc answers released online whatever the save has earned, and whatever
+  `SC5_UNLOCK_ALL` says (unlocks.cpp): both games list and load the same characters, stages and parts. The paid
+  downloadable content stays each PC's own (Dampierre only when both have him, created characters' parts weighed
+  against the other PC as before).
+- **Created characters** are the save's own (creation.cpp `BeginOnline`): at each session's start the game looks at the
+  slots as they are (one made in Creation a minute ago too), leaves out of the lists for the session each one whose
+  form is wrong and any in slots 49 and 50 (the other player's online; said over the select screen), and checks the
+  rest against this PC's tables at the session's first select screen (DropRefused); the image is put back after.
+  `SC5_CREATION_SAVE` is read only when it is not the game's own save (a fresh save's game, tools\linktest.py).
+- The rest of the save (the player's level and records shown on the main menu's panel, titles, Story's progress,
+  replays) is read by no fight.
+
+Tests: tools\linktest.py `--save1 <user folder> --save2 <user folder>` gives each game its own copy of a save and says
+afterwards which bytes of each file changed. Two saves made to differ (pad 0 on Type B against Type C, pad 1 the
+other way, every display option changed, the sound levels, the play time), 40 ms each way, three matches with the
+loser's choices (CHARACTER SELECT, REMATCH, LEAVE; 2026-11-26): every check alike, the same results in both games, and
+both files unchanged afterwards.
 
 ## From title update 1 to title update 3
 

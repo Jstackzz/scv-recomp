@@ -10,8 +10,8 @@
 //     match's counts at its result, the player's level, the unlocks it records), and an online session changes some
 //     of the image for its own ends (the other player's created characters in slots 49 and 50, the player's own that
 //     cannot be picked taken out of the lists);
-//   - the game's own save writes are answered as done without writing anything (sub_824A0990, the save task's write
-//     of savedata.bin and replay.bin): nothing of the session reaches the player's files;
+//   - a save the game makes meanwhile (it saves on its way back to the main menu after a match) writes savedata.bin
+//     as the session found it, not as the session left it: nothing of the session reaches the player's files;
 //   - the two display options that could reach the fight (Battle Messages and Custom Effects: the game's options table,
 //     ownsave.cpp) are at the console's defaults in both games, whatever each player chose (put back at the end).
 // So an online match writes nothing to the player's save. Their buttons (Options, Control Settings) are not pinned:

@@ -130,7 +130,7 @@ class ServerConfig:
     set_wins: int = 3            # a ranked set goes to the first to win this many matches (2 before 0.1.21)
     # casual: both choose a rematch within this, or the series ends; it starts with the result, and the launcher asks
     # once the game has played the match's end (the knockout, the winner's pose: up to 30 s)
-    rematch_timeout: float = 60.0
+    rematch_timeout: float = 75.0  # 60 until SCV 0.1.8: the loser's choice in the game takes up to 52 s
     set_next_timeout: float = 90.0  # ranked: both games ready for the set's next match within this, or the one
                                     # that is not loses the set (the last match's ending plays first)
     set_rejoin_grace: float = 20.0  # a player whose launcher drops between two matches has this long to be back
@@ -300,6 +300,11 @@ class Match:
     direct_tried: bool = False
     series: Series | None = None
     death_traps: bool = True
+    # a series' or a lobby's next match after its loser chose CHARACTER SELECT: the side whose fighter the last match's
+    # winner keeps (0 none), which match_go says so that the game shows it locked; and each side's wins in the series
+    # before this match (a ranked set's, a casual series'), which the game's result screen shows
+    keep: int = 0
+    set_wins: tuple[int, int] = (0, 0)
 
     def player_for(self, account_id: int | None) -> MatchPlayer | None:
         for p in self.players:
@@ -444,6 +449,7 @@ class Lobby:
     last_picks: tuple[str, str] | None = None
     last_pings: dict[int, dict[str, Any]] = field(default_factory=dict)
     last_rtt: int = 0
+    last_keeper: int = 0  # the side that keeps its fighter through CHARACTER SELECT (the last match's winner)
 
     @property
     def result_choice(self) -> bool:
@@ -1412,10 +1418,30 @@ class Server:
                 "type": "match_found", "match": m.id, "game": m.game, "mode": m.mode, "ranked": m.ranked,
                 "side": p.side, "accept_timeout": self.cfg.accept_timeout, "accept_required": True, "lobby": None,
                 "death_traps": m.death_traps, "opponent": None if m.ranked else self._opponent(m, m.other(p)),
-                "connection": self._connection(m, p),
+                "connection": self._connection(m, p), "result_choice": self._result_choice(m.mode),
             })
         log.info("match %s found: %s vs %s (%s/%s %s)", m.id, players[0].name, players[1].name, m.game, m.mode,
                  "ranked" if m.ranked else "casual")
+
+    @staticmethod
+    def _result_choice(mode: str) -> bool:
+        """A queue match and its series' next ones end with the loser's choice on the game's result screen (SCV
+        0.1.8, docs/PROTOCOL.md 1.9.1): the modes whose fighters are picked on the game's select screen."""
+        return mode in P.SELECT_SCREEN_MODES and mode not in P.LOBBY_ONLY_MODES
+
+    def _series_keys(self, m: Match) -> dict[str, Any]:
+        """What match_go says of the run of matches this one belongs to (the game's result and select screens show
+        it): its kind, a ranked set's wins to take it and each side's wins before this match, the side that keeps its
+        fighter."""
+        if m.lobby is not None:
+            kind, need = "lobby", 0
+        elif m.series is not None:
+            kind, need = ("ranked" if m.ranked else "casual"), m.series.need
+        elif m.from_queue:
+            kind, need = ("ranked" if m.ranked else "casual"), (self.cfg.set_wins if m.ranked else 0)
+        else:
+            kind, need = None, 0
+        return {"series_kind": kind, "set": need, "set_p1": m.set_wins[0], "set_p2": m.set_wins[1], "keep": m.keep}
 
     def _register_match(self, m: Match) -> None:
         assert self.db is not None
@@ -1745,6 +1771,7 @@ class Server:
                 "rounds": m.rounds, "p1": p1.character or "-", "p2": p2.character or "-",
                 "p1_name": p1.name, "p2_name": p2.name, "p1_title": titles[0], "p2_title": titles[1],
                 "lobby": m.lobby.id if m.lobby else None, "death_traps": m.death_traps, "feed": m.lobby is not None,
+                **self._series_keys(m),
             })
         if m.lobby is not None:
             self._start_feed(m)
@@ -1965,6 +1992,8 @@ class Server:
                 lobby.last_picks = r1.get("fighters") if same else None
                 lobby.last_pings = {p.account_id: dict(p.ping) for p in m.players if p.ping is not None}
                 lobby.last_rtt = m.rtt_ms
+                # CHARACTER SELECT next: the winner keeps their fighter (player 2 after a draw: player 1 chose)
+                lobby.last_keeper = winner if status == "agreed" and winner in (1, 2) else 2
         elif m.from_queue or m.series is not None:
             fighters = None
             if status in ("agreed", "draw") and r1.get("fighters") == r2.get("fighters"):
@@ -2056,10 +2085,14 @@ class Server:
             if sp is not None:
                 sp.wins += 1
             series.no_contests = 0
-            if series.ranked:  # the winner keeps the fighter they won with; a match that did not count changes nothing
-                series.winner_keeps = (sp, fighters[winner - 1]) if sp is not None and fighters else None
-        elif status == "draw":  # played to its end: nobody's point, and a set's next match goes as this one did
+            # the winner keeps the fighter they won with through CHARACTER SELECT (a ranked set's and, from SCV 0.1.8, a
+            # casual series'); a match that did not count changes nothing
+            series.winner_keeps = (sp, fighters[winner - 1]) if sp is not None and fighters else None
+        elif status == "draw":  # played to its end: nobody's point
             series.no_contests = 0
+            # player 1 chose the next match on the result screen (the loser's place after a draw): player 2 keeps
+            p2 = next((p for p in series.players if p.side == 2), None)
+            series.winner_keeps = (p2, fighters[1]) if p2 is not None and fighters else series.winner_keeps
         else:
             series.no_contests += 1
         champion = next((p for p in series.players if series.need and p.wins >= series.need), None)
@@ -2113,13 +2146,15 @@ class Server:
         they queued with when the last match's are not known); ranked: the queued ones."""
         p1, p2 = sorted(series.players, key=lambda p: p.side)
         if series.mode in P.SELECT_SCREEN_MODES:
-            if series.ranked:
-                if series.winner_keeps is not None:
-                    keeper, fighter = series.winner_keeps
-                    return (fighter, "") if keeper.side == 1 else ("", fighter)
-                return "", ""
+            # SCV 0.1.8, ranked and casual alike: the loser chose on the game's result screen. REMATCH: the same two
+            # fighters (on the same stage, the game's own Rematch, from the result screens); CHARACTER SELECT (or
+            # fighters the two results did not agree on, or a match that did not count): the last counted match's
+            # winner keeps theirs and its loser picks again
             if all(p.choice == "rematch" for p in series.players) and series.last_picks:
                 return series.last_picks
+            if series.winner_keeps is not None:
+                keeper, fighter = series.winner_keeps
+                return (fighter, "") if keeper.side == 1 else ("", fighter)
             return "", ""
         if series.ranked:
             return p1.character, p2.character
@@ -2140,9 +2175,14 @@ class Server:
              for p, sess in zip(series.players, sessions)),
             key=lambda mp: mp.side,
         )
+        keep = 0
+        if series.mode in P.SELECT_SCREEN_MODES and series.winner_keeps is not None and bool(picks[0]) != bool(picks[1]):
+            keep = 1 if picks[0] else 2
+        wins = {p.side: p.wins for p in series.players}
         m = Match(id=secrets.token_hex(6), game=series.game, mode=series.mode, ranked=series.ranked, players=players,
                   created=now, from_queue=False, series=series, rounds=self.cfg.default_rounds, state="accepted",
-                  deadline=now + self.cfg.udp_timeout, death_traps=series.death_traps)
+                  deadline=now + self.cfg.udp_timeout, death_traps=series.death_traps, keep=keep,
+                  set_wins=(wins.get(1, 0), wins.get(2, 0)))
         series.state = "playing"
         series.match = m
         self._register_match(m)
@@ -2155,6 +2195,7 @@ class Server:
                 "type": "match_found", "match": m.id, "game": m.game, "mode": m.mode, "ranked": m.ranked,
                 "side": p.side, "accept_timeout": 0, "accept_required": False, "lobby": None, "series": series.id,
                 "death_traps": m.death_traps, "opponent": self._opponent(m, m.other(p)), "in_place": in_place,
+                "result_choice": self._result_choice(m.mode),
             })
         log.info("%s %s: match %s (%d played)%s", "set" if series.ranked else "series", series.id, m.id, series.played,
                  ", at the result screens" if in_place else "")
@@ -3128,9 +3169,14 @@ class Server:
         # the fighters both games saw (the game's own Rematch, the same stage), "select": both pick again.
         in_place = all(mem.in_place for mem in ordered) and self._in_place_ok(lobby)
         picks = [mem.character for mem in ordered]
+        keep = 0
         if in_place:
+            # CHARACTER SELECT (SCV 0.1.8): the last match's winner keeps their fighter, its loser picks again
             select = any(mem.choice == "select" for mem in ordered) or lobby.last_picks is None
             picks = ["", ""] if select else list(lobby.last_picks or ("", ""))
+            if select and lobby.last_picks is not None and lobby.last_keeper in (1, 2):
+                keep = lobby.last_keeper
+                picks[keep - 1] = lobby.last_picks[keep - 1]
         players = [
             MatchPlayer(side=i + 1, account_id=mem.session.account_id or 0, name=mem.session.name or "?",
                         session=mem.session, character=picks[i], delay=mem.delay, max_ping=0,
@@ -3140,7 +3186,7 @@ class Server:
         ]
         m = Match(id=secrets.token_hex(6), game=lobby.game, mode=lobby.mode, ranked=False, players=players,
                   created=now, from_queue=False, lobby=lobby, rounds=lobby.rounds, state="accepted",
-                  deadline=now + self.cfg.udp_timeout, death_traps=lobby.death_traps)
+                  deadline=now + self.cfg.udp_timeout, death_traps=lobby.death_traps, keep=keep)
         lobby.match = m
         self._register_match(m)
         for p in players:

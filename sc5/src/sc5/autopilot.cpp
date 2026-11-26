@@ -1549,15 +1549,10 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
         return;
       }
       if (In() == 240) {
-        // Online, VS Battle's own settings at their defaults first (X: "Return to default settings?", UP to Yes, A):
-        // Player VS CPU, Battle Count 3, Round Time 60, whatever this player set in VS Battle earlier in this game
-        // (CPU VS Player or Player VS Player would change who picks on the select screen; the battle setup takes the
-        // round time from player 1's game). The settings are the game's for as long as it runs, not the save's.
-        if (g_plan.online) {
-          Push(input::kX, 10, 60);
-          Push(input::kDpadUp, 8, 40);
-          Push(input::kA, 10, 90);
-        }
+        // (VS Battle's settings are the game's for as long as it runs, not the save's: what this player set in VS
+        // Battle earlier is still there online. versus.cpp makes the round time 60 and both sides pads' at the battle
+        // setup. Its Default, X, asks "Return to default settings?", which took no press of the autopilot's in a
+        // test, 2026-11-26.)
         if (g_plan.two_players) {
           Push(input::kDpadDown, 6, 40);
           for (int i = 0; i < 3; i++) Push(input::kDpadRight, 6, 40);
