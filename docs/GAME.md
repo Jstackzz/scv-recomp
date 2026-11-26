@@ -804,6 +804,32 @@ the next match (CHOICE).
   frame 5,561 in 0.2 s, round 3 fought from 5,631 with every check alike, 3-0 in both games. Should the call be over
   first (a long round trip), the round's first check finds what is left and the round begins again.
   `SC5_NET_NO_CALL_CHECK` (tests): no check there.
+- **A KO played on** (netplay.cpp `RoundPlayed`; 0.1.7). The game goes on taking the pads in its KO state (0x58:
+  240 of its own ticks, the state machine's +0x5C counting to +0x64, the first of them in slow motion): the winner's
+  string comes out and both fighters can still act until the replay begins. Until 0.1.6 the netplay gave both games
+  neutral inputs from the KO's first frame, so online the fighters stood still there (a player's report,
+  2026-11-25). One match played twice with the same seed, both players mashing (Mitsurugi against Siegfried, the KO at
+  match frame 2071, the replay from 2311): with the pads the snapshots of frames 2160 to 2310 differ from those on
+  neutral inputs in 7,000 to 10,000 bytes, where two runs differ in about 450 before the KO (poses). So the KO is
+  played like the round: the players' inputs, guesses and rollbacks, until the state after it. Nothing is checked
+  there (after a KO a fighter's script waits on its voice, above; the next round's call is checked). Three things
+  the first tries showed: a KO is made sure of with both players' real inputs before its first frame is shown (it
+  would otherwise run for some frames, with its call and slow motion, and then be taken back); the first frame after
+  the played ones runs on neutral inputs, because that frame is the replay's first and the game cuts a replay short on
+  a press (one game cut it at once and the other, running that frame on a guess of the pad, played it through: round
+  4 began 266 frames apart, Cervantes against Yoshimitsu); and a button held on into the replay is not a press there
+  (`ReplaySkipHeld`). The KO state after the replay stays on neutral inputs. `SC5_NET_NO_KO_PLAY` (tests): as before;
+  `SC5_DBG_KO=1` logs where a round's end stands at each change.
+- **Open: the side of the screen at a crossing over** (found 2026-11-25, in 0.1.6 too). Ivy against Kilik,
+  `tools/linktest.py --p1 Ivy --p2 Kilik --rounds 3 --lag 60 --fight1 "$(python -I tools/py/mash.py 5 9000)"
+  --fight2 "$(python -I tools/py/mash.py 6 9000)" --env SC5_NET_JITTER=25 --env SC5_NET_LOSS=3`: the check of match
+  frame 2490 fails in every run, the round is played again and the match ends alike. Dumps of every frame
+  (`SC5_NET_DUMP_AT`, `tools/py/cmpsnap.py`): the fights are alike to frame 2485; at 2488 each player's +0xC4 (the
+  side of the screen, 1 and 0 in one game, 0 and 1 in the other) and the directions that follow from it differ. The
+  cameras' director and both camera arrays are the same in both games at every frame dumped up to 2460, so the
+  cameras did not drift: one game's rerun of the frames at the crossing decides the side otherwise than their first
+  run. Drawing in frames run again (`SC5_REPLAY_DRAW=1`) changes nothing. Not found yet what the decision takes in
+  that a rerun has otherwise.
 - **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
   that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
   is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that
