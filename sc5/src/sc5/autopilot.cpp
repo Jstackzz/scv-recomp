@@ -127,11 +127,13 @@ bool g_own_a_was = true;  // this player's A the frame before (held at first: no
 // tests: SC5_TEST_LOCAL_PICK's picks (<slot>[.<costume>], a second after a comma), the one being made, and when the
 // pick held it back
 struct TestPick {
-  int slot = -1, costume = 0;
+  int slot = -1, costume = -1;  // costume -1 (none named): whichever the costume panel shows
 };
-std::vector<TestPick> TestPicks() {
+std::vector<TestPick> TestPicks(int side) {
   std::vector<TestPick> out;
-  const char* v = std::getenv("SC5_TEST_LOCAL_PICK");
+  // SC5_TEST_LOCAL_PICK_P2: player 2's own, where both games get the same variables (two launchers started alike)
+  const char* v = side == 1 ? std::getenv("SC5_TEST_LOCAL_PICK_P2") : nullptr;
+  if (!v || !*v) v = std::getenv("SC5_TEST_LOCAL_PICK");
   while (v && *v && out.size() < 2) {
     TestPick t;
     t.slot = std::atoi(v);
@@ -694,7 +696,7 @@ void OnSelect() {
   // it as a pick of the player's own and takes the record again), or a test's (SC5_TEST_LOCAL_PICK=<slot>[.<costume>]
   // stands in for the player; a second one after a comma is what the player takes instead when the pick holds the
   // first back, after A on it and 3 s on its panel, as a player reads why)
-  static const std::vector<TestPick> test_picks = TestPicks();
+  static const std::vector<TestPick> test_picks = TestPicks(g_plan.side);
   const TestPick test = g_test_pick < test_picks.size() ? test_picks[g_test_pick] : TestPick{};
   int auto_slot = -1, auto_costume = 0;
   if (LocalPicks(side) && g_plan.created[side]) {
@@ -722,7 +724,9 @@ void OnSelect() {
     }
   } else if (LocalPicks(side) && test.slot >= 0) {
     auto_slot = test.slot;
-    auto_costume = test.costume;
+    // no costume named: the one the panel shows (two players on one fighter: the game puts the second on the next
+    // costume, and a test that asked for the first pressed LEFT at it for good)
+    auto_costume = test.costume >= 0 ? test.costume : std::max(0, select::Costume(side));
   }
   if (auto_slot >= 0) {
     if (!g_steps.empty()) {

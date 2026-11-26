@@ -253,6 +253,7 @@ def main():
     for i in range(1, count + 1):
         s = os.path.join(runs, f"{a.name}-{i}")
         shutil.rmtree(s, ignore_errors=True)
+        own = a.save1 if i == 1 else a.save2 if i == 2 else ""
         if a.menus:  # the player's own save (a copy: both games run at once, each prunes its DLC to its dlc folder)
             os.makedirs(s)
             shutil.copytree(os.path.join(ROOT, "game", "user"), os.path.join(s, "user"),
