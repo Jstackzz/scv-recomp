@@ -22,6 +22,24 @@ It reads SC5_STATUS and SC5_CMD from the environment, like the real game.
                           SC5_FAKE_CHOOSE_SECONDS (default 2), as both of a lobby match's games do
     quit                  exit
 
+The player's own game (SC5_MENUS=1, docs/PROTOCOL.md 3.8) is the same stand-in: started by PLAY, it goes booting ->
+ready (its online menu) and plays every match from its start line. With SC5_FAKE_ASKS=<script file> it also plays the
+player in the game's online menus: it reads the launcher's ui.json and writes ask.txt lines (`ask n=<count> <verb>
+...`, the next once the last was taken), as the script says, one line at a time:
+
+    wait <path><op><value> [timeout=<s>]   until ui.json says so (default 60 s; ops = != >= ~= (contains)); a path is
+                                           dotted (queue.state), a list picked by a field (lobbies.list[name=X].code),
+                                           its length with # (lobby.members#); game.status, game.results and
+                                           game.matches are the stand-in's own status word and counts
+    ask <verb> [key=value ...]             the line to the launcher; {path} in a value is that path's value now
+    sleep <seconds>
+    say <text>
+    # a comment
+
+It writes `asks script: <line>` to its game.log for each line done, `asks script: done` at the end, or `asks script:
+FAILED at line N: ...` (with what ui.json said) when a wait runs out, and stops there; ui.json whose `t` stands still
+for 5 s is a failure too.
+
 A result names the fighters as the real game does, by the game's own character ids with the costume after a dot
 (p1_char=3.0: launcher/data/sc5.json game_id): the start line's, or for a side picked on the select screen (-) one from
 the seed, alike in both games.
@@ -228,6 +246,144 @@ class Feed:
             self.sock = None
 
 
+def read_shared(path: str) -> str | None:
+    """A small file the launcher replaces whole (3.2): None when it is not there (or between its replace)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def resolve(ui: object, path: str) -> object:
+    """A dotted path into ui.json: `queue.state`, `lobbies.list[name=X].code`, `lobby.members#` (a list's length)."""
+    value = ui
+    for part in path.split("."):
+        count = part.endswith("#")
+        part = part.rstrip("#")
+        pick = None
+        if "[" in part and part.endswith("]"):
+            part, _, sel = part[:-1].partition("[")
+            pick = sel.partition("=")[::2]
+        if part:
+            value = value.get(part) if isinstance(value, dict) else None
+        if pick is not None:
+            value = next((item for item in value or [] if isinstance(item, dict) and str(item.get(pick[0])) == pick[1]), None)
+        if count:
+            value = len(value) if isinstance(value, (list, dict)) else 0
+    return value
+
+
+def text_of(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+class AsksScript:
+    """SC5_FAKE_ASKS: the player in the game's online menus, as a script (the module's docstring)."""
+
+    def __init__(self, path: str, game: "FakeGame") -> None:
+        with open(path, encoding="utf-8") as fh:
+            self.lines = [ln.strip() for ln in fh]
+        self.game = game
+        self.ui_path = os.path.join(os.environ.get("SC5_SESSION_DIR", "."), "ui.json")
+        self.ask_path = os.path.join(os.environ.get("SC5_SESSION_DIR", "."), "ask.txt")
+        self.at = 0
+        self.since = time.monotonic()
+        self.next_read = 0.0
+        self.ui: dict = {}
+        self.ui_t = 0
+        self.ui_t_at = time.monotonic()
+        self.asks = 0
+        self.done = False
+
+    def value(self, path: str) -> str:
+        if path.startswith("game."):
+            return text_of({"game.status": self.game.state_word, "game.results": self.game.results,
+                            "game.matches": self.game.matches}.get(path))
+        return text_of(resolve(self.ui, path))
+
+    def fill(self, text: str) -> str:
+        out, rest = "", text
+        while "{" in rest and "}" in rest.partition("{")[2]:
+            before, _, after = rest.partition("{")
+            inner, _, rest = after.partition("}")
+            out += before + self.value(inner)
+        return out + rest
+
+    def check(self, cond: str) -> bool:
+        for op in ("!=", ">=", "~=", "="):
+            if op in cond:
+                path, _, want = cond.partition(op)
+                have, want = self.value(path.strip()), self.fill(want.strip())
+                if op == "=":
+                    return have == want or (want == "null" and have == "")
+                if op == "!=":
+                    return have != want
+                if op == "~=":
+                    return want.lower() in have.lower()
+                try:
+                    return float(have or 0) >= float(want)
+                except ValueError:
+                    return False
+        return False
+
+    def fail(self, why: str) -> None:
+        self.done = True
+        summary = {k: self.ui.get(k) for k in ("account", "queue", "series", "lobby", "message")}
+        self.game.game_log(f"asks script: FAILED at line {self.at + 1}: {why} (ui.json: {json.dumps(summary)[:1500]})")
+        log(f"asks script FAILED at line {self.at + 1}: {why}")
+
+    def step(self, now: float) -> None:
+        if self.done:
+            return
+        if now >= self.next_read:  # about ten times a second, as the game's menus read it
+            self.next_read = now + 0.1
+            raw = read_shared(self.ui_path)
+            if raw:
+                try:
+                    self.ui = json.loads(raw)
+                except ValueError:
+                    pass
+                if self.ui.get("t") != self.ui_t:
+                    self.ui_t, self.ui_t_at = self.ui.get("t"), now
+            if self.ui and now - self.ui_t_at > 5:
+                return self.fail("the launcher does not answer (ui.json's t stood still for 5 s)")
+        while self.at < len(self.lines):
+            line = self.lines[self.at]
+            if not line or line.startswith("#"):
+                self.at += 1
+                continue
+            verb, _, rest = line.partition(" ")
+            if verb == "wait":
+                cond, _, opt = rest.partition(" timeout=")
+                if not self.ui:
+                    return
+                if not self.check(cond.strip()):
+                    if now - self.since > float(opt or 60):
+                        self.fail(f"{line}: it says {self.value(cond.strip().split('=')[0].rstrip('!>~'))!r}")
+                    return
+            elif verb == "ask":
+                if os.path.exists(self.ask_path):  # the last one not taken yet
+                    return
+                self.asks += 1
+                write_atomic(self.ask_path, f"ask n={self.asks} {self.fill(rest)}")
+            elif verb == "sleep":
+                if now - self.since < float(rest or 1):
+                    return
+            elif verb == "say":
+                log(f"asks script says: {rest}")
+            self.game.game_log(f"asks script: {self.fill(line)}")
+            self.at += 1
+            self.since = now
+        self.done = True
+        self.game.game_log("asks script: done")
+        log("asks script done")
+
+
 class FakeGame:
     def __init__(self, status_path: str, cmd_path: str) -> None:
         self.status_path = status_path
@@ -249,9 +405,16 @@ class FakeGame:
         self.seen_ready: set[int] = set()
         self.seen_left: set[int] = set()
         self.choose_at = 0.0  # choose=1: when the loser's choice on the result screen is said
+        self.state_word = ""  # the first word of the last status line, and how many results and matches it wrote
+        self.results = 0
+        self.matches = 0
+        self.script: AsksScript | None = None
 
     def status(self, line: str) -> None:
         log(f"status: {line}")
+        self.state_word = line.split()[0] if line else ""
+        self.results += self.state_word in ("result", "sparring_over")
+        self.matches += self.state_word == "in_match"
         write_atomic(self.status_path, line)
         self.game_log(f"link: status {line}")  # every one, for tests that poll slower than a status lasts
 
@@ -447,12 +610,16 @@ class FakeGame:
         time.sleep(float(os.environ.get("SC5_FAKE_BOOT", "1.5")))
         self.state = "ready"
         self.status("ready")
+        if os.environ.get("SC5_FAKE_ASKS"):  # the player in the game's own online menus (3.8)
+            self.script = AsksScript(os.environ["SC5_FAKE_ASKS"], self)
         while True:
             line = take_command(self.cmd_path)
             if line and not self.handle(line):
                 log("bye")
                 return 0
             self.step(time.monotonic())
+            if self.script is not None:
+                self.script.step(time.monotonic())
             time.sleep(0.02)
 
 

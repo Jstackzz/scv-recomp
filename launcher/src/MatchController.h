@@ -66,6 +66,16 @@ public:
     static QString pingText(const QJsonObject& found);
     QString gameStatus() const;
     GameProcess* game() const { return game_; }
+
+    // The player's own game (docs/PROTOCOL.md 3.8, SCV 0.1.8): PLAY starts it, SC5_NET=1 and SC5_MENUS=1 on the
+    // player's own save, and every match, Online Practice and watched lobby match is played in it, as single player is.
+    // The launcher never starts another game for a match and never closes this one by itself (it holds the player's
+    // single player too): when something online needs it and it is not running, that is said (ensureGame's error).
+    bool startPlayerGame(QString* error);
+    bool playerGameRunning() const;
+    // the player left the lobby whose match is on its way or played (its menu's lobby_leave, the game closed): that
+    // match ends for them, reported as left, and the game goes back to its online menu (park) instead of closing
+    void leaveLobbyMatch();
     // every game this launcher runs now (the match's, single player's or practice's, a local test's two)
     QList<GameProcess*> runningGames() const { return {game_, solo_, localA_, localB_}; }
 
@@ -131,6 +141,7 @@ signals:
     void soloStarted();  // single player's game was started, its window (once it has one) wants the front
     void gameShown();    // standby: the match's game started for an accepted match has its window up
     void codePrepChanged(const QString& text, bool done);  // prepareStaleCode: the game it is on, or all done
+    void playerGameChanged(bool running);  // the player's own game started, or ended (closed, crashed)
     // what the launcher did with a game by itself that the player must hear of (single player closed for an online
     // match, a game that never came back from its match closed and started again): plain words, shown large
     void notice(const QString& text);
@@ -197,6 +208,8 @@ private:
     // nothing of this launcher's is on it, it is closed, the player told, and it starts again at once when a lobby or a
     // match on its way wants it
     void checkStuckGame();
+    // the same for the player's own game, which is never closed: the park again, and the player told what to do
+    void checkStuckPlayerGame();
     static constexpr int kStuckMs = 120000;  // a real game's park takes ~50 s at most (the match's end, then ~20 s)
     void freezeGame();
     void thawGame();

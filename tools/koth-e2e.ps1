@@ -4,16 +4,16 @@
   certificate and three launchers, A hosting a King of the Hill lobby, B joining it, C joining once both places are
   taken (it waits in line and watches the matches as a spectator), each with the stand-in game
   (launcher\tools\fake_game.py). A launcher readies whenever it is one of the two players and its game is free, and
-  rates every match it watched once its game has shown the end (--rate). Afterwards a fourth launcher, D, opens the
-  Create lobby window and the leaderboard. Prints the games' status lines, the server's King of the Hill lines (king,
-  next up, ratings, Respect Points), what each launcher did, and the database's Respect Points.
+  rates every match it watched once its game has shown the end (--rate). Each launcher starts one game, as PLAY does,
+  and the test switches play their part through the asks of the game's menus (docs/PROTOCOL.md 3.8). Prints the games'
+  status lines, the server's King of the Hill lines (king, next up, ratings, Respect Points), what each launcher did,
+  and the database's Respect Points.
 
-  The launchers run on Qt's offscreen platform (no window on the screen). -Snaps saves pictures of the lobby page as it
-  changes, and D's of the Create lobby window and the leaderboard in both orders (build\koth-e2e\snaps). Everything the
-  run started is closed at its end.
+  The launchers run on Qt's offscreen platform (no window on the screen). Everything the run started is closed at its
+  end.
 
 .EXAMPLE
-  powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps
+  powershell -File tools\koth-e2e.ps1 -Matches 3
 #>
 param(
     [int]$Seconds = 300,
@@ -22,7 +22,7 @@ param(
     [int]$Port = 8677,           # the server's TCP port (UDP Port + 1), the games' Port + 10 to + 13
     [string]$Exe = '',           # the game: default launcher\tools\fake_game.py (the stand-in)
     [string]$Launcher = '',      # default: build\launcher\SC5Launcher.exe
-    [switch]$Snaps
+    [switch]$Snaps               # (the lobby page it took pictures of went with 0.1.8: nothing to take now)
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -69,6 +69,7 @@ practice_while_waiting=false
 search_again=false
 hide_ip=false
 match_sound=false
+upnp=false
 
 [account]
 remember=false
@@ -95,7 +96,6 @@ $env:QT_QPA_FONTDIR = "$env:WINDIR\Fonts"  # the offscreen platform finds no fon
 $stamp = Get-Date -Format 'HHmmss'
 $common = @('--lobby-name', "koth$stamp", '--lobby-matches', "$Matches", '--mode', 'versus')
 function Start-Launcher($who, $user, $extra) {
-    if ($Snaps) { $extra += @('--snap-dir', "`"$work\snaps\$who`"") }
     $p = Start-Process -FilePath $Launcher -ArgumentList (@('--config', "`"$work\$who\sc5-launcher.ini`"", '--user', $user, '--register') + $extra) -PassThru
     Start-Sleep -Milliseconds 500
     $p
@@ -135,10 +135,7 @@ while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
     if (@($ls | Where-Object { $_.HasExited }).Count) { "a launcher exited"; break }
     Start-Sleep -Milliseconds 500
 }
-"--- the Create lobby window and the leaderboard (launcher D)"
-$ld = Start-Launcher 'd' $users.d @('--page', 'lobby', '--mode', 'versus')
-Start-Sleep -Seconds 14
-if ($Snaps) { Get-ChildItem "$work\snaps" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "  $($_.Directory.Name)\$($_.Name)" } }
+
 "--- launcher logs (cli, rating, watch and match lines)"
 foreach ($s in 'a', 'b', 'c') {
     Get-Content "$work\$s\sc5-launcher.log" -ErrorAction SilentlyContinue | Select-String -Pattern 'cli:|match: (Lobby match|Watching|Done watching|Match over|Starting|The players finished|Match cancelled|Cannot)|error' | ForEach-Object { "[$s] $($_.Line)" }
@@ -153,7 +150,7 @@ foreach ($s in 'a', 'b', 'c') {
 "--- server: lobby and result lines"
 Get-Content "$work\server\err.txt", "$work\server\out.txt" -ErrorAction SilentlyContinue | Select-String -Pattern 'lobby |RESULT| go: |feed' | ForEach-Object { $_.Line -replace '^\S+ \S+ \S+\s+', '' }
 # close only what this run started: the launchers and their games, then the server
-$all = @($la, $lb, $lc, $ld)
+$all = @($la, $lb, $lc)
 $games = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -in @($all | ForEach-Object { $_.Id }) } | ForEach-Object { $_.ProcessId })
 foreach ($p in $all) { if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null } }
 Start-Sleep -Seconds 3

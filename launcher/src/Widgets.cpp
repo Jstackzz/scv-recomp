@@ -82,58 +82,12 @@ QWidget* statTile(const QString& caption, QLabel** valueOut) {
 
 }  // namespace ui
 
-CharacterPicker::CharacterPicker(QWidget* parent) : QListWidget(parent) {
-    setObjectName(QStringLiteral("CharacterGrid"));
-    setViewMode(QListView::IconMode);
-    setFlow(QListView::LeftToRight);
-    setWrapping(true);
-    setResizeMode(QListView::Adjust);
-    setMovement(QListView::Static);
-    setUniformItemSizes(true);
-    setGridSize(QSize(138, 42));
-    setSelectionMode(QAbstractItemView::SingleSelection);
-    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setMinimumHeight(200);
-    connect(this, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
-        if (item) emit picked(item->data(Qt::UserRole).toString());
-    });
-}
-
-void CharacterPicker::setRoster(const QList<Character>& roster, const QString& select) {
-    const QSignalBlocker block(this);
-    clear();
-    for (const auto& c : roster) {
-        auto* item = new QListWidgetItem(c.name, this);
-        item->setData(Qt::UserRole, c.id);
-        item->setTextAlignment(Qt::AlignCenter);
-        item->setSizeHint(QSize(130, 36));
-        if (c.secret) item->setToolTip(tr("%1: unlockable in the game").arg(c.name));
-    }
-    selectId(select);
-    if (!currentItem() && count() > 0) setCurrentRow(0);
-}
-
-QString CharacterPicker::currentId() const {
-    return currentItem() ? currentItem()->data(Qt::UserRole).toString() : QString();
-}
-
-QString CharacterPicker::currentName() const { return currentItem() ? currentItem()->text() : QString(); }
-
-void CharacterPicker::selectId(const QString& id) {
-    for (int i = 0; i < count(); ++i)
-        if (item(i)->data(Qt::UserRole).toString() == id) {
-            setCurrentRow(i);
-            scrollToItem(item(i));
-            return;
-        }
-}
-
 LogView::LogView(QWidget* parent) : QPlainTextEdit(parent) {
     setReadOnly(true);
     setMaximumBlockCount(500);
     setMinimumHeight(90);
     QFont f(QStringLiteral("Consolas"));
-    f.setPointSize(9);
+    f.setPointSize(11);  // the log is read too: large enough
     setFont(f);
 }
 

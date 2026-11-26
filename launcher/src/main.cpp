@@ -1,5 +1,6 @@
-// SCV Online launcher: ranked/casual matchmaking, lobbies, practice, leaderboard and the
-// "build the game from your own disc" flow for the native PC port of Soulcalibur V (Xbox 360).
+// SCV Online launcher for the native PC port of Soulcalibur V (Xbox 360): builds the game from the player's own disc,
+// starts it (PLAY), and keeps everything online that the game's own menus ask for in the background: the server
+// connection, matchmaking, lobbies, the UDP punch, the matches, reports and updates (docs/LAUNCHER.md).
 
 #include <algorithm>
 #include <QApplication>
@@ -35,11 +36,14 @@ int main(int argc, char* argv[]) {
                                       QStringLiteral("Development: environment variable holding the password (default SC5_DEV_PASSWORD)."),
                                       QStringLiteral("var"));
     const QCommandLineOption regOpt(QStringLiteral("register"), QStringLiteral("Development: create the --user account if needed."));
-    const QCommandLineOption queueOpt(QStringLiteral("queue"), QStringLiteral("Development: queue right after signing in."), QStringLiteral("casual|ranked"));
+    const QCommandLineOption playOpt(QStringLiteral("play"), QStringLiteral("Start the game once the window is up, as PLAY does."));
+    const QCommandLineOption queueOpt(QStringLiteral("queue"),
+                                      QStringLiteral("Development: start the game and search, as its menu asks, once signed in."),
+                                      QStringLiteral("casual|ranked"));
     const QCommandLineOption gameOpt(QStringLiteral("game"), QStringLiteral("Game to select (sc5, the only one)."), QStringLiteral("id"));
     const QCommandLineOption modeOpt(QStringLiteral("mode"), QStringLiteral("Mode for --queue."), QStringLiteral("id"));
     const QCommandLineOption charOpt(QStringLiteral("character"), QStringLiteral("Character for --queue."), QStringLiteral("id"));
-    const QCommandLineOption pageOpt(QStringLiteral("page"), QStringLiteral("Page to open."), QStringLiteral("name"));
+    const QCommandLineOption pageOpt(QStringLiteral("page"), QStringLiteral("Page to open."), QStringLiteral("play|build|settings|support"));
     const QCommandLineOption localTestOpt(QStringLiteral("local-test"),
                                           QStringLiteral("Development: start the two-instance loopback test."));
     const QCommandLineOption extractOpt(QStringLiteral("extract"), QStringLiteral("Open Build game and extract this disc image."),
@@ -84,8 +88,7 @@ int main(int argc, char* argv[]) {
         QStringLiteral("n"));
     const QCommandLineOption snapDirOpt(
         QStringLiteral("snap-dir"),
-        QStringLiteral("Development: save pictures of the window to this folder as the lobby changes, and of the "
-                       "leaderboard page in both orders."),
+        QStringLiteral("Development: with --page, save a picture of that page to this folder."),
         QStringLiteral("folder"));
     const QCommandLineOption rematchesOpt(
         QStringLiteral("rematches"),
@@ -100,40 +103,29 @@ int main(int argc, char* argv[]) {
     const QCommandLineOption leaveSeriesOpt(
         QStringLiteral("leave-series"),
         QStringLiteral("Development: once the --rematches are chosen, leave the series at once instead of letting it run out."));
-    const QCommandLineOption soloOpt(
-        QStringLiteral("solo"),
-        QStringLiteral("Development: with --queue, start single player first and search alongside it (standby); with "
-                       "--lobby join, start single player before readying in the lobby (its match closes it)."));
     const QCommandLineOption lobbyOwnFirstOpt(
         QStringLiteral("lobby-own-first"),
         QStringLiteral("Development: with --lobby join, create a lobby of one's own first, then join the named one "
                        "from it (the server moves the player)."));
-    const QCommandLineOption practiceOpt(
-        QStringLiteral("practice"),
-        QStringLiteral("Practice while a Ranked or Casual search waits: on or off (saved like the queue pages' box)."),
-        QStringLiteral("on|off"));
-    const QCommandLineOption searchAgainOpt(
-        QStringLiteral("search-again"),
-        QStringLiteral("Search again once a Ranked set or a Casual series is over: on or off (saved like the queue "
-                       "pages' box)."),
-        QStringLiteral("on|off"));
     const QCommandLineOption updatedOpt(
         QStringLiteral("updated"),
         QStringLiteral("Started by an update of this version: waits for it to close, then deletes what it set aside."),
         QStringLiteral("version"));
     const QCommandLineOption autoUpdateOpt(QStringLiteral("auto-update"),
                                            QStringLiteral("Development: install an update offered at once, without asking."));
-    for (const auto* o : {&configOpt, &serverOpt, &fpOpt, &userOpt, &pwEnvOpt, &regOpt, &queueOpt, &gameOpt, &modeOpt,
+    for (const auto* o : {&configOpt, &serverOpt, &fpOpt, &userOpt, &pwEnvOpt, &regOpt, &playOpt, &queueOpt, &gameOpt, &modeOpt,
                           &charOpt, &pageOpt, &acceptOpt, &cancelOpt, &localTestOpt, &extractOpt, &lobbyOpt, &lobbyNameOpt, &lobbyCodeFileOpt,
                           &lobbyMatchesOpt, &leaveLobbyOpt, &leaveLobbyInMatchOpt, &kothOpt, &rateOpt, &snapDirOpt, &upnpProbeOpt, &rematchesOpt, &rematchChoiceOpt,
-                          &leaveSeriesOpt, &soloOpt, &lobbyOwnFirstOpt,
-                          &practiceOpt, &searchAgainOpt, &updatedOpt, &autoUpdateOpt})
+                          &leaveSeriesOpt, &lobbyOwnFirstOpt, &updatedOpt, &autoUpdateOpt})
         cli.addOption(*o);
     cli.process(app);
 
     paths::init(cli.value(configOpt));
     winutil::stayBehind(cfg::devBackground());
     applog::write(QStringLiteral("launcher %1 starting, settings %2").arg(QStringLiteral(SC5_LAUNCHER_VERSION), paths::configFile()));
+    // what an older version kept that nothing reads any more (the sound levels, the queue pages' boxes)
+    if (const QStringList removed = cfg::dropRemovedSettings(); !removed.isEmpty())
+        applog::write(QStringLiteral("settings: took out what this version no longer uses: %1").arg(removed.join(QStringLiteral(", "))));
 
     // not "<ini>.lock": QSettings locks that file itself while it syncs. Started by an update, the old launcher is
     // still closing: wait for it.
@@ -165,6 +157,7 @@ int main(int argc, char* argv[]) {
     opts.user = cli.value(userOpt);
     if (cli.isSet(pwEnvOpt)) opts.passwordEnv = cli.value(pwEnvOpt);
     opts.registerAccount = cli.isSet(regOpt);
+    opts.play = cli.isSet(playOpt);
     opts.queue = cli.value(queueOpt);
     opts.game = cli.value(gameOpt);
     opts.mode = cli.value(modeOpt);
@@ -186,10 +179,7 @@ int main(int argc, char* argv[]) {
     opts.rematches = cli.isSet(rematchesOpt) ? std::max(0, cli.value(rematchesOpt).toInt()) : 0;
     opts.rematchChoices = cli.value(rematchChoiceOpt).split(QLatin1Char(','), Qt::SkipEmptyParts);
     opts.leaveSeries = cli.isSet(leaveSeriesOpt);
-    opts.solo = cli.isSet(soloOpt);
     opts.lobbyOwnFirst = cli.isSet(lobbyOwnFirstOpt);
-    opts.practice = cli.value(practiceOpt);
-    opts.searchAgain = cli.value(searchAgainOpt);
     opts.upnpProbe = cli.isSet(upnpProbeOpt);
     opts.updatedFrom = cli.value(updatedOpt);
     opts.autoUpdate = cli.isSet(autoUpdateOpt);

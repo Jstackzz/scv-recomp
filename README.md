@@ -1,8 +1,8 @@
 # SCV Online
 
 Soulcalibur V (Xbox 360) running natively on Windows PCs, with online play and rollback netcode: Ranked and
-Casual matchmaking, lobbies with spectators and King of the Hill, Online Practice, single player, a leaderboard, and
-controls you remap in the launcher.
+Casual matchmaking, lobbies with spectators and King of the Hill, Online Practice and a leaderboard, all in the game's
+own menus beside its single player, as if the game had always had them.
 
 The game's code is not in this repository and never will be. As in MK9 Online, every player builds their own copy on
 their own PC from **their own disc**: the launcher reads your Xbox 360 disc image and title update, translates the
@@ -37,9 +37,13 @@ clang. Nothing from the game (code, data or generated C++) is ever committed her
 2. Start `SC5Launcher.exe` and open **Build game**: pick your disc image, title update 3 and (optionally) your DLC
    packages, then **CHECK AND BUILD**. The launcher checks each one, extracts the disc and compiles the game's code
    for your PC. That happens once and takes a few minutes.
-3. Sign in (top right) and play: **Ranked** or **Casual**, **Lobby** (1, 2 or 3 rounds to win, King of the Hill, Online
-   Practice, watching), or **Single player** (the game's own modes, Training with every character, and two-player
-   versus on one PC).
+3. On the **Play** page, sign in (or create an account), then press **PLAY**. The game starts with your own save:
+   single player, Creation and Training as on the console, and online play in the game's own menus (Ranked, Casual,
+   lobbies, Online Practice, watching, the leaderboard). The launcher stays open in the background for the
+   connection; closing it closes the game.
+
+**Settings** keeps the server, your region, ping limit and input delay, the display settings, the game folder and the
+keyboard's keys (for playing without a controller). Sound and the buttons are set in the game's own Options.
 
 The launcher updates itself from this repository's releases; when an update changes the game, it builds the game
 again by itself before you play. If you played SCV Online 0.1.5 or older, your game was built on title update 1: after
@@ -58,8 +62,7 @@ builds the game again. It does not start the old game meanwhile.
   (the screen says OUT OF SYNC, THIS ROUND STARTS AGAIN); the match and its score go on. Each game's log then names
   exactly what differed, and the launcher sends it to the server, so the cause can be found and fixed.
 - **Every mode online**: versus (Ranked and Casual, first to 3 rounds as on the console, and lobbies), Online
-  Practice (no timer, health refills), spectators, King of the Hill with Respect Points, and Training offline while
-  you wait for a match.
+  Practice (no timer, health refills), spectators and King of the Hill with Respect Points, in one game with the rest.
 - **Everything on the disc unlocked** in every mode, single player's PLAY included (the hidden characters among
   them), without touching your save. Dampierre and the DLC parts come only from your own packages; an online match
   allows Dampierre only when both players have him.
@@ -67,7 +70,7 @@ builds the game again. It does not start the old game meanwhile.
   as usual.
 - **Display settings that cannot desync a match**: window mode and size, internal resolution (720p as on the console
   up to 4x), anti-aliasing, texture filtering, V-sync, brightness. Each changes only how a frame looks, never what
-  the game computes, so two players may pick differently. Music, effects and voices levels apply at once.
+  the game computes, so two players may pick differently.
 - **Rematches in the game**: after a match the game stays at its result screen. Casual offers REMATCH (the game's
   own Rematch: the same characters on the same stage, straight back into the fight) and CHARACTER SELECT (both pick
   again); a ranked set goes on by itself, its last match's winner keeping their fighter while the loser picks again.
@@ -87,12 +90,10 @@ builds the game again. It does not start the old game meanwhile.
   with downloadable parts only plays when both players have the same ones, and then fights wearing them. A ranked
   winner keeps theirs. The picture taken in Creation stays on its own PC: on the other, the VS screen shows SCV
   Online's own card for that character.
-- **Your own button settings everywhere**: the launcher's Controls page sets what each button presses in a fight, any
-  combination of A, B, K and G on any button (the game's own settings offer 13 of the 16 and nothing on the stick
-  clicks), in every mode. Online the other player's game sees your presses as you set them, whatever theirs are.
-- **The launcher**: accounts, MATCH FOUND with the opponent's connection, ranked sets with 16 Soulcalibur rank
-  titles, a leaderboard, controls for keyboard and any controller, self-updates, and crash, desync and F3 (picture)
-  reports to the server. Players who cannot reach each other play through the server's relay.
+- **The launcher**: builds the game, starts it, and keeps everything online going in the background for the game's
+  menus: accounts, matchmaking, ranked sets with 16 Soulcalibur rank titles, lobbies, the leaderboard, the keyboard's
+  keys, self-updates, and crash, desync and F3 (picture) reports to the server. Players who cannot reach each other
+  play through the server's relay.
 
 ## Not done yet
 

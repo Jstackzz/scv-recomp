@@ -1,8 +1,7 @@
 #pragma once
-// Reusable pieces: page base class, cards, the character grid, a timestamped log view.
+// Reusable pieces: page base class, cards, a timestamped log view.
 
 #include <QFrame>
-#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QWidget>
 
@@ -33,19 +32,6 @@ void fillRegions(QComboBox* box, const QString& select);
 void fillMaxPing(QComboBox* box, int select);
 QWidget* statTile(const QString& caption, QLabel** valueOut);
 }  // namespace ui
-
-class CharacterPicker : public QListWidget {
-    Q_OBJECT
-public:
-    explicit CharacterPicker(QWidget* parent = nullptr);
-    void setRoster(const QList<Character>& roster, const QString& select = {});
-    QString currentId() const;
-    QString currentName() const;
-    void selectId(const QString& id);
-
-signals:
-    void picked(const QString& id);
-};
 
 class LogView : public QPlainTextEdit {
     Q_OBJECT

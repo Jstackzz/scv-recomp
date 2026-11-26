@@ -42,12 +42,13 @@ qt_add_executable(SC5Launcher WIN32
     src/GamepadNav.cpp src/GamepadNav.h
     src/Widgets.cpp src/Widgets.h
     src/Dialogs.cpp src/Dialogs.h
-    src/PlayPages.cpp src/PlayPages.h
-    src/LobbyPage.cpp src/LobbyPage.h
+    src/PlayPage.cpp src/PlayPage.h
+    src/MenuBridge.cpp src/MenuBridge.h
+    src/TestDriver.cpp src/TestDriver.h
     src/ToolPages.cpp src/ToolPages.h
     src/SupportPage.cpp src/SupportPage.h
     src/Controls.cpp src/Controls.h
-    src/ControlsPage.cpp src/ControlsPage.h
+    src/KeyboardBox.cpp src/KeyboardBox.h
     src/X360.cpp src/X360.h
     src/Upnp.cpp src/Upnp.h
     src/Updater.cpp src/Updater.h
@@ -87,7 +88,7 @@ qt_add_resources(SC5Launcher "ranks"
 qt_add_resources(SC5Launcher "sounds"
     PREFIX "/sounds"
     BASE data/sounds
-    FILES data/sounds/match-found.wav  # MK3D Online's synthesized chime (nothing recorded)
+    FILES data/sounds/match-found.wav  # MK3D Online's synthesized chime (nothing recorded): a match found, over the game
 )
 
 target_compile_definitions(SC5Launcher PRIVATE

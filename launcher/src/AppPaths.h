@@ -54,13 +54,15 @@ QString buildArgs(const QString& gameId);
 QString region();
 int maxPing();
 bool strict();
-// the player picks their character on the game's own select screen in online matches, not in the launcher
-bool pickInGame();
-// a Ranked or Casual search starts the game's practice to play while it waits (MatchController::maybeStartPractice)
+// From SCV 0.1.8 the player does everything in the one game PLAY starts (docs/PROTOCOL.md 3.8): no second game for
+// practice while a search waits, and no search started again by the launcher once a set or series is over (the game's
+// own menu asks for the next search). Both are always false now; the settings files of older versions may still have
+// the keys, which dropRemovedSettings takes out.
 bool practiceWhileWaiting();
-// once a Ranked set or a Casual series is over (not left by this player), the same search starts again by itself
-// (MatchController::maybeSearchAfterSeries)
 bool searchAgain();
+// the settings of older versions that nothing reads any more (the sound levels, the queue pages' boxes): taken out of
+// the settings file once, at start; the names of the keys removed
+QStringList dropRemovedSettings();
 bool matchSound();  // a chime when a Ranked or Casual match is found (the MATCH FOUND window comes up)
 // The input delay: kAutoDelay (the default since 0.1.4), the match's from its measured ping (the server's choice,
 // match_go's delay; autoDelayFor), or the player's own 0-4 frames, which a match plays when it is the larger of the
@@ -89,10 +91,8 @@ bool frameData();     // practice shows player 1's frame data (SC5_FRAMEDATA)
 // the side the player wants to start a fight on, whichever player they are: "off", "left" or "right"
 // (SC5_PREFERRED_SIDE: the game shows the fight mirrored when they would start on the other side)
 QString preferredSide();
-// the game's sound levels, percent of the game's own (100), 0 to 150: "master", "music", "effects", "voices"
-// (SC5_VOLUME_<NAME>; the display file's volume_<name>)
-QStringList volumeNames();
-int volume(const QString& name);
+// (the sound levels went with SCV 0.1.8: the game's own Sound options set them, and the launcher passes no
+// SC5_VOLUME_ variable, so the game plays at its own levels)
 // paths::displayFile() written again from the display settings: a running game follows it (SC5_DISPLAY_FILE). set()
 // does it for every display/ key.
 void writeDisplayFile();
