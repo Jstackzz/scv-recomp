@@ -849,10 +849,28 @@ the next match (CHOICE).
   frame 2487 here): it moves the weight there over a fixed length of the game's time and ends itself. A heap task is
   not in the game's snapshot, so rollback did not put it back: made at frame 2487, it was still there when the frames
   from 2485 were run again, and it ran a frame early. The blends are now kept by our own code instead of in tasks
-  (noted by sub_82479E08's hook, moved on after the battle scene's step, sub_824968A8, kept and put back with every
-  snapshot's raw memory): that match plays through with every check alike, the fight test's counts are as they were
-  (1,800 checks, 549 in the snapshot, 0 in the fight), and the camera frames the fight as before. Other camera tasks
-  (sub_82479FB8's, made from sub_8247B3A0, sub_8247BEE4 and sub_8247C238) have not been looked at.
+  (noted by sub_82479E08's hook, moved on after the battle scene's update, kept and put back with every snapshot's
+  raw memory): that match plays through with every check alike, the fight test's counts are as they were (1,800
+  checks, 549 in the snapshot, 0 in the fight), and the camera frames the fight as before.
+  **Where the blends move on** (2026-11-26). The first version moved them from a hook of sub_824968A8, taken for the
+  battle scene's step. It is not: it runs only while a cinematic camera does (the intro, a throw: 226 times in a
+  match), so a blend asked for outside one waited for the next, hundreds of frames, and then ran from its beginning:
+  the two cameras' weights jumped back and crossed over again at whatever frame that game came to it. Two players'
+  games came to it within a rollback of each other and mostly agreed. A spectator's game, which runs each frame once,
+  did not: `tools/linktest.py --watch --p1 Ivy --p2 Kilik --rounds 3 --lag 60` with `mash.py 11` and `12`,
+  `SC5_NET_JITTER=25`, `SC5_NET_LOSS=3`: "the watched match went apart" at frame 1350 or 1830 in every run, each
+  player's +0x2718 (the directions as the side of the screen turns them) swapped against the players' games. Found
+  with dumps of every frame from all three games (`SC5_NET_DUMP_AT` now writes a spectator's too, as net3_...; the raw
+  memory beside them showed camera 0's weight apart 40 frames before the check), then a trace of the blends into a
+  file of their own (`SC5_DBG_BLENDS=<stem>`: the log leaves out lines that repeat, which hid it for a while): asked
+  for at frame 376, moved on from 1306 in one game, 1783 in another, never in the third. What the game's own tasks do
+  (`SC5_BLENDS_ORIGINAL=1` leaves them, traced the same way): the task system runs the battle scene's update
+  (sub_82162168: the cameras' logic asks for the blends, then the manager, sub_8247A138) and right after it the
+  scene's child tasks, the blends among them, in the very frame they were made and each frame after: asked at 376,
+  updated from 376 to 391, 16 updates for a blend of 15. The blends now move on there (sub_82162168's hook, after the
+  game's own). With it: the same watched match agrees to its end (281 checks), the fight test's counts are as they
+  were, and what the manager's own fades (sub_82479F38 and sub_82479FB8, which only set fields of the manager, kept
+  with the cameras' objects: `DynamicRegions`) start from is the same in every game.
 - **What a desync says** (netplay.cpp `Evidence`, `Detail`; 0.1.4). A check is one hash, and a failed one said only
   that the fights differed; the launcher's report of it was 36 lines, mostly statistics. Each check frame's snapshot
   is now kept for 8 checks. When a check fails, the two games pass each other a hash of every 256 bytes of that
@@ -1762,7 +1780,8 @@ match in sync to the same result (a draw, 3-3: nobody pressed anything), which b
 - *The main menu's card* said "Total Xbox LIVE Play Time": any text of the game's that names Xbox LIVE names Online
   instead while the menus are on (online_menu.cpp `Text`).
 - Open: the cameras' blends (battle.cpp) are each game's own and are not made alike with the rest of the fight when
-  the two games are (a round's call, a round played again). No test has shown it.
+  the two games are (a round's call, a round played again). No test has shown it. (They lasted hundreds of frames
+  until 2026-11-26, "Where the blends move on" above; now 16, so two games' lists differ far more rarely.)
 - Tests: `SC5_TEST_ONLINE_ACCEPT=1` accepts a match found as the player's A would (a script's A presses cancelled
   the search they came before).
 
