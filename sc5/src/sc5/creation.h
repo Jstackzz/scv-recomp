@@ -35,6 +35,12 @@ int TypeOf(const uint8_t* record);
 // locked) into this game's save in memory, each one checked; slot 50 stays free for the other player's. Tests:
 // SC5_TEST_CREATION_SLOT=<file>[,<file>...] (whole slots) into the first slots.
 void OnHoldPoint();
+// An online session (ownsave.h, which keeps the save aside first and puts it back at the end): the player's own
+// created characters as they are now in the game's save (one made or changed in Creation a minute ago too), each one
+// whose form is wrong, and any in slots 49 and 50 (the other player's online), out of the lists for the session; this
+// PC's check of the rest at the session's first select screen (DropRefused). EndOnline: none left out any more.
+void BeginOnline();
+void EndOnline();
 
 // The select screen's pick of a created character: the slot of the `costume`-th entry (from 0) of `character`'s
 // costume panel (`costumes` entries; the Creation slot's character 32 lists the original characters), -1 for a

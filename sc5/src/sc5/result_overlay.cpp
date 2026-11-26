@@ -21,8 +21,9 @@ const ImVec4 kWhite(1.0f, 1.0f, 1.0f, 1.0f);
 const ImVec4 kDim(0.62f, 0.66f, 0.74f, 1.0f);
 const ImVec4 kChosen(0.20f, 0.42f, 0.85f, 1.0f);
 
-// The loser of a lobby match chooses the next one on the Results screen: REMATCH or CHARACTER SELECT, the cursor where
-// their UP and DOWN put it, on both players' screens
+// The loser of a match chooses the next one on the Results screen: REMATCH, CHARACTER SELECT or LEAVE, the cursor
+// where their UP and DOWN put it, on both players' screens, with the series' score, the time left and what each item
+// means; a match that won a ranked set says who won it instead
 class ResultChoiceDialog final : public rex::ui::ImGuiDialog {
  public:
   explicit ResultChoiceDialog(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
@@ -49,21 +50,42 @@ class ResultChoiceDialog final : public rex::ui::ImGuiDialog {
     ImGui::PushFont(framemeter::LargeFont(), px);
     if (ImGui::Begin("##sc5_result_choice", nullptr, flags)) {
       const int player = v.chooser + 1;
-      if (v.mine)
-        ImGui::TextColored(kGold, v.chosen ? "YOU CHOSE" : "YOU LOST: CHOOSE THE NEXT MATCH");
-      else if (v.chosen)
-        ImGui::TextColored(kGold, "PLAYER %d CHOSE", player);
-      else
-        ImGui::TextColored(kGold, "PLAYER %d CHOOSES THE NEXT MATCH", player);
-      for (int i = 0; i < 2; i++) {
-        const char* label = i ? "CHARACTER SELECT" : "REMATCH";
-        if (v.cursor == i)
-          ImGui::TextColored(v.chosen ? kChosen : kWhite, "> %s <", label);
-        else if (!v.chosen)
-          ImGui::TextColored(kDim, "  %s", label);
+      // the series so far: "RANKED SET 2 - 1 (FIRST TO 3)", "CASUAL 4 - 2"
+      if (v.series == "ranked")
+        ImGui::TextColored(kWhite, "RANKED SET  P1 %d - %d P2  (FIRST TO %d)", v.score[0], v.score[1], v.set_need);
+      else if (v.series == "casual")
+        ImGui::TextColored(kWhite, "CASUAL  P1 %d - %d P2", v.score[0], v.score[1]);
+      if (v.set_over) {
+        ImGui::TextColored(kGold, "PLAYER %d WINS THE SET", v.winner);
+        ImGui::TextColored(kDim, "Back to the menu");
+      } else {
+        if (v.mine)
+          ImGui::TextColored(kGold, v.chosen ? "YOU CHOSE"
+                                    : v.winner ? "YOU LOST: CHOOSE THE NEXT MATCH"
+                                               : "A DRAW: CHOOSE THE NEXT MATCH");
+        else if (v.chosen)
+          ImGui::TextColored(kGold, "PLAYER %d CHOSE", player);
+        else
+          ImGui::TextColored(kGold, "PLAYER %d CHOOSES THE NEXT MATCH", player);
+        static const char* const kLabels[3] = {"REMATCH", "CHARACTER SELECT", "LEAVE"};
+        for (int i = 0; i < 3; i++) {
+          if (v.cursor == i)
+            ImGui::TextColored(v.chosen ? kChosen : kWhite, "> %s <", kLabels[i]);
+          else if (!v.chosen)
+            ImGui::TextColored(kDim, "  %s", kLabels[i]);
+        }
+        // what the item under the cursor does, in plain words
+        const int other = 2 - v.chooser;  // the winner (player 2 after a draw), who keeps their fighter
+        if (v.cursor == 0)
+          ImGui::TextColored(kDim, "The same fighters on the same stage");
+        else if (v.cursor == 1)
+          ImGui::TextColored(kDim, "Player %d keeps %s; player %d picks again", other, v.kept.c_str(), player);
+        else
+          ImGui::TextColored(kDim, v.series == "ranked" ? "Leaving loses the set" : "No more matches");
+        if (v.mine && !v.chosen) ImGui::TextColored(kDim, "UP / DOWN, then A  (%d s)", v.seconds_left);
+        else if (!v.chosen) ImGui::TextColored(kDim, "%d s", v.seconds_left);
+        if (v.chosen) ImGui::TextColored(kDim, v.cursor == 2 ? "Back to the menu" : "The next match is coming");
       }
-      if (v.mine && !v.chosen) ImGui::TextColored(kDim, "UP / DOWN, then A");
-      if (v.chosen) ImGui::TextColored(kDim, "The next match is coming");
     }
     ImGui::End();
     ImGui::PopFont();
@@ -165,6 +187,46 @@ class PickDialog final : public rex::ui::ImGuiDialog {
   }
 };
 
+// The select screen after the loser chose CHARACTER SELECT: the winner keeps their fighter, which the screen picks for
+// them on both PCs (autopilot.h, KeepView). Said on the keeper's side of the screen (player 1's on the left, player
+// 2's on the right, as the select screen has them), large: who keeps whom, locked, and who picks again.
+class KeepDialog final : public rex::ui::ImGuiDialog {
+ public:
+  explicit KeepDialog(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  bool RepaintsContinuously() const override { return false; }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const autopilot::KeepView v = autopilot::KeepNow();
+    if (!v.shown || io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) return;
+    const float px = std::clamp(io.DisplaySize.y / 24.0f, 16.0f, 100.0f), scale = px / 10.0f;
+    const float x = v.keeper == 0 ? 0.25f : 0.75f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * x, io.DisplaySize.y * 0.16f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kBack);
+    ImGui::PushStyleColor(ImGuiCol_Border, kGold);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, std::max(2.0f, scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * scale, 5.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 2.0f * scale));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    ImGui::PushFont(framemeter::LargeFont(), px);
+    if (ImGui::Begin("##sc5_keep", nullptr, flags)) {
+      ImGui::TextColored(kGold, "PLAYER %d  WINNER", v.keeper + 1);
+      ImGui::TextColored(kWhite, v.mine ? "YOU KEEP %s" : "KEEPS %s", v.fighter.c_str());
+      ImGui::TextColored(v.picked ? kChosen : kGold, "LOCKED");
+      ImGui::TextColored(kDim, v.mine ? "Player %d picks a new fighter" : "Player %d: pick a new fighter",
+                         2 - v.keeper);
+    }
+    ImGui::End();
+    ImGui::PopFont();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+  }
+};
+
 // A round started again after the two games went out of step (net/netplay.cpp, RoundAgain): said to both players for a
 // few seconds, in the same large bold text, over the top of the fight
 class RoundAgainDialog final : public rex::ui::ImGuiDialog {
@@ -206,6 +268,7 @@ void Install(rex::ui::ImGuiDrawer* drawer) {
   new ResultChoiceDialog(drawer);  // a dialog keeps itself (rex/ui/imgui_dialog.h)
   new HeldOutDialog(drawer);
   new PickDialog(drawer);
+  new KeepDialog(drawer);
   new RoundAgainDialog(drawer);
 }
 

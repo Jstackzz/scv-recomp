@@ -85,9 +85,10 @@ bool g_known_read = false;
 // entries stay empty (SyncEntries)
 bool g_dropped = false;
 std::set<uint32_t> g_refused;
-// the player's own characters left out, for the player (HeldOutList)
+// the player's own characters left out, for the player (HeldOutList); those ImportOwn left out of a fresh save's
+// import, which every online session starts with
 std::mutex g_held_lock;
-std::vector<HeldOut> g_held;
+std::vector<HeldOut> g_held, g_import_held;
 void HoldOut(uint32_t n, const Record& r, const std::string& why) {
   std::lock_guard<std::mutex> lock(g_held_lock);
   g_held.push_back({int(n), r.size() > 9 ? int(r[9]) : -1, Name(r), PlainWhy(why)});
@@ -752,9 +753,34 @@ bool ReadWhole(const char* utf8, std::vector<uint8_t>& out) {
   return ok && got == kImageSize;
 }
 
+// SC5_CREATION_SAVE names a file of the game's own saves (SC5_USER_DIR): the game plays with the player's own save,
+// whose created characters are in its image already (and newer there than on disk while Creation is open)
+bool OwnSaveFile(const char* utf8) {
+  const auto wide = [](const char* s) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
+    std::wstring w(size_t(n > 0 ? n : 1), L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s, -1, w.data(), n);
+    w.resize(wcslen(w.c_str()));
+    return w;
+  };
+  const char* user = std::getenv("SC5_USER_DIR");
+  if (!user || !*user) return false;
+  wchar_t a[4096], b[4096];
+  if (!GetFullPathNameW(wide(utf8).c_str(), 4096, a, nullptr) || !GetFullPathNameW(wide(user).c_str(), 4096, b, nullptr))
+    return false;
+  std::wstring file(a), dir(b);
+  while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+  return file.size() > dir.size() && _wcsnicmp(file.c_str(), dir.c_str(), dir.size()) == 0 &&
+         (file[dir.size()] == L'\\' || file[dir.size()] == L'/');
+}
+
 void ImportOwn(uint32_t image) {
   const char* path = std::getenv("SC5_CREATION_SAVE");
   if (!path || !*path) return;
+  if (OwnSaveFile(path)) {
+    REXLOG_INFO("sc5 creation: SC5_CREATION_SAVE is this game's own save: its created characters are here already");
+    return;
+  }
   std::vector<uint8_t> save;
   if (!ReadWhole(path, save) || Be32(save.data()) != 0x00010000 || Be32(save.data() + 4) != kImageSize) {
     REXLOG_WARN("sc5 creation: the player's save {} cannot be read as a save: no created characters", path);
@@ -782,6 +808,8 @@ void ImportOwn(uint32_t image) {
     taken++;
   }
   REXLOG_INFO("sc5 creation: {} of the player's created characters in, {} refused", taken, refused);
+  std::lock_guard<std::mutex> lock(g_held_lock);
+  g_import_held = g_held;
 }
 
 }  // namespace
@@ -829,6 +857,40 @@ void OnHoldPoint() {
     REXLOG_INFO("sc5 creation: slot {} from {} ({}, type {}, style {})", n + 1, path, Name(r), TypeOf(r.data()), r[16]);
     n++;
   }
+}
+
+void BeginOnline() {
+  {
+    std::lock_guard<std::mutex> lock(g_held_lock);
+    g_held = g_import_held;
+  }
+  g_refused.clear();
+  g_dropped = false;  // DropRefused looks at them again at this session's first select screen
+  if (!SaveImage()) return;
+  int taken = 0, out = 0;
+  for (uint32_t n = 0; n < kSlots; n++) {
+    Record r;
+    if (!ReadRecord(n, r)) continue;
+    // slots 49 and 50 hold the other player's characters online; the player's own there wait offline
+    std::string why = n >= RemoteSlot(0) ? "slots 49 and 50" : CheckForm(r.data(), r.size());
+    if (why.empty()) {
+      taken++;
+      continue;
+    }
+    PutBe32(Host(Slot(n)) + kHeaderSet2, 0);  // no screen lists it this session (the save is put back at its end)
+    HoldOut(n, r, why);
+    out++;
+    REXLOG_WARN("sc5 creation: slot {} ({}) stays out online: {}", n + 1, Name(r),
+                n >= RemoteSlot(0) ? "slots 49 and 50 hold the other player's" : why);
+  }
+  REXLOG_INFO("sc5 creation: an online session with {} of the player's created characters ({} left out)", taken, out);
+}
+
+void EndOnline() {
+  g_refused.clear();
+  g_dropped = false;
+  std::lock_guard<std::mutex> lock(g_held_lock);
+  g_held.clear();
 }
 
 }  // namespace sc5::creation

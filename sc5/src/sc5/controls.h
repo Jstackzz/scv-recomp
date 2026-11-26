@@ -13,20 +13,18 @@
 //   right_shoulder = "rb"
 //   [ports]
 //   player2 = ""                 # player 2's controller (the offline versus) by its name; "" the second plugged in
-//   [fight]                      # what a button presses in a fight, of the game's own four buttons ("" nothing)
-//   lb = "A+B+K+G"
 //
 // Xbox 360 buttons: up down left right a b x y lb rb lt rt start back ls rs. PC controller buttons: south east west
 // north left_shoulder right_shoulder left_trigger right_trigger dpad_up dpad_down dpad_left dpad_right start back
 // left_stick right_stick misc paddle1-4 touchpad (the last six through SDL, which the SDK's state leaves out).
 //
-// [fight]: the player's own button settings for fights, in place of the game's Control Settings (which an online
-// game's fresh save keeps at Type A, and which offer only 13 of the 16 combinations). For each of a b x y lb rb lt rt
-// ls rs it names the game's buttons the button presses: any of A (horizontal attack), B (vertical), K (kick) and G
-// (guard) joined by +. A button not listed keeps the game's own setting. Online the player's pad turns into Type A's
-// face buttons before the netplay sends it (ToDefaultLayout), so both games and the spectators see the combination
-// the player meant whatever each one set; offline the battle's conversion of player 1's pad takes it (controls.cpp's
-// hook of sub_82172068).
+// What a button presses in a fight is the game's own Control Settings (Options, as on the console: the types A, B, C
+// and the player's own), in every mode. Offline the game converts each pad with its own settings. Online the player's
+// own pad turns into Type A's face buttons on their own PC before the netplay sends it (ToDefaultLayout, by their
+// settings), and both games convert both players' inputs with Type A (controls.cpp's hook of sub_82172068), so each
+// player's buttons do what they set on their own PC, the other game sees exactly the combination they meant, and
+// neither game's settings play any part in the other player's inputs. (Until 0.1.7 the launcher's [fight] did this,
+// the online games' fresh saves keeping Type A.)
 #include <cstdint>
 #include <string>
 
@@ -45,10 +43,12 @@ std::string FilePath();
 // The game's own buttons in a fight, as its battle input carries them (sub_82172068)
 constexpr uint8_t kGameA = 1, kGameB = 2, kGameK = 4, kGameG = 8;
 // The player's own pad in the game's default layout (Type A: X horizontal attack, Y vertical, B kick, A guard), for the
-// netplay: each button [fight] sets presses the face buttons that make its combination there and nothing else. The
-// game's Type A then turns them into the combination on both PCs. Buttons [fight] leaves alone stay as they are.
+// netplay: each of A B X Y LB LT RB RT pressed presses the face buttons that make what the player's own Control
+// Settings give it (their controller's, pad 0's), and nothing of its own (the triggers 0). The game's Type A then turns
+// them into those combinations on both PCs; the game's shortcuts come out the same as their buttons pressed together.
+// Main thread (it reads the game's settings).
 void ToDefaultLayout(sc5::input::Pad& pad);
-// [fight] as one line for the log ("lb=A+B+K+G lt=K+G"; "" when it sets nothing)
+// the player's own Control Settings as one line for the log ("Control Settings type B: a=G b=A ...")
 std::string FightText();
 
 }  // namespace sc5::controls

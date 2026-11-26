@@ -88,6 +88,12 @@ REX_HOOK_RAW(sub_8244C6A8) {
     const std::vector<uint32_t> addresses = SetupAddresses();
     if (g_side == 0) {
       for (uint32_t s = 0; s < 2; s++) Put(rec + s * kSide + kRounds, uint32_t(g_wins.load()));
+      // the console's round time online, whatever player 1 set in VS Battle earlier in this game (the autopilot
+      // pressed VS Battle's Default on the way; this holds should that have been missed)
+      if (Get(rec + kRoundTime) != 60) {
+        REXLOG_WARN("sc5 versus: round time {} in player 1's VS settings: 60 online", Get(rec + kRoundTime));
+        Put(rec + kRoundTime, 60);
+      }
       sc5::net::Setup mine{Get(rec + kStage), Get(rec + kRoundTime), uint32_t(g_wins.load()), {}};
       for (uint32_t a : addresses) mine.words.push_back(Get(a));
       sc5::net::SendSetup(mine);

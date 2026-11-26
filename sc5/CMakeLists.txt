@@ -58,6 +58,7 @@ set(SC5_SOURCES
     src/sc5/result_overlay.cpp
     src/sc5/hud.cpp
     src/sc5/mirror.cpp
+    src/sc5/ownsave.cpp
 )
 
 # The player package's ready-made sc5.exe: everything but the game's code, which each player's PC compiles from their
