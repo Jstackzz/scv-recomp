@@ -101,6 +101,13 @@ QPushButton#Primary[searching="true"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2A3448, stop:1 #151C2A); border-color: #5D6982;
 }
 QPushButton#Primary[compact="true"] { font-size: 11pt; padding: 6px 14px; }  /* beside plain buttons in a row */
+/* a choice read from across a room (the preferred side): large white text, the one chosen bright blue in gold */
+QPushButton#SideChoice {
+    font-family: "Bahnschrift"; font-size: 18pt; font-weight: 700; color: #FFFFFF;
+    background: #121A2B; border: 2px solid #5D6982; border-radius: 6px; padding: 12px 28px;
+}
+QPushButton#SideChoice:hover { border-color: #FFFFFF; }
+QPushButton#SideChoice:checked { background: #1F56C4; border: 3px solid #F0C75A; }
 QComboBox, QLineEdit, QSpinBox, QPlainTextEdit, QTextBrowser {
     background: #0A0F1A; border: 1px solid #2A3650; border-radius: 4px; padding: 5px 8px;
     selection-background-color: #1F4A8A; selection-color: #FFFFFF;

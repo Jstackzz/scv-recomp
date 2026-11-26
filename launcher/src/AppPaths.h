@@ -86,6 +86,9 @@ bool vsync();
 bool adaptiveSync();  // with vsync, a G-SYNC or FreeSync monitor: the game's frames may tear for it to follow them
 int brightness();     // percent, 100 as the game draws it
 bool frameData();     // practice shows player 1's frame data (SC5_FRAMEDATA)
+// the side the player wants to start a fight on, whichever player they are: "off", "left" or "right"
+// (SC5_PREFERRED_SIDE: the game shows the fight mirrored when they would start on the other side)
+QString preferredSide();
 // the game's sound levels, percent of the game's own (100), 0 to 150: "master", "music", "effects", "voices"
 // (SC5_VOLUME_<NAME>; the display file's volume_<name>)
 QStringList volumeNames();
