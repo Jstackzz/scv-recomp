@@ -28,11 +28,13 @@ async def test_lobby_create_join_ready_start(server, connect, udp_peers):
     code = lobby["id"]
     assert len(code) == 5 and lobby["locked"] and lobby["state"] == "open"
     assert lobby["members"] == [{"name": "Goro", "character": "Scorpion", "ready": False, "host": True,
-                                 "spectator": False, "link": None, "ping": None, "title": "Novice",
+                                 "spectator": False, "link": None, "ping": None, "wins": 0, "title": "Novice",
                                  "version": "0.1.0", "build": None}]
+    assert lobby["password"] == "pw-123"  # its host's state has the password (SCV 0.1.8), nobody else's
 
     listed = await guest.request({"type": "lobby_list", "game": "sc5"})
     assert [(lb["id"], lb["players"], lb["locked"]) for lb in listed["lobbies"]] == [(code, 1, True)]
+    assert "password" not in listed["lobbies"][0]
     assert (await guest.request({"type": "lobby_list"}))["lobbies"] == listed["lobbies"]  # no game named: all
     with pytest.raises(ServerError) as exc:
         await guest.request({"type": "lobby_list", "game": "sc4"})
@@ -47,8 +49,9 @@ async def test_lobby_create_join_ready_start(server, connect, udp_peers):
     joined = await guest.request({"type": "lobby_join", "lobby": code.lower(), "password": "pw-123",
                                   "character": "Kenshi"})
     assert [m["name"] for m in joined["lobby"]["members"]] == ["Goro", "ShaoKahn"]
+    assert "password" not in joined["lobby"]
     pushed = await host.expect("lobby", pred=lambda m: len(m["lobby"]["members"]) == 2)
-    assert pushed["lobby"]["state"] == "full"
+    assert pushed["lobby"]["state"] == "full" and pushed["lobby"]["password"] == "pw-123"
 
     third = await connect("Moloch")
     with pytest.raises(ServerError) as exc:
@@ -102,13 +105,20 @@ async def test_lobby_create_join_ready_start(server, connect, udp_peers):
     assert (gh["p1"], gh["p2"], gh["p1_name"], gh["lobby"]) == ("Scorpion", "Mileena", "Goro", code)
     assert (gh["p1_title"], gh["p2_title"]) == ("Novice", "Novice")  # neither has played ranked: the start
     assert gh["ranked"] is False
+    assert (gh["series_kind"], gh["set"], gh["set_p1"], gh["set_p2"]) == ("lobby", 0, 0, 0)
 
-    # results finish the match; the lobby opens again with ready flags cleared
+    # results finish the match; the lobby opens again with ready flags cleared, and the winner's win in its list
+    for conn in (host, guest):
+        conn.take_all("lobby")
     for conn in (host, guest):
         await conn.request({"type": "result", "match": gh["match"], "winner": 2, "p1_rounds": 1, "p2_rounds": 2})
     assert (await host.expect("match_result"))["status"] == "agreed"
     reopened = await host.expect("lobby", pred=lambda m: m["lobby"]["state"] == "full" and m["lobby"]["match"] is None)
     assert [m["ready"] for m in reopened["lobby"]["members"]] == [False, False]
+    assert [m["wins"] for m in reopened["lobby"]["members"]] == [0, 1]
+    assert reopened["lobby"]["password"] == "pw-123"
+    guest_view = await guest.expect("lobby", pred=lambda m: m["lobby"]["match"] is None)
+    assert "password" not in guest_view["lobby"]
 
 
 async def test_host_leaving_hands_over_and_empty_lobby_closes(server, connect):
@@ -352,6 +362,7 @@ async def test_the_loser_chooses_the_next_lobby_match_at_the_result_screens(serv
         go = await conn.expect("match_go", match=found["match"])
         assert go["match"] != before["match"] and go["seed"] != before["seed"] and go["remote"] == before["remote"]
         assert (go["p1"], go["p2"]) == ("3.0", "0.1")
+        assert (go["set_p1"], go["set_p2"]) == (1, 0)  # each one's wins in the lobby: the result screen's score
     for conn in (host, guest):
         await conn.request({"type": "result", "match": go["match"], "winner": 2, "p1_rounds": 0, "p2_rounds": 2,
                             "p1_char": "3.0", "p2_char": "0.1"})
@@ -366,6 +377,7 @@ async def test_the_loser_chooses_the_next_lobby_match_at_the_result_screens(serv
         assert found["in_place"] is True
         go = await conn.expect("match_go", match=found["match"])
         assert (go["p1"], go["p2"]) == ("-", "0.1") and go["keep"] == 2 and go["series_kind"] == "lobby"
+        assert (go["set_p1"], go["set_p2"]) == (1, 1)
     for conn in (host, guest):
         await conn.request({"type": "result", "match": go["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0})
     await host.expect("match_result", match=go["match"])
@@ -400,3 +412,56 @@ async def test_king_of_the_hill_never_goes_on_from_the_result_screens(server, co
         await conn.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "rematch"})
     for conn in (host, guest):
         assert (await conn.expect("match_found", timeout=3))["in_place"] is False
+
+
+async def test_wrong_passwords_lock_the_lobby_for_that_player_a_while(server, connect):
+    """A private lobby's password is 4 digits: five wrong ones from one account, or from one address, and that lobby
+    turns their joins away (the right password too) for a while, with an error the launcher puts in plain words; other
+    lobbies are not touched, and the counts go with the lobby."""
+    server.cfg.lobby_lock_seconds = 0.6
+    host, guesser, friend = await connect("Taki"), await connect("Voldo"), await connect("Kilik")
+    code = (await host.request(create_msg(password="4821")))["lobby"]["id"]
+    other = (await friend.request(create_msg(password="1111")))["lobby"]["id"]
+    for n in range(5):
+        with pytest.raises(ServerError) as exc:
+            await guesser.request({"type": "lobby_join", "lobby": code, "password": f"{1000 + n}"})
+        assert exc.value.code == "bad_lobby_password"
+    for conn, password in ((guesser, "4821"), (friend, "4821")):  # the right one too, and the same address's others
+        with pytest.raises(ServerError) as exc:
+            await conn.request({"type": "lobby_join", "lobby": code, "password": password})
+        assert exc.value.code == "too_many_tries"
+        assert exc.value.msg["message"] == "Too many wrong passwords. Try again in a few minutes."
+    # another lobby is another count; nonsense is answered, never raised out of the handler
+    with pytest.raises(ServerError) as exc:
+        await guesser.request({"type": "lobby_join", "lobby": other, "password": "0000"})
+    assert exc.value.code == "bad_lobby_password"
+    with pytest.raises(ServerError) as exc:
+        await guesser.request({"type": "lobby_join", "lobby": code, "password": 4821})
+    assert exc.value.code in ("bad_request", "too_many_tries")
+    await asyncio.sleep(0.7)  # the lock is over: the right password lets them in
+    joined = await guesser.request({"type": "lobby_join", "lobby": code, "password": "4821"})
+    assert [m["name"] for m in joined["lobby"]["members"]] == ["Taki", "Voldo"]
+    assert server.lobbies[code].password_fails  # kept with the lobby, and gone with it
+    for conn in (guesser, host):
+        await conn.request({"type": "lobby_leave"})
+    assert code not in server.lobbies
+
+
+async def test_the_host_has_the_password_back_after_a_drop_and_a_new_host_gets_it(server, connect):
+    """The host's own state carries a private lobby's password: after a dropped connection their launcher has it
+    again, and a member who becomes host learns it (nobody else ever gets it)."""
+    host, guest = await connect("Taki"), await connect("Kilik")
+    code = (await host.request(create_msg(password="7310")))["lobby"]["id"]
+    joined = await guest.request({"type": "lobby_join", "lobby": code, "password": "7310"})
+    assert "password" not in joined["lobby"]
+    token = host.account["token"]
+    await host.close()
+    handed = await guest.expect("lobby", pred=lambda m: len(m["lobby"]["members"]) == 1)
+    assert handed["lobby"]["host"] == "Kilik" and handed["lobby"]["password"] == "7310"  # the new host's
+    back = await connect()
+    await back.request({"type": "auth", "token": token})
+    pushed = await back.expect("lobby")
+    assert [m["name"] for m in pushed["lobby"]["members"]] == ["Kilik", "Taki"] and "password" not in pushed["lobby"]
+    await guest.request({"type": "lobby_leave"})
+    mine = await back.expect("lobby", pred=lambda m: m["lobby"]["host"] == "Taki")
+    assert mine["lobby"]["password"] == "7310"

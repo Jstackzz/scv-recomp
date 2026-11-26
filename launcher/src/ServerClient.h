@@ -20,6 +20,9 @@ public:
     // "host:port", "tls://host:port" or (development) "tcp://host:port"
     void connectTo(const QString& address, const QString& fingerprint);
     void disconnectFromServer();
+    // development (--drop-at-result): the connection drops as a network would drop it, and comes back by itself (the
+    // login's token signs in again)
+    void dropForTest();
     void setResumeToken(const QString& token) { resumeToken_ = token; }
 
     State state() const { return state_; }

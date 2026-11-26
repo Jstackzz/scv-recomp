@@ -89,6 +89,7 @@ private:
     QString lobbyText() const;
     QJsonObject me() const;  // this player's entry in the lobby's members
     QString lobbyOpponent() const;
+    int lobbyWinsOf(const QString& name) const;  // a member's wins in the lobby: the server's, else the ones seen here
     void updateVersionProblem();  // the lobby's players whose launchers cannot play this one's (their versions)
 
     ServerClient* server_;
@@ -125,6 +126,7 @@ private:
     bool retriedJoin_ = false, switching_ = false;
     QTimer rejoinGrace_;       // a spectator's dropped connection: back in the lobby within this, or watching stops
     bool watchingHere_ = false;
+    bool gameAway_ = false;    // the game said `away` last (its online menus left): a lobby's Ready taken back once
     QJsonArray board_;
     qint64 boardAt_ = 0;
     QJsonObject message_{{QStringLiteral("id"), 0}, {QStringLiteral("kind"), QStringLiteral("info")},

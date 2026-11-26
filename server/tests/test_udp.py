@@ -169,6 +169,7 @@ async def test_relay_failure_cancels(server, connect, udp_peers):
 async def test_relay_route_ends_with_the_match(server, connect, udp_peers):
     server.cfg.relay_only = True
     server.cfg.relay_linger = 0.1
+    server.cfg.relay_choice_linger = 0  # no wait at the result screens for the loser's choice (below)
     a, b = await connect("HsuHao"), await connect("Darrius")
     ua, ub = await udp_peers(), await udp_peers()
     await a.request(queue_msg())
@@ -193,6 +194,7 @@ async def test_relay_carries_the_match_end_after_the_results(server, connect, ud
     # the games report the result at the round that decides the match and play its end on through the relay (the
     # knockout, the winner's pose) for up to 30 s before their launchers park them
     server.cfg.relay_only = True
+    server.cfg.relay_choice_linger = 0  # no wait at the result screens for the loser's choice (below)
     a, b = await connect("Shujinko"), await connect("Onaga")
     ua, ub = await udp_peers(), await udp_peers()
     await a.request(queue_msg())
@@ -213,6 +215,79 @@ async def test_relay_carries_the_match_end_after_the_results(server, connect, ud
     assert data == packet
     server._tick(time.time() + server.cfg.relay_linger + 1)
     assert not server.relay_routes
+
+
+async def test_a_relayed_match_goes_on_from_the_result_screens(server, connect, udp_peers):
+    """SCV 0.1.8: a match through the relay ends at the games' result screens too, for the loser's choice: its routes
+    outlive it for that (relay_choice_linger), and the next match in place takes them on, through the relay again,
+    neither player learning the other's address."""
+    server.cfg.relay_only = True
+    assert "relay_choice" in P.FEATURES
+    a, b = await connect("Cassandra"), await connect("Sophitia")
+    ua, ub = await udp_peers(), await udp_peers()
+    assert "relay_choice" in a.welcome["features"]
+    await a.request(queue_msg())
+    await b.request(queue_msg())
+    fa, fb = await a.expect("match_found"), await b.expect("match_found")
+    await hello_and_accept(server, a, ua, fa)
+    await hello_and_accept(server, b, ub, fb)
+    pa, pb = await a.expect("match_peer"), await b.expect("match_peer")
+    ga, gb = await relay_to_go(server, a, b, ua, ub, pa, pb)
+    relay = f"127.0.0.1:{server.udp_port}"
+    for conn in (a, b):
+        await conn.request({"type": "result", "match": ga["match"], "winner": 1, "p1_rounds": 2, "p2_rounds": 0,
+                            "p1_char": "3.0", "p2_char": "7.1"})
+    series = (await a.expect("series", state="between"))["series"]
+    # the loser chooses for up to 52 s: the routes are there long after relay_linger
+    server._tick(time.time() + server.cfg.relay_linger + 5)
+    assert len(server.relay_routes) == 2
+    for conn in (a, b):
+        msg = {"type": "series_ready", "series": series, "ready": True, "choice": "rematch", "in_place": True}
+        assert (await conn.request(msg))["type"] == "series_ack"
+    for conn, before in ((a, ga), (b, gb)):
+        found = await conn.expect("match_found")
+        assert found["in_place"] is True
+        go = await conn.expect("match_go", match=found["match"])
+        assert go["remote"] == before["remote"] == relay and go["match"] != before["match"]
+    assert {r.match for r in server.relay_routes.values()} == {go["match"]}
+    assert all(r.expires is None for r in server.relay_routes.values())
+    assert server.matches[go["match"]].relay is not None
+    while not ub.raw.empty():
+        ub.raw.get_nowait()
+    assert ua.transport is not None
+    ua.transport.sendto(b"SC5R\x07\x00\x02\x00", ("127.0.0.1", server.udp_port))  # the next match's packets go on
+    data, _ = await asyncio.wait_for(ub.raw.get(), 2)
+    assert data == b"SC5R\x07\x00\x02\x00"
+
+
+async def test_a_relayed_lobby_match_goes_on_from_the_result_screens(server, connect, udp_peers):
+    server.cfg.lobby_countdown = 0.2
+    a, b = await connect("Taki"), await connect("Kilik")
+    code = (await a.request({"type": "lobby_create", "name": "relayed", "game": "sc5", "mode": "versus",
+                             "region": "eu", "character": ""}))["lobby"]["id"]
+    await b.request({"type": "lobby_join", "lobby": code, "character": ""})
+    await a.request({"type": "lobby_ready", "ready": True, "relay": True})  # the host hides their address
+    await b.request({"type": "lobby_ready", "ready": True})
+    ua, ub = await udp_peers(), await udp_peers()
+    fa, fb = await a.expect("match_found"), await b.expect("match_found")
+    await hello_and_accept(server, a, ua, fa)
+    await hello_and_accept(server, b, ub, fb)
+    pa, pb = await a.expect("match_peer"), await b.expect("match_peer")
+    assert pa["relay"] is True
+    ga, gb = await relay_to_go(server, a, b, ua, ub, pa, pb)
+    for conn in (a, b):
+        await conn.request({"type": "result", "match": ga["match"], "winner": 2, "p1_rounds": 0, "p2_rounds": 2,
+                            "p1_char": "3.0", "p2_char": "7.1"})
+    await a.expect("match_result", match=ga["match"])
+    for conn in (a, b):
+        await conn.request({"type": "lobby_ready", "ready": True, "in_place": True, "choice": "select", "relay": True})
+    for conn in (a, b):
+        found = await conn.expect("match_found")
+        assert found["in_place"] is True
+        go = await conn.expect("match_go", match=found["match"])
+        assert go["remote"] == f"127.0.0.1:{server.udp_port}"
+        assert (go["p1"], go["p2"], go["keep"], go["set_p1"], go["set_p2"]) == ("-", "7.1", 2, 0, 1)
+    assert {r.match for r in server.relay_routes.values()} == {go["match"]}
 
 
 async def test_relay_is_rate_limited(server, connect, udp_peers):
@@ -329,6 +404,7 @@ async def test_a_player_without_udp_plays_through_its_connection(server, connect
 
 async def test_two_tunnelled_players_and_the_routes_end_with_the_match(server, connect, udp_peers):
     server.cfg.relay_linger = 0.1
+    server.cfg.relay_choice_linger = 0  # no wait at the result screens for the loser's choice
     a, b = await connect("Jade"), await connect("Tanya")
     ua, ub = await udp_peers(), await udp_peers()
     await a.request(queue_msg())

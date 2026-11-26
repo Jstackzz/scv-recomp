@@ -133,7 +133,17 @@ class ServerConfig:
     rematch_timeout: float = 75.0  # 60 until SCV 0.1.8: the loser's choice in the game takes up to 52 s
     set_next_timeout: float = 90.0  # ranked: both games ready for the set's next match within this, or the one
                                     # that is not loses the set (the last match's ending plays first)
-    set_rejoin_grace: float = 20.0  # a player whose launcher drops between two matches has this long to be back
+    # a player whose launcher drops between two matches has at least this long to be back (the loser's choice on the
+    # game's result screen can come up to 52 s after the result, and a launcher that is back waits for it): the time
+    # left between the matches is never cut by a drop, only made longer, to this long after the drop at the most
+    set_rejoin_grace: float = 75.0  # 20 until SCV 0.1.8
+    # a relayed match whose games stay at their result screens for the loser's choice: its routes outlive it this
+    # long (the choice, then the next match from there on the same routes), instead of relay_linger
+    relay_choice_linger: float = 120.0
+    # a private lobby's password: this many wrong ones from one account or one address, and that lobby refuses
+    # their joins for lobby_lock_seconds (a 4-digit password is no match for a script otherwise)
+    lobby_password_tries: int = 5
+    lobby_lock_seconds: float = 300.0
     lobby_rejoin_grace: float = 60.0  # a player whose connection drops gets their lobby place back if back this soon
     series_max_no_contest: int = 3  # matches in a row that do not count end the series (a set without Elo change)
     relay: bool = True           # two players who cannot reach each other play through this server's UDP port
@@ -361,7 +371,16 @@ class Series:
     winner_keeps: tuple[SeriesPlayer, str] | None = None
     death_traps: bool = True
     last_rtt: int = 0  # the last match's ping between the two
-    last_direct: bool = False  # the last match went straight between the two (no relay, no tunnel): in place possible
+    # the last match's route still holds for its two games at their result screens (straight between the two, or
+    # through this server's relay, whose routes linger for it): the next match can start there (in place)
+    last_direct: bool = False
+    # the last match went through the relay: its two ends by account (endpoints, or a tunnelled player's account),
+    # which the next match in place takes on
+    last_relay: dict[int, tuple[str, int] | int] | None = None
+    # whose choice the next match is on the game's result screen: the last match's loser (None after a draw, a match
+    # that did not count or one called off); a ranked set nobody readied for in time is lost by them
+    chooser: SeriesPlayer | None = None
+    between_since: float = 0.0  # when the wait for the next match began
 
     def player_for(self, account_id: int | None) -> SeriesPlayer | None:
         for p in self.players:
@@ -450,6 +469,12 @@ class Lobby:
     last_pings: dict[int, dict[str, Any]] = field(default_factory=dict)
     last_rtt: int = 0
     last_keeper: int = 0  # the side that keeps its fighter through CHARACTER SELECT (the last match's winner)
+    last_relay: dict[int, tuple[str, int] | int] | None = None  # the last match's relay ends by account, if relayed
+    # each member's match wins in this lobby (accounts): its member list shows them, and a match's start line too (the
+    # game's result screen shows the score)
+    wins: dict[int, int] = field(default_factory=dict)
+    # wrong passwords, by "a<account>" and "ip<address>": [how many, the last one's time, locked until]
+    password_fails: dict[str, list[float]] = field(default_factory=dict)
 
     @property
     def result_choice(self) -> bool:
@@ -493,6 +518,7 @@ class Lobby:
         for m in self.members:
             entry = {"name": m.session.name, "character": m.character, "ready": m.ready, "host": m.session is self.host,
                      "spectator": m.spectator, "link": m.link or None, "ping": m.server_rtt,
+                     "wins": self.wins.get(m.session.account_id, 0) if m.session.account_id is not None else 0,
                      "title": title_of(m.session) if title_of else None,
                      # their launcher's version and build: two versions cannot play each other (the lobby says so)
                      "version": m.session.client_version or None, "build": m.session.client_build or None}
@@ -829,7 +855,9 @@ class Server:
         for ip in [ip for ip, q in self.login_failures.items() if not q or q[-1] < now - window]:
             del self.login_failures[ip]
         for account_id in [a for a, seat in self.lobby_seats.items() if seat.until < now]:
-            del self.lobby_seats[account_id]
+            lobby = self.lobby_seats.pop(account_id).lobby
+            if not any(mem.session.account_id == account_id for mem in lobby.members):
+                lobby.wins.pop(account_id, None)  # not back in time: their wins in it go
         self.ping_cache.prune(now)
 
     # --- connection handling ----------------------------------------------------------------------
@@ -1198,8 +1226,13 @@ class Server:
             series = self.series_of.get(s.account_id)
             sp = series.player_for(s.account_id) if series is not None else None
             if series is not None and sp is not None and series.state == "between":
+                # the loser's choice on the game's result screen may still be to come (a launcher that is back waits
+                # for it before it readies): the time left is never cut, and is at least set_rejoin_grace from the
+                # drop; never more than that past the usual wait, so dropping again and again holds nobody up for long
                 sp.ready = False
-                series.deadline = min(series.deadline, time.time() + self.cfg.set_rejoin_grace)
+                now = time.time()
+                cap = series.between_since + self._between_wait(series) + self.cfg.set_rejoin_grace
+                series.deadline = max(series.deadline, min(now + self.cfg.set_rejoin_grace, cap))
                 self._send_series(series)
         if s.udp_token is not None:
             self.by_udp_token.pop(s.udp_token, None)
@@ -1747,6 +1780,46 @@ class Server:
                 counts.append(f"{self._relay_text(end)} sent {route.packets} ({route.dropped} dropped)")
         log.info("match %s relay: %s", m.id, ", ".join(counts))
 
+    def _route_kept(self, m: Match, status: str) -> bool:
+        """A match played to its end whose two games stay at their result screens on its route, for the loser's
+        choice and the next match from there: straight between them, or through the relay (SCV 0.1.8: a player who
+        hides their address, a tunnelled one), whose routes then outlive the match for relay_choice_linger."""
+        if status not in ("agreed", "draw") or not all(p.ping is not None and p.ping.get("ok") for p in m.players):
+            return False
+        if m.relay is not None:
+            self._linger_relay(m, self.cfg.relay_choice_linger)
+        return True
+
+    def _linger_relay(self, m: Match, seconds: float) -> None:
+        if m.relay is None:
+            return
+        expires = time.time() + max(seconds, self.cfg.relay_linger)
+        for end in m.relay:
+            route = self.tunnel_routes.get(end) if isinstance(end, int) else self.relay_routes.get(end)
+            if route is not None and route.match == m.id:
+                route.expires = expires
+
+    @staticmethod
+    def _relay_ends(m: Match) -> dict[int, tuple[str, int] | int] | None:
+        """A relayed match's two ends by account, for the next match from its result screens (None: not relayed)."""
+        if m.relay is None:
+            return None
+        return {p.account_id: end for p, end in zip(m.players, m.relay)}
+
+    def _resume_relay(self, m: Match, by_account: dict[int, tuple[str, int] | int]) -> None:
+        """The next match from the result screens of a relayed one: the same two ends, the routes this match's now
+        (the games go on sending where they did)."""
+        ends = (by_account[m.players[0].account_id], by_account[m.players[1].account_id])
+        m.relay = ends
+        for src, dst in ((ends[0], ends[1]), (ends[1], ends[0])):
+            route = RelayRoute(dst, m.id, tokens=self.cfg.relay_burst, last=time.monotonic())
+            if isinstance(src, int):
+                self.tunnel_routes[src] = route
+            else:
+                self.relay_routes[src] = route
+        for p, end in zip(m.players, ends):
+            p.tunnel = isinstance(end, int)
+
     def _go(self, m: Match, rtt: int, now: float) -> None:
         assert self.db is not None
         m.state = "playing"
@@ -1974,6 +2047,8 @@ class Server:
             lobby = m.lobby
             if status == "agreed":
                 w, lose = (p1, p2) if winner == 1 else (p2, p1)
+                if any(mem.session.account_id == w.account_id for mem in lobby.members):  # still in it
+                    lobby.wins[w.account_id] = lobby.wins.get(w.account_id, 0) + 1
                 self._lobby_match_over(m.lobby, m, w, lose, rate=True)
             elif fault is not None:
                 self._lobby_match_over(m.lobby, m, m.other(fault), fault)
@@ -1983,15 +2058,15 @@ class Server:
                 if says_draw:
                     self._lobby_note(lobby, f"A draw: {p1.name} and {p2.name} play again.")
             # the two games stay at their result screens, where the loser chooses the next match (a versus lobby's
-            # match that went straight between them): what the next one needs to start from there
-            direct = (status in ("agreed", "draw") and m.relay is None and not any(p.tunnel for p in m.players)
-                      and all(p.ping is not None and p.ping.get("ok") for p in m.players))
-            if lobby.result_choice and direct:
+            # match whose route still holds: straight between them, or through the relay): what the next one needs
+            # to start from there
+            if lobby.result_choice and self._route_kept(m, status):
                 lobby.last_sides = (p1.account_id, p2.account_id)
                 same = r1.get("fighters") == r2.get("fighters")
                 lobby.last_picks = r1.get("fighters") if same else None
                 lobby.last_pings = {p.account_id: dict(p.ping) for p in m.players if p.ping is not None}
                 lobby.last_rtt = m.rtt_ms
+                lobby.last_relay = self._relay_ends(m)
                 # CHARACTER SELECT next: the winner keeps their fighter (player 2 after a draw: player 1 chose)
                 lobby.last_keeper = winner if status == "agreed" and winner in (1, 2) else 2
         elif m.from_queue or m.series is not None:
@@ -2056,8 +2131,12 @@ class Server:
         series.last_picks = fighters
         # the route the two games still hold, should both want the next match where they are (at the result screen)
         series.last_rtt = m.rtt_ms
-        series.last_direct = (status in ("agreed", "draw") and m.relay is None and not any(p.tunnel for p in m.players)
-                              and all(p.ping is not None and p.ping.get("ok") for p in m.players))
+        series.last_direct = (m.relay is None or self._result_choice(m.mode)) and self._route_kept(m, status)
+        series.last_relay = self._relay_ends(m) if series.last_direct else None
+        # whose choice the next match is (the loser's; nobody's after a draw or a match that did not count)
+        series.chooser = None
+        if status == "agreed" and winner in (1, 2):
+            series.chooser = series.player_for(m.players[2 - winner].account_id)
         for mp in m.players:
             sp = series.player_for(mp.account_id)
             if sp is not None:
@@ -2117,14 +2196,21 @@ class Server:
             p.ready = False
             p.choice = ""
             p.in_place = False
-        series.deadline = now + (self.cfg.set_next_timeout if series.ranked else self.cfg.rematch_timeout)
+        series.between_since = now
+        series.deadline = now + self._between_wait(series)
         self._send_series(series)
+
+    def _between_wait(self, series: Series) -> float:
+        return self.cfg.set_next_timeout if series.ranked else self.cfg.rematch_timeout
 
     def _series_match_cancelled(self, m: Match, blame: set[int] | frozenset[int], now: float) -> None:
         series = m.series
         if series is None or series.state == "over" or series.match is not m:
             return
         series.match = None
+        series.chooser = None  # no result screen: nobody's choice
+        series.last_direct = False
+        series.last_relay = None
         gone = [series.player_for(p.account_id) for p in m.players if p.side in blame]
         if series.ranked and len(gone) == 1 and gone[0] is not None:
             self._leave_series(series, gone[0], now)  # the one who did not show up for it
@@ -2205,6 +2291,8 @@ class Server:
                 sp = series.player_for(mp.account_id)
                 assert sp is not None and sp.last_ping is not None
                 mp.ping = dict(sp.last_ping)
+            if series.last_relay is not None and all(mp.account_id in series.last_relay for mp in players):
+                self._resume_relay(m, series.last_relay)  # through the relay as the last match was
             self._go(m, series.last_rtt, now)
 
     def _leave_series(self, series: Series, p: SeriesPlayer, now: float) -> None:
@@ -2308,8 +2396,15 @@ class Server:
             if series.state != "between" or now < series.deadline:
                 continue
             waiting = [p for p in series.players if not p.ready]
+            counted = any(p.wins for p in series.players)
             if series.ranked and len(waiting) == 1:
                 self._leave_series(series, waiting[0], now)  # the other was there for the next match
+            elif series.ranked and counted and len(waiting) == 2 and series.chooser is not None:
+                # neither came back: the next match was the last match's loser's to choose (their launcher closed,
+                # killed or off the network at the result screen), so the set is theirs lost, as a LEAVE would be
+                log.info("set %s: nobody ready in time, %s's choice: %s loses it", series.id, series.chooser.name,
+                         series.chooser.name)
+                self._end_series(series, "forfeit", left=series.chooser, now=now)
             else:
                 self._end_series(series, "timeout", now=now)
 
@@ -2328,10 +2423,18 @@ class Server:
         state = lobby.full_state(lambda s: self._title_of(s.account_id, lobby.game, lobby.mode),
                                  lambda s: self._respect_of(s.account_id, lobby.game, lobby.mode))
         for member in lobby.members:
-            out = {"type": "lobby", "lobby": state}
+            out = {"type": "lobby", "lobby": self._lobby_state_for(lobby, state, member.session)}
             if reply_to is not None and member.session is reply_to[0] and "id" in reply_to[1]:
                 out["id"] = reply_to[1]["id"]
             member.session.send(out)
+
+    @staticmethod
+    def _lobby_state_for(lobby: Lobby, state: dict[str, Any], s: Session) -> dict[str, Any]:
+        """The lobby's state as one member gets it: its host also gets the password (a private lobby's, which they
+        give their friend: back after a dropped connection, and for a member who became host), nobody else."""
+        if lobby.host is s and lobby.password:
+            return {**state, "password": lobby.password}
+        return state
 
     def _lobby_countdown(self, lobby: Lobby) -> None:
         """Both players ready and no match: it starts by itself once a 3-2-1 countdown has run, which anything that
@@ -2376,6 +2479,7 @@ class Server:
         lobby.match = None
         lobby.last_sides = lobby.last_picks = None  # a match that ended at its result screens sets them again after
         lobby.last_pings = {}
+        lobby.last_relay = None
         # Online Practice goes on: back to the select screen, the next match counts down by itself (a player who wants
         # out un-readies or leaves)
         keep = lobby.mode in P.LOBBY_ONLY_MODES
@@ -2740,7 +2844,7 @@ class Server:
         if s.lobby is lobby:  # already in it: its state again, nothing changes
             state = lobby.full_state(lambda m: self._title_of(m.account_id, lobby.game, lobby.mode),
                                      lambda m: self._respect_of(m.account_id, lobby.game, lobby.mode))
-            self._reply(s, msg, {"type": "lobby", "lobby": state})
+            self._reply(s, msg, {"type": "lobby", "lobby": self._lobby_state_for(lobby, state, s)})
             return
         spectate = P.get_bool(msg, "spectate", default=False)
         if lobby.mode in P.LOBBY_ONLY_MODES and (spectate or len(lobby.players()) >= 2):
@@ -2758,8 +2862,8 @@ class Server:
         if not spectate and not lobby.koth and (lobby.match is not None or len(lobby.players()) >= 2):
             raise P.ProtocolError("lobby_full", "Both places to play are taken: join it to watch instead.")
         password = P.get_str(msg, "password", default="", max_len=64)
-        if lobby.password and not hmac.compare_digest(lobby.password.encode(), password.encode()):
-            raise P.ProtocolError("bad_lobby_password", "Wrong lobby password.")
+        if lobby.password:
+            self._check_lobby_password(lobby, s, password)
         self._switch_lobby(s, lobby.id)  # everything checked: out of the one this player was in
         self._quit_series(s)
         character = "" if lobby.mode in P.LOBBY_ONLY_MODES else P.get_character(msg)  # Online Practice: picked in game
@@ -2775,6 +2879,45 @@ class Server:
         if member.spectator and lobby.feed is not None and lobby.feed.end is None:
             self._watch(s, lobby.feed)  # a match under way: from its start
 
+    def _password_keys(self, s: Session) -> list[str]:
+        keys = [f"ip{s.ip}"]
+        if s.account_id is not None:
+            keys.append(f"a{s.account_id}")
+        return keys
+
+    def _check_lobby_password(self, lobby: Lobby, s: Session, password: str) -> None:
+        """A private lobby's password, counted: lobby_password_tries wrong ones from one account or one address (a
+        script tries many accounts from one, or one account from many) and that lobby turns their joins away, the right
+        password too, for lobby_lock_seconds. The counts go with the lobby, and are kept to a few hundred."""
+        now = time.time()
+        fails = lobby.password_fails
+        keys = self._password_keys(s)
+        for key in keys:
+            entry = fails.get(key)
+            if entry is not None and entry[2] > now:
+                raise P.ProtocolError("too_many_tries", "Too many wrong passwords. Try again in a few minutes.")
+        if hmac.compare_digest(lobby.password.encode(), password.encode()):
+            return
+        if len(fails) >= 512:  # bounded: the oldest go first (none still locked would be dropped before its time)
+            for key in sorted(fails, key=lambda k: fails[k][1])[: len(fails) - 511]:
+                if fails[key][2] <= now:
+                    del fails[key]
+        locked = False
+        for key in keys:
+            entry = fails.get(key)
+            # a count starts again once its last wrong try is a lock's time old (or its lock is over)
+            if entry is None or now - entry[1] > self.cfg.lobby_lock_seconds or 0 < entry[2] <= now:
+                entry = fails[key] = [0.0, now, 0.0]
+            entry[0] += 1
+            entry[1] = now
+            if entry[0] >= self.cfg.lobby_password_tries:
+                entry[2] = now + self.cfg.lobby_lock_seconds
+                locked = True
+        if locked:
+            log.warning("lobby %s: %d wrong passwords from %s (%s): its joins turned away for %d s", lobby.id,
+                        self.cfg.lobby_password_tries, s.name, s.ip, int(self.cfg.lobby_lock_seconds))
+        raise P.ProtocolError("bad_lobby_password", "Wrong lobby password.")
+
     def _leave_lobby(self, s: Session) -> None:
         lobby = s.lobby
         if lobby is None:
@@ -2789,6 +2932,9 @@ class Server:
             if lobby.king is member:
                 lobby.king = None
                 lobby.streak = 0
+        seat = self.lobby_seats.get(s.account_id) if s.account_id is not None else None
+        if s.account_id is not None and (seat is None or seat.lobby is not lobby):
+            lobby.wins.pop(s.account_id, None)  # gone for good: their wins with it (a dropped one is back with theirs)
         self._unwatch(s, lobby)
         if not lobby.members:
             self.lobbies.pop(lobby.id, None)
@@ -3184,9 +3330,11 @@ class Server:
                         relay_always=mem.relay_always)
             for i, mem in enumerate(ordered)
         ]
+        # each player's wins in this lobby so far (its member list's), which the game's result screen shows
+        set_wins = (lobby.wins.get(players[0].account_id, 0), lobby.wins.get(players[1].account_id, 0))
         m = Match(id=secrets.token_hex(6), game=lobby.game, mode=lobby.mode, ranked=False, players=players,
                   created=now, from_queue=False, lobby=lobby, rounds=lobby.rounds, state="accepted",
-                  deadline=now + self.cfg.udp_timeout, death_traps=lobby.death_traps, keep=keep)
+                  deadline=now + self.cfg.udp_timeout, death_traps=lobby.death_traps, keep=keep, set_wins=set_wins)
         lobby.match = m
         self._register_match(m)
         for p in players:
@@ -3203,6 +3351,8 @@ class Server:
         if in_place:
             for mp in players:
                 mp.ping = dict(lobby.last_pings[mp.account_id])
+            if lobby.last_relay is not None and all(mp.account_id in lobby.last_relay for mp in players):
+                self._resume_relay(m, lobby.last_relay)  # through the relay as the last match was
             self._go(m, lobby.last_rtt, now)
 
     # --- leaderboard ------------------------------------------------------------------------------

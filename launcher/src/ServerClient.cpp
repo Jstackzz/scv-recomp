@@ -93,9 +93,27 @@ void ServerClient::connectTo(const QString& address, const QString& fingerprint)
 void ServerClient::disconnectFromServer() {
     userDisconnect_ = true;
     reconnectTimer_.stop();
+    // what was sent last goes out first (closing the launcher sends series_ready false and lobby_leave just before):
+    // abort() alone would drop it, and a ranked set left so would end without a result. A second at most
+    if (sock_->state() == QAbstractSocket::ConnectedState) {
+        sock_->flush();
+        QElapsedTimer t;
+        t.start();
+        while ((sock_->bytesToWrite() > 0 || sock_->encryptedBytesToWrite() > 0) && t.elapsed() < 1000 &&
+               sock_->state() == QAbstractSocket::ConnectedState)
+            sock_->waitForBytesWritten(int(qMax<qint64>(1, 1000 - t.elapsed())));
+    }
     sock_->disconnectFromHost();
+    if (sock_->state() != QAbstractSocket::UnconnectedState) sock_->waitForDisconnected(300);
     if (sock_->state() != QAbstractSocket::UnconnectedState) sock_->abort();
     setState(State::Offline);
+}
+
+void ServerClient::dropForTest() {
+    applog::write(QStringLiteral("server: dropping the connection, as a network would (test)"));
+    reconnectDelayMs_ = 3000;
+    sock_->abort();  // onDisconnected: offline, then back in 3 s
+    if (state_ != State::Offline) onDisconnected();  // a socket that said nothing of it
 }
 
 void ServerClient::setState(State s) {

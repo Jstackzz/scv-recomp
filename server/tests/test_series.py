@@ -4,6 +4,8 @@ per set, and a player who leaves a set with a match counted loses it."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from server.client import ServerError
@@ -543,3 +545,78 @@ async def test_the_queue_match_offers_the_losers_choice(server, connect, udp_pee
     gos2 = await next_match(server, sides, s1["series"])
     assert (gos2[1]["p1"], gos2[1]["p2"], gos2[1]["keep"]) == ("-", "22.1", 2)
     assert (gos2[1]["set_p1"], gos2[1]["set_p2"]) == (0, 1)
+
+
+async def test_a_drop_at_the_result_screen_keeps_the_choice_open(server, connect, udp_peers):
+    """A launcher that drops between two matches, while the loser still chooses on the game's result screen: the time
+    left is never cut, and is at least set_rejoin_grace from the drop; back and ready in time, the set goes on."""
+    assert server.cfg.set_rejoin_grace >= 75  # the choice comes up to 52 s after the result
+    sides, gos = await first_match(server, connect, udp_peers, ["Pyrrha", "Patroklos"], ranked=True)
+    (c1, u1), (c2, u2) = sides[1], sides[2]
+    p2 = gos[1]["p2_name"]
+    s1, _ = await play(c1, c2, gos[1]["match"], 1)
+    series = server.series[s1["series"]]
+    usual = series.deadline
+    token = c2.account["token"]
+    await c2.close()  # the loser's launcher drops at the result screen
+    left = await c1.expect("series", state="between", timeout=3)
+    assert series.deadline >= usual and left["seconds_left"] >= 89  # not cut: 90 s left as it was
+    # a later drop with less of the usual wait left gets the grace from the drop
+    series.deadline = series.between_since + 10
+    back = await connect()
+    await back.request({"type": "auth", "token": token})
+    again = await back.expect("series", state="between")  # the state again, as after any login
+    assert again["series"] == s1["series"] and again["you_ready"] is False
+    await back.close()
+    await c1.expect("series", state="between", timeout=3)
+    assert series.deadline >= time.time() + server.cfg.set_rejoin_grace - 2
+    # dropping again and again holds nobody up for long: never past the usual wait and one grace
+    assert series.deadline <= series.between_since + server.cfg.set_next_timeout + server.cfg.set_rejoin_grace + 0.1
+    c2 = await connect()
+    c2.account = await c2.request({"type": "auth", "token": token})
+    await c2.expect("series", state="between")
+    sides[2] = (c2, u2)
+    gos2 = await next_match(server, sides, s1["series"])
+    assert gos2[2]["p2_name"] == p2 and (gos2[1]["set_p1"], gos2[1]["set_p2"]) == (1, 0)
+
+
+async def test_nobody_ready_for_a_sets_next_match_loses_it_for_the_loser(server, connect, udp_peers):
+    """Neither player readies in time (the loser's launcher closed or killed at the result screen, nothing sent): the
+    next match was the loser's choice, so the set is theirs lost, as LEAVE would be."""
+    server.cfg.set_next_timeout = 0.5
+    sides, gos = await first_match(server, connect, udp_peers, ["Viola", "ZWEI"], ranked=True)
+    (c1, _), (c2, _) = sides[1], sides[2]
+    p1, p2 = gos[1]["p1_name"], gos[1]["p2_name"]
+    await play(c1, c2, gos[1]["match"], 2)  # player 1 lost
+    over = await c2.expect("series", state="over", timeout=3)
+    assert over["outcome"] == "forfeit" and over["left"] == p1 and over["winner"] == p2
+    assert over["elo"][p2]["delta"] > 0
+
+
+async def test_nobody_ready_after_a_draw_or_before_anything_counted_ends_without_a_result(server, connect, udp_peers):
+    server.cfg.set_next_timeout = 0.5
+    sides, gos = await first_match(server, connect, udp_peers, ["Aeon", "Dampierre"], ranked=True)
+    (c1, _), (c2, _) = sides[1], sides[2]
+    server.cfg.set_next_timeout = 30
+    s1, _ = await play(c1, c2, gos[1]["match"], 1)
+    gos2 = await next_match(server, sides, s1["series"])
+    server.cfg.set_next_timeout = 0.5
+    await draw(c1, c2, gos2[1]["match"])  # the last match a draw: nobody's choice to lose by
+    over = await c1.expect("series", state="over", timeout=3)
+    assert over["outcome"] == "timeout" and over["winner"] is None and "elo" not in over
+
+    sides, gos = await first_match(server, connect, udp_peers, ["Elysium", "Kilik"], ranked=True)
+    (c1, _), (c2, _) = sides[1], sides[2]
+    for c in (c1, c2):  # nothing counted yet (a desync)
+        await c.request({"type": "result", "match": gos[1]["match"], "outcome": "desync", "frame": 30})
+    over = await c1.expect("series", state="over", timeout=3)
+    assert over["outcome"] == "timeout" and over["winner"] is None
+
+
+async def test_casual_with_nobody_ready_just_ends(server, connect, udp_peers):
+    server.cfg.rematch_timeout = 0.5
+    sides, gos = await first_match(server, connect, udp_peers, ["Mitsurugi", "Natsu"], ranked=False)
+    (c1, _), (c2, _) = sides[1], sides[2]
+    await play(c1, c2, gos[1]["match"], 2)
+    over = await c2.expect("series", state="over", timeout=3)
+    assert over["outcome"] == "timeout" and over["left"] is None

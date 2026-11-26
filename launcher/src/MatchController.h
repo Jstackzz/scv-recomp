@@ -186,8 +186,15 @@ private:
     bool choiceOnResultScreen() const { return awaitChoice_; }
  private:
     bool straightRoute() const;  // the last punch went straight between the two games
+    // the two games keep the last match's route at their result screens: straight, or through the relay or the tunnel
+    // with a server that keeps those routes for it (relay_choice)
+    bool routeKept() const;
     bool resultChoice() const;   // the lobby's match ends with its loser's choice on the result screen (choose=1)
     void readyInPlace(QString choice);  // the game said what the loser chose: ready for the next match there
+    void checkChoiceAfterLogin();  // back on the server at the result screen: the series is gone, or goes on
+    // the player's own game is away from its online menus (status `away`): nothing is started in it from there
+    bool gameAway() const;
+    void onGameAway();  // it went away: a search stops, a match found or not started yet is called off
     static constexpr int kChoiceMs = 60000;    // how long the loser has to choose (the game's own limit)
     void sendSeriesReady();
     void releaseUdp();
@@ -269,16 +276,24 @@ private:
     QString lastVia_;         // how the last punch reached the other game: lan, public (straight), relay, tunnel
     bool inPlace_ = false;    // the match found starts from the last one's result screen (no punch: rematchLine)
     bool lobbyChoice_ = false;  // AtResult: a lobby match's games wait for its loser's choice (status `chose`)
-    QString pendingChoice_;     // the game's `chose` (rematch, select, leave), taken once at the result screen
-    int pendingChooser_ = 0;    // and who chose (the match's loser: 1 or 2)
+    // the game's `chose` (rematch, select, leave), taken once at the result screen; it waits here while this launcher
+    // is off the server or the series' "between" has not come yet (never past this match: finishMatch, match_found)
+    QString pendingChoice_;
+    int pendingChooser_ = 0;    // and who chose, as the game says (the match's loser: 1 or 2)
+    int resultChooser_ = 0;     // who chooses, as the server's result says (the loser; 1 after a draw; 0 unknown)
     bool awaitChoice_ = false;  // at the result screen, the loser's choice still to come (the series waits for it)
-    bool leaveSeries_ = false;  // this player chose LEAVE before the series' "between" came: sent with it
+    // what this launcher last readied a series' next match with, for which series and which wait (its `played`): sent
+    // again as it was when the server forgot it (a dropped connection un-readies)
+    QString readyChoice_, readySeries_;
+    int readyPlayed_ = -1;
+    bool seriesSeen_ = false;  // the series' state came since the last login
+    QTimer reloginTimer_;      // logged in again at the result screen: checkChoiceAfterLogin
     QTimer atResultTimer_;    // AtResult: no series to wait for after all (a match that started none): parked then
     QElapsedTimer searchClock_;
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)
     QJsonObject queued_;     // the server's reply to the last search
     QTimer parkTimer_, keepaliveTimer_, startTimeout_, finishTimeout_, watchTimeout_;
-    QTimer stuckTimer_;        // after a park: checkStuckGame
+    QTimer stuckTimer_;        // after a park: checkStuckGame (stopped once the game says ready or away)
     QElapsedTimer parkClock_;  // since the match's game was last parked
     bool replacedForPort_ = false;  // this match found replaced a game that held the game port (openUdpThen)
     QTimer watchEndTimeout_;  // the watched match ended early: the watching game's while to be in it, else it parks

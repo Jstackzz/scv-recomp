@@ -82,7 +82,7 @@ Spirit Sword 1915, Eternal Soul 2035; a new player starts at 475.
 | `logged_in_elsewhere` | the account logged in on another connection; this one is closed |
 | `bad_game`, `bad_mode`, `bad_region` | unknown game, mode or region |
 | `busy` | already queued, in a lobby or in a match |
-| `no_such_match`, `no_such_lobby`, `lobby_full`, `bad_lobby_password`, `not_host`, `not_ready`, `not_in_lobby` | match / lobby requests |
+| `no_such_match`, `no_such_lobby`, `lobby_full`, `bad_lobby_password`, `too_many_tries`, `not_host`, `not_ready`, `not_in_lobby` | match / lobby requests |
 | `update_needed` | a King of the Hill lobby asked of a launcher whose `hello` did not say it has them (1.10.2) |
 | `rating_closed`, `not_rater`, `already_rated` | `lobby_rate` (1.10.2) |
 | `slow_down` | chat sent faster than the limit |
@@ -101,7 +101,7 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
     "regions":["na","sa","eu","me","af","as","oc"],"direct_above_ms":100,
     "ranks":[{"title":"Novice","from":null},{"title":"Apprentice","from":575},
              {"title":"Squire","from":675}, ...,{"title":"Eternal Soul","from":2035}],
-    "features":["koth","desync_detail","pick_refused"]}
+    "features":["koth","desync_detail","pick_refused","relay_choice"]}
 ```
 
 - `features` (King of the Hill): what each side has beyond the protocol's
@@ -114,6 +114,10 @@ S: {"type":"welcome","proto":1,"server":"sc5-server","version":"0.1.0","udp_port
   list it sends the 36 lines an older server takes. `pick_refused` (SCV 0.1.7,
   the server's alone): it logs the created characters a game held back at the
   select screen (1.13.3); a launcher sends none to a server without it.
+  `relay_choice` (SCV 0.1.8, the server's alone): a match through the relay or
+  the tunnel ends at the games' result screens for the loser's choice too, its
+  routes kept for it and for the next match from there (1.9.1); a launcher
+  keeps such a match's games there only with a server that lists it.
 
 - `proto` must equal the server's `PROTO`, else `error{code:"proto_mismatch"}`.
 - `ranks` (0.1.21): the ranked titles by Elo, lowest first, each held from its
@@ -557,21 +561,30 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
   a draw player 2 keeps theirs) or LEAVE (the loser's launcher alone sends
   `series_ready` false: a casual series ends `left`; a ranked set is lost by
   the loser, `forfeit`, once a match of it counted). A match that wins a set
-  offers no choice. Where the games offer none (a match through the relay or the
-  tunnel, one that did not count, a game no longer at its result screen) both
-  launchers send `select` by themselves. Before SCV 0.1.8 a ranked set went on
-  by itself and a casual rematch was asked of both players in the launcher.
+  offers no choice. A match through the relay or the tunnel offers it too (SCV
+  0.1.8, a server whose `welcome.features` has `relay_choice`): the server keeps
+  its routes for `relay_choice_linger` (120 s) after the result, and the next
+  match in place takes them on, through the relay again. Where the games offer
+  none (one that did not count, a game no longer at its result screen, a relayed
+  match with an older server) both launchers send `select` by themselves. Only
+  the launcher of the loser by the server's result (player 1 after a draw) sends
+  `series_ready` false on LEAVE; the winner's readies `select` the usual way in
+  a ranked set, so that the loser alone is the one not ready. Before SCV 0.1.8 a
+  ranked set went on by itself and a casual rematch was asked of both players in
+  the launcher.
 - A launcher sends `series_ready` true for a ranked set by itself, for a casual
   rematch when the player chose one: with `"in_place":true` while its game
   still waits at the last match's result screen, connected to the other game
-  (SCV 0.1.2: a queue match that ended there, against a game reached straight,
-  not through the relay or the tunnel), else once its game is back at its hold
-  point. When both are ready the server starts the next match like a lobby
+  (SCV 0.1.2: a queue match that ended there, against a game reached straight;
+  SCV 0.1.8: or through the relay or the tunnel, with `relay_choice`), else once
+  its game is back at its hold point (never while its game is `away`, 3.8: then
+  once it is back at its online menus). When both are ready the server starts the next match like a lobby
   match: `match_found` with `accept_required` false, `"series"` and the same
   sides, then the usual setup (1.8). When both said `in_place` and the last
-  match went straight between them, `match_found` says `"in_place":true` and
-  `match_go` follows at once on the last match's route (its `remote` and
-  `rtt_ms`, a new `match` and `seed`): no UDP hello, no punch; the launcher
+  match's route still holds (straight between them, or through the relay or the
+  tunnel, whose routes the next match then takes on), `match_found` says
+  `"in_place":true` and `match_go` follows at once on the last match's route
+  (its `remote` and `rtt_ms`, a new `match` and `seed`): no UDP hello, no punch; the launcher
   sends the game `rematch` (3.3) instead of `start`. A launcher whose game waits
   at its result screen and gets a `match_found` without it parks the game first
   (it lets go of the game port at once) and goes the usual way.
@@ -616,10 +629,22 @@ S: {"type":"series","series":"8d01c3e2a9f4", ...,"state":"over","outcome":"won",
   - `void`: a set where nothing counted yet was left, its two games lost each
     other, or 3 matches in a row did not count; no rating change.
   - `left` (casual: a player declined or went) and `timeout` (casual: no
-    rematch in time; ranked: neither came back).
-- A launcher that drops between two matches has 20 s to log in again before
-  its time runs out. Ranked sets are logged in the `sets` table (outcome,
-  winner, score, both ratings before and after).
+    rematch in time; ranked: neither came back after a draw, a match that did
+    not count or one called off, or before anything counted).
+  - Neither player ready at the deadline of a ranked set in which a match
+    counted (SCV 0.1.8): the next match was the last match's loser's to choose
+    (their launcher closed, killed or off the network at the result screen), so
+    they lose the set, `forfeit` with `left` naming them. After a draw or a
+    match that did not count nobody chose: `timeout`, no result. One ready and
+    the other not: the other forfeits, as before. Casual: `timeout`.
+- A launcher that drops between two matches (SCV 0.1.8): the time left is
+  never cut, and is at least `set_rejoin_grace` (75 s; 20 s before) from the
+  drop, since the loser's choice may come up to 52 s after the result and a
+  launcher that is back waits for it; never more than the usual wait plus one
+  grace from the start of the wait, so dropping again and again holds nobody up
+  long. A drop un-readies the player; back in time, their launcher readies
+  again with the choice it readied with before. Ranked sets are logged in the
+  `sets` table (outcome, winner, score, both ratings before and after).
 
 ### 1.10 Lobbies
 
@@ -664,7 +689,8 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   `link` and `ping` (`null` unknown).
 - **The loser chooses the next match** (SCV 0.1.4; a `versus` lobby, not King
   of the Hill): a lobby match's `match_found` says `"result_choice":true`, and
-  a match its two games played straight (no relay, no tunnel) ends with both
+  a match its two games played straight (SCV 0.1.8: or through the relay or the
+  tunnel, `relay_choice`, 1.9.1) ends with both
   games at their result screens, where the match's loser (player 1 after a
   draw) chooses REMATCH or CHARACTER SELECT with their own controller
   (section 3.3, `choose=1`; SCV 0.1.8: or LEAVE, which parks both games, the
@@ -682,7 +708,19 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   agree on send both there. A player who
   readies in the lobby instead (or one launcher that is not at the result
   screen) takes both the usual way, `in_place` false, its game parked first.
-  Nobody choosing in a minute parks both games (the players ready again).
+  Nobody choosing in a minute parks both games (the players ready again). The
+  other player leaving the lobby (or dropping, or stepping aside to watch)
+  while the choice is pending parks the remaining player's game at once (SCV
+  0.1.8, the launcher's doing, with a message); a launcher back after a
+  dropped connection parks its game too (its place was given up and taken
+  again, and the other's game parked meanwhile).
+- Each member's `wins` (SCV 0.1.8): their match wins in this lobby, counted by
+  the server while they are in it (kept through a dropped connection that comes
+  back in time); a lobby match's `match_go` `set_p1` and `set_p2` are the two
+  players' `wins`, which the game's result screen shows.
+- `password` (SCV 0.1.8): a private lobby's, in the state its host gets (every
+  push and the reply), never in another member's state or in `lobbies`; a
+  launcher back after a drop, or a member who became host, has it from there.
 - Each member's `title`: their ranked title in the lobby's game and mode
   (someone who never played it ranked: the starting one; 1.3 `ranks`), whose
   badge the launcher shows by their name.
@@ -702,7 +740,11 @@ S: {"type":"lobby_left","lobby":"K7WQ2"}
   message per 0.5 s per player (`slow_down`).
 - `lobby_create` and `lobby_join` reply with `lobby`; errors: `busy` (searching,
   or a match of this player's set up or running), `no_such_lobby`, `lobby_full`,
-  `bad_lobby_password`. A session is in one lobby at most (SCV 0.1.4): creating or
+  `bad_lobby_password`, `too_many_tries` (SCV 0.1.8: 5 wrong passwords for that
+  lobby from one account or one address, counted per lobby and dropped with it,
+  and that lobby turns their joins away, the right password too, for 5 minutes;
+  the launcher says "Too many wrong passwords. Try again in a few minutes.").
+  A session is in one lobby at most (SCV 0.1.4): creating or
   joining another one, once the server has checked it lets the player in, leaves the
   one they are in, as `lobby_leave` would, and says so first with
   `{"type":"lobby_left","lobby":"<the old one>","joined":"<the new one>"}` (until
@@ -1720,7 +1762,9 @@ Added in the launcher's branch (SCV 0.1.8, additive; a game that leaves them out
 them): `lobby_create`'s `password` and `rounds` (the rounds to play, best of 1, 3 or 5: default 5, first to 3 as on the
 console); `private=1` without a `password` gives the lobby a 4-digit password the launcher makes up, which `lobby`
 shows to its host only (`lobby.password`, `""` for everyone else; `lobby.text` says it too), and a friend joins with
-`lobby_join`'s `password` (a lobby whose `locked` is true needs one: `lobbies.list[].locked`, `lobby.locked`).
+`lobby_join`'s `password` (a lobby whose `locked` is true needs one: `lobbies.list[].locked`, `lobby.locked`). The
+host's `lobby.password` comes from the server's lobby state (SCV 0.1.8, 1.10), so it is there again after a dropped
+connection and for a member who becomes host; `lobby.members[].wins` are the server's counts there.
 
 How the launcher takes the asks (launcher/src/MenuBridge.cpp): it looks for `ask.txt` every 100 ms and, before it does
 what a line asks, reads `status.txt` again, so a status the game wrote first (a match's `result`, then `lobby_leave`)
@@ -1743,3 +1787,11 @@ menu, the match states as before. A `start` that comes while the game is `away` 
 comes before the hold point does), so the launcher sends `start` on `ready`. After `park` the game is back in its
 online menus, `ready`, showing the series (`series`) or the lobby's room (`lobby`). The menus' Practice is the game's
 own Training, reached by the game alone (no ask, no `start`): the game says `away` there.
+
+What the launcher does with `away` (SCV 0.1.8; the game also sends `cancel` or `lobby_leave` itself when it leaves its
+menu): a game that is `away` is never started into a match. A search running is cancelled; a match found, accepted
+or connecting is declined at once (the other player is released in seconds: back to searching when it came from the
+queue); a match whose `start` the game has not taken yet is reported `left` (`exit` "left the online menu"), and
+nothing is parked in the game; a lobby member who is ready gets `lobby_ready` false; a series' next match is not
+readied until the game says `ready` again. Each is told in `message`. An `away` game is never parked either (a park
+would take the player out of what they went to), and it is never taken for a game stuck after its match.
