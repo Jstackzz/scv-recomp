@@ -138,7 +138,7 @@ background=true
 $serverArgs = @('-m', 'server', '--host', '127.0.0.1', '--port', "$Port", '--udp-port', "$($Port + 1)",
                 '--db', "`"$work\server\e2e.sqlite`"", '--cert', "`"$work\server\server-cert.pem`"",
                 '--key', "`"$work\server\server-key.pem`"")
-if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pairs one public IP otherwise
+if ($Queue -eq 'ranked' -or $Queue -eq 'asks') { $serverArgs += '--allow-same-ip' }  # ranked never pairs one public IP otherwise (asks: a real game's script may search ranked)
 $server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $(if ($ServerRoot) { $ServerRoot } else { $root }) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2

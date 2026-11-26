@@ -33,7 +33,9 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
+#include <string>
 
 #include "sc5/autopilot.h"
 #include "sc5/frame.h"
@@ -788,7 +790,9 @@ void Follow(const uilink::Ui& u) {
   // a lobby: the one just left is not followed back into, nor an old one while another is being joined
   const bool lobby_left = Frame() < g_left_lobby_at + kGrace && g_join.empty();
   const bool other_lobby = !g_join.empty() && g_join != "new" && u.lobby.code != g_join;
-  if (u.lobby.present && !lobby_left && !other_lobby) {
+  // (only on the launcher's word while it answers: an old reading, the launcher gone or slow to confirm a leave, pulled
+  // a player who had left the room back into it every 2.5 s)
+  if (u.lobby.present && u.fresh && !lobby_left && !other_lobby) {
     if (g_screen != Screen::Room && g_screen != Screen::After) {
       g_join.clear();
       Go(Screen::Room);
@@ -800,6 +804,15 @@ void Follow(const uilink::Ui& u) {
       g_screen != Screen::Room && !(g_screen == Screen::After && SeriesGoing(u))) {
     g_kind = u.queue.kind;
     Go(Screen::Search);
+  }
+  // the launcher stopped answering while a search or a match on its way was up: nothing more will come of it here
+  // (a match already accepted takes no button, so the screen had no way out but closing the game)
+  if (g_screen == Screen::Search && u.seen && !u.fresh) {
+    Popup("SEARCH ENDED", "SCV Online's launcher stopped answering, so the search has ended. Start it again and search "
+                          "once more.",
+          true);
+    g_left_search_at = Frame();
+    Go(Screen::Top);
   }
   if (g_screen == Screen::Search && !Searching(u) && Frame() > g_asked_at + 180) {
     if (!u.queue.text.empty()) Popup("SEARCH ENDED", u.queue.text, false);
@@ -908,10 +921,7 @@ bool HoldPad(uint32_t user, input::Pad& out) {
 }
 
 uint32_t Text(PPCContext& ctx, uint8_t* base, uint32_t table, uint32_t index) {
-  (void)ctx;
-  if (!g_on || table != kTextTable || (index != kTextLabel && index != kTextDesc) || !InHome()) return 0;
-  // the game's markup kept: $m the menu's style for the label, $z the description's scale
-  static uint32_t label = 0, desc = 0;
+  if (!g_on) return 0;
   auto put = [base](const std::string& s) {
     const uint32_t at = REX_KERNEL_STATE()->memory()->SystemHeapAlloc(uint32_t(s.size() + 1), 0x10);
     if (at) {
@@ -920,6 +930,28 @@ uint32_t Text(PPCContext& ctx, uint8_t* base, uint32_t table, uint32_t index) {
     }
     return at;
   };
+  if (table != kTextTable || (index != kTextLabel && index != kTextDesc) || !InHome()) {
+    // any other text of the game's that names Xbox LIVE (the player's card: "Total Xbox LIVE Play Time") names
+    // online play instead, the rest of the string and its markup as they are; each string looked at once
+    static std::mutex lock;
+    static std::map<uint64_t, uint32_t> swapped;
+    const uint32_t text = ctx.r3.u32;
+    if (!text) return 0;
+    std::lock_guard<std::mutex> hold(lock);
+    const uint64_t key = uint64_t(table) << 32 | index;
+    if (const auto it = swapped.find(key); it != swapped.end()) return it->second;
+    std::string s;
+    for (uint32_t a = text; s.size() < 400 && base[a]; a++) s += char(base[a]);
+    uint32_t ours = 0;
+    if (const size_t at = s.find("Xbox LIVE"); at != std::string::npos && s.size() < 400) {
+      s.replace(at, 9, "Online");
+      ours = put(s);
+    }
+    swapped[key] = ours;
+    return ours;
+  }
+  // the game's markup kept: $m the menu's style for the label, $z the description's scale
+  static uint32_t label = 0, desc = 0;
   if (!label) {
     label = put(std::string("$m") + kName);
     desc = put(std::string("$z0.875/0.875/") + kEntryDesc);
@@ -991,6 +1023,18 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
                           fmt::format(" {} - {} ({})", u.series.mine, u.series.theirs, u.series.state));
   }
   Follow(u);
+  // tests: SC5_TEST_ONLINE_ACCEPT=1 accepts a match found, as the player's A on Accept would
+  static const bool test_accept = [] {
+    const char* v = std::getenv("SC5_TEST_ONLINE_ACCEPT");
+    return v && v[0] == '1';
+  }();
+  static bool test_accepted = false;
+  if (test_accept && g_screen == Screen::Search && u.queue.state == "found") {
+    if (!test_accepted) uilink::Ask("accept");
+    test_accepted = true;
+  } else if (u.queue.state != "found") {
+    test_accepted = false;
+  }
   const Pressed p = ReadPressed(pad);
   View v = Build(u);
   if (!g_swallow) {

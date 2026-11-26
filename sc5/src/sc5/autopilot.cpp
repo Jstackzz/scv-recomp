@@ -542,6 +542,10 @@ bool TakeBack(const int step[2]) {
   const bool b_now = (OwnPad().buttons & input::kB) != 0, b_pressed = b_now && !g_own_b_was;
   g_own_b_was = b_now;
   if (!LocalPicks(me) || g_plan.slots[other] >= 0) return false;  // both players pick on the select screen
+  // the last match's winner keeps their fighter: nothing of theirs to take back (a kept created character comes by
+  // its checksum, so its side counts as its player's own pick: B took it back, and the loser's half-made pick with it,
+  // only for the autopilot to pick it again)
+  if (g_plan.keep == me) return false;
   // this PC's player: their whole pick while the other player still picks
   if (!g_takeback_asked && !g_takeback_undo && b_pressed && step[me] >= 2 && step[other] < 2 &&
       net::RemotePick(other).phase < 2) {
@@ -747,7 +751,18 @@ void OnSelect() {
       // A on a created character only as the player's own A would be let through (LookAtCursor): with the other
       // game's word, and when the pick does not hold it back
       const bool held = now == auto_costume && g_cursor.slot >= 0 && !(g_cursor.known && g_cursor.decision.ok);
-      if (!held) {
+      // a test's pick of the fighter the other side has, on the costume the other side took: the panel shows it greyed
+      // and refuses A. A player moves on; so does the test, after three presses that took nothing
+      static int a_taps = 0, a_side = -1, a_costume = -1;
+      if (a_side != side || a_costume != now) a_taps = 0;
+      a_side = side;
+      a_costume = now;
+      if (!held && now == auto_costume && !g_plan.created[side] && ++a_taps > 3) {
+        REXLOG_WARN("sc5 autopilot: side {}'s costume panel does not take costume {} (the other side's): the next",
+                    side + 1, now + 1);
+        Tap(input::kDpadRight);
+        a_taps = 0;
+      } else if (!held) {
         Tap(now < auto_costume ? input::kDpadRight : now > auto_costume ? input::kDpadLeft : input::kA);
       } else if (g_cursor.known) {
         // held back: the A refused as the player's would be, then (a test's second pick) the other one after 3 s;
@@ -783,7 +798,18 @@ void OnSelect() {
       // A on a standard costume; on the player's own created character once the pick has the other game's word and
       // both games can load it (LookAtCursor: as made or in its plain body). An A it holds back is a refused pick:
       // the overlay says why, the log and the launcher get it once (PickRefused).
-      if (g_cursor.slot < 0 || (g_cursor.known && g_cursor.decision.ok)) g_allow |= input::kA;
+      // The last match's winner keeps their fighter and its costume: when they are player 2 the loser picks first,
+      // and on the same fighter the loser's A on the kept costume would have pushed the winner onto the next one
+      // (the game gives a costume to one side only). Not that costume, then: LEFT and RIGHT go on.
+      const int keeper = g_plan.keep;
+      const bool kept_costume = keeper == 1 - side && g_plan.slots[keeper] >= 0 && g_plan.slots[keeper] == g_picked_slot[side] &&
+                                select::Costumes(side) > 0 &&
+                                select::Costume(side) == std::max(0, g_plan.costumes[keeper]) % select::Costumes(side);
+      if (kept_costume) {
+        if (a_pressed)
+          REXLOG_INFO("sc5 autopilot: side {}'s A on costume {} held back: the winner keeps it", side + 1,
+                      select::Costume(side) + 1);
+      } else if (g_cursor.slot < 0 || (g_cursor.known && g_cursor.decision.ok)) g_allow |= input::kA;
       else if (a_pressed && g_cursor.known) PickRefused(g_cursor);
       // B back to the characters, as on the console: the other game follows only a whole pick (a character and its
       // costume), so it sees the cursor again and nothing else. Without it a player on a costume A is held back on
@@ -1067,6 +1093,11 @@ void OnResultChoice() {
       g_choice_cursor = theirs.cursor;
       if (theirs.phase == 1) choose(theirs.cursor, "the other PC's player");
     }
+    // no word of a choice ten seconds past their time: their game is gone (closed, crashed, its connection lost), or
+    // the two games are at odds over who chooses. LEAVE, as their own clock would have had it: this game waited with
+    // no limit of its own, "0 s" on its screen until the launcher's or the server's limit ended it
+    if (g_choice < 0 && Now() >= g_menu_at + kChoiceFrames + 600)
+      choose(2, "no choice came from the other game in time: this game");
   }
 }
 
@@ -1116,6 +1147,10 @@ bool Override(uint32_t user, input::Pad& out) {
   // the game's own menus online: the player's pad at the hold point, but while the online menus are up
   if (g_phase == Phase::Hold && g_menus) return online::HoldPad(user, out);
   if (net::InSync()) return false;
+  // lost on the way in the player's own game (SC5_MENUS): still pads for three seconds, then the game is the player's
+  // again, to back out to the main menu themselves. A lost game was thrown away once; this one is the player's only
+  // game, and held still for good it could only be closed.
+  if (g_phase == Phase::Lost && g_menus && Now() >= g_since + 180) return false;
   // practice: the player's own controllers once it runs (but while a test's script plays)
   if (g_plan.mode == Mode::Practice && g_phase == Phase::Fight && !g_practice_script) return false;
   out = input::Pad{};
@@ -1338,6 +1373,8 @@ void Park() {
     case Phase::Stage:
       Enter(Phase::Back);  // B until the main menu
       return;
+    case Phase::Lost:
+      return;  // the player's own game: theirs until they are back at the main menu (OnFrame)
     default:
       Enter(Phase::Lost);
   }
@@ -1471,7 +1508,13 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   PublishKeepView();
   switch (g_phase) {
     case Phase::Off:
+      return;
     case Phase::Lost:
+      // the player's own game: theirs again (Override), and once they are back at the main menu, the hold point
+      if (g_menus && In() > 180 && InHome(seq) && ReadHome().ok) {
+        REXLOG_INFO("sc5 autopilot: back at the main menu after being lost at frame {}; {}", Now(), HomeState());
+        Enter(Phase::Hold);
+      }
       return;
     case Phase::Boot:
       if (InHome(seq)) {

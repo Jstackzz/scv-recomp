@@ -474,6 +474,14 @@ Kind KindOf(uint32_t source) {
   // poses differ in their last bits: 1142 and 1126 in two games whose fights went on alike to the same result (Kilik
   // against Ezio with 40 ms each way, from round 2's first check, 2026-11-18)
   if (source >= 0x8277B940u && source < 0x8277B944u) return Kind::Pose;
+  // ... and each player's place as the stage keeps it: sub_822BBC88 copies a bone's position out of the player's pose
+  // matrices (the table at 0x8293A6F0) and sub_82214268 stores those 16 bytes, the fourth word whatever lay on the
+  // stack, in slot 129 or 130 of the stage's object (0x82A08930, or 0x82A07AB0 when the byte at 0x8293B354 is set).
+  // The stage's and the effects' code reads it (sub_82215528). A frame run again came out with other last bits there
+  // once in 3,600 with six games on one PC (BA83126F against another low half at fight frame 2867, 2026-11-26), and a
+  // spectator's game, which runs each frame once, parted from the players' two at a check
+  for (uint32_t stage : {0x82A08930u, 0x82A07AB0u})
+    if (source >= stage + 0x810 && source < stage + 0x830) return Kind::Pose;
   // ... and at +0xC44 a value sub_82210948 takes from the stage as the fight loads (sub_82213B20), -40.0 when the
   // stage's data is not in yet: how far the loading had got, different on two PCs, and nothing in the fight reads it
   // differently (two games with -40.0 and -5.5 there stayed alike in all else)

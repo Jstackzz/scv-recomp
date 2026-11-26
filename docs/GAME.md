@@ -787,6 +787,15 @@ the next match (CHOICE).
     script makes one with a word of its fighter's (sub_82185230, sub_82184DC8), kept at the slot's +16: 1 in one game
     and 2 in the other from frame 355 to the match's end, and 2 in both in the next run of the same match. Nothing
     reads it in the second after but the snapshot's own save and restore (`SC5_DBG_WATCH_READS`). Left out.
+  - **Each player's place as the stage keeps it** (a PC under load, 2026-11-26): sub_822BBC88 copies a bone's
+    position out of the player's pose matrices (the table at 0x8293A6F0) and sub_82214268 stores those 16 bytes, the
+    fourth word whatever lay on the stack, in slot 129 or 130 of the stage's object (0x82A09140 and 0x82A09150; the
+    other stage object's at 0x82A082C0). The stage's and the effects' code reads it (sub_82215528). It is the pose's,
+    and like the pose it can come out with other last bits when a frame runs again: `tools/synctest.sh` by itself
+    never showed it (0 of 3,600 checks), with six games on the PC one check in 3,600 did (two bytes at 0x82A0914A,
+    fight frame 2867, nothing after it), and in two matches run under that load a spectator's game, which runs each
+    frame once, parted from the players' at one check, once the players' own games too (the round was played again).
+    Left out of the check as the poses are.
   - **A round's call not alike** (stage 22, round 3): below, "The check at a round's call".
   With all of it, the same match on the 27 places as two players' games run it (`HUNT_PLAY=1`: a failed check plays
   the round again or makes a round's call alike): every match to the same result in both games; 25 with every check
@@ -1732,6 +1741,30 @@ two accounts on a throwaway server, `SC5_TEST_ONLINE_MENU=1` in the games' envir
 `ui.json` (signed in; the search, the match found, accepted, connecting, starting, shown on the search screen as the
 launchers' own test switches went through them), said `ready` from their menus, took the launchers' start and played the
 match in sync to the same result (a draw, 3-3: nobody pressed anything), which both launchers reported.
+
+**After a review of the whole change (2026-11-26).** What a read of the code found and what was done:
+- *The search screen with the launcher gone.* A match accepted takes no button (accepted, connecting, starting), and
+  the screen left only on the launcher's word: a launcher that died there left the game showing CONNECTING for good,
+  both pads still. Now a search screen whose launcher stops answering (5 s without a new `t`) ends with a notice and
+  goes back to the top; and the lobby's room is followed only on a launcher that answers (an old reading pulled a
+  player who had left the room back into it every 2.5 s).
+- *Lost.* The autopilot's "lost" (a screen that did not come) held both pads still for good, which was right for a
+  game the launcher threw away and wrong for the player's own: now, three seconds on, the pads are the player's
+  again, and once they are back at the main menu it is the hold point again (the own save is put back there).
+- *The loser's choice with the chooser's game gone.* Only the chooser's game counted the 40 s; the other waited for
+  a CHOICE packet with no limit. It now takes LEAVE itself ten seconds past the chooser's time.
+- *The winner's lock.* A winner whose kept fighter is a created character could take their pick back with B (their
+  side counts as their own pick, by its checksum), which threw the loser's half-made pick away: not while they keep.
+  And a loser who picks first (the winner is player 2) on the winner's fighter could take the winner's costume, the
+  game then giving the winner the next one: the loser's A on that costume is held back.
+- *The own save at the session's end.* The kept image is under a lock (the game's save may write from its own
+  thread), and a save on its way as the session ends still writes the kept image, for ten seconds past it.
+- *The main menu's card* said "Total Xbox LIVE Play Time": any text of the game's that names Xbox LIVE names Online
+  instead while the menus are on (online_menu.cpp `Text`).
+- Open: the cameras' blends (battle.cpp) are each game's own and are not made alike with the rest of the fight when
+  the two games are (a round's call, a round played again). No test has shown it.
+- Tests: `SC5_TEST_ONLINE_ACCEPT=1` accepts a match found as the player's A would (a script's A presses cancelled
+  the search they came before).
 
 ## The player's own save online (ownsave.cpp, creation.cpp, controls.cpp, versus.cpp)
 

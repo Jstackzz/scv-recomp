@@ -22,6 +22,7 @@
 #include "sc5/ownsave.h"
 
 #include <atomic>
+#include <mutex>
 #include <cstring>
 #include <vector>
 
@@ -58,6 +59,13 @@ uint32_t g_options[2] = {0, 0};  // the pinned options' own values
 std::atomic<int> g_held_back{0};  // the game's saves of this session that wrote the kept image
 uint32_t g_guest_copy = 0;        // a guest buffer for the kept image (the write's buffer must be guest memory)
 
+// The kept image is read by the game's save, which may write from a thread of its own: under this lock. And a save
+// the game began as the session ended (its own copy of the image made before the image was put back, its file written
+// after) still writes the kept image, for ten seconds past the session's end.
+std::mutex g_kept_lock;
+std::atomic<uint64_t> g_redirect_until{0};
+constexpr uint64_t kAfterFrames = 600;
+
 uint8_t* Host(uint32_t guest) { return REX_KERNEL_STATE()->memory()->TranslateVirtual<uint8_t*>(guest); }
 uint32_t Get32(uint32_t a) { return __builtin_bswap32(*REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(a)); }
 void Put32(uint32_t a, uint32_t v) { *REX_KERNEL_STATE()->memory()->TranslateVirtual<uint32_t*>(a) = __builtin_bswap32(v); }
@@ -71,11 +79,17 @@ void BeginOnline() {
   g_image = creation::SaveImage();
   if (g_image) {
     const uint8_t* p = Host(g_image);
-    g_kept.assign(p, p + kImageSize + kReleaseSize);
+    {
+      std::lock_guard<std::mutex> lock(g_kept_lock);
+      g_kept.assign(p, p + kImageSize + kReleaseSize);
+    }
     REXLOG_INFO("sc5 own save: an online session at frame {}: the save kept aside (play time {} s)", frame::Count(),
                 Get32(g_image + 0x180));
   } else {
-    g_kept.clear();
+    {
+      std::lock_guard<std::mutex> lock(g_kept_lock);
+      g_kept.clear();
+    }
     REXLOG_WARN("sc5 own save: an online session without a save image in memory: nothing kept (its writes held back)");
   }
   for (size_t i = 0; i < 2; i++) {
@@ -104,8 +118,8 @@ void EndOnline() {
   } else if (g_image) {
     REXLOG_WARN("sc5 own save: the online session is over but the save image moved: not put back");
   }
-  g_kept.clear();
-  g_kept.shrink_to_fit();
+  // the kept image stays (the next session takes its own): a save on its way writes it (WriteBuffer)
+  g_redirect_until = frame::Count() + kAfterFrames;
   unlocks::SetOnline(false);
   g_online = false;
 }
@@ -114,12 +128,14 @@ bool Online() { return g_online; }
 
 // The buffer savedata.bin is written from: the image the session found in place of the image now (ownsave.cpp)
 uint32_t WriteBuffer(uint32_t lr, uint32_t buffer, uint32_t size) {
-  if (!g_online) return buffer;
+  const bool after = !g_online && frame::Count() < g_redirect_until.load();
+  if (!g_online && !after) return buffer;
   if (lr != 0x8249FFE8 && lr != 0x824A0E9C) {
     REXLOG_INFO("sc5 own save: a file write of {} bytes in an online session from {:08X} (not a save)", size, lr);
     return buffer;
   }
   // savedata.bin, from the save task's own copy of the image (replay.bin, the other file, as it is)
+  std::lock_guard<std::mutex> lock(g_kept_lock);
   if (size != kImageSize || g_kept.size() < kImageSize) {
     REXLOG_INFO("sc5 own save: the game writes a file of {} bytes in an online session (as it is)", size);
     return buffer;
@@ -130,8 +146,8 @@ uint32_t WriteBuffer(uint32_t lr, uint32_t buffer, uint32_t size) {
     return buffer;
   }
   std::memcpy(Host(g_guest_copy), g_kept.data(), kImageSize);
-  REXLOG_INFO("sc5 own save: the game saves in an online session ({}): the save as it was before the session written",
-              ++g_held_back);
+  REXLOG_INFO("sc5 own save: the game saves {} ({}): the save as it was before the session written",
+              after ? "just after an online session" : "in an online session", ++g_held_back);
   return g_guest_copy;
 }
 
