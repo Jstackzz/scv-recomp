@@ -33,7 +33,7 @@ QString sheet() {
     // Soulcalibur's look, our own: navy and black, gold for titles and the ranks, a cool blue for what is active or
     // chosen; the focus a controller (or Tab) moves stays a brighter gold, set apart from both by its width
     return QStringLiteral(R"QSS(
-* { font-family: "Segoe UI"; font-size: 10pt; color: #E8E6DF; }
+* { font-family: "Segoe UI"; font-size: 12pt; color: #F2F0EA; }  /* large and plain: the owner reads it low vision */
 QMainWindow, QWidget#Root, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget { background: #070A12; }
 QDialog { background: #0B101C; }
 QToolTip { background: #101829; color: #E8E6DF; border: 1px solid #B8923A; padding: 4px; }
@@ -45,8 +45,8 @@ QWidget#Header {
 }
 QLabel#TitleMain { font-family: "Palatino Linotype"; font-size: 32pt; font-weight: 700; color: #E2B85A; background: transparent; }
 QLabel#TitleSub  { font-family: "Palatino Linotype"; font-size: 32pt; font-weight: 400; color: #EDE6D6; background: transparent; }
-QLabel#Tagline   { color: #8FA0BC; font-size: 9pt; background: transparent; }
-QLabel#GameName  { font-family: "Bahnschrift"; font-size: 10pt; font-weight: 600; color: #C9B27A; background: transparent; }
+QLabel#Tagline   { color: #B9C6DC; font-size: 11pt; background: transparent; }
+QLabel#GameName  { font-family: "Bahnschrift"; font-size: 12pt; font-weight: 600; color: #C9B27A; background: transparent; }
 QLabel#Emblem    { background: transparent; }
 
 QPushButton#AccountButton {
@@ -57,29 +57,32 @@ QPushButton#AccountButton:hover { border-color: #5E95E8; }
 /* navigation */
 QWidget#NavBar { background: #0A0F1B; border-bottom: 1px solid #1C263A; }
 QPushButton#NavButton {
-    font-family: "Bahnschrift"; font-size: 11pt; font-weight: 600;
-    background: transparent; color: #9AA5B8; border: none; border-bottom: 3px solid transparent;
-    padding: 11px 10px 8px 10px;
+    font-family: "Bahnschrift"; font-size: 16pt; font-weight: 700;
+    background: transparent; color: #C9D2E0; border: none; border-bottom: 3px solid transparent;
+    padding: 12px 18px 9px 18px;
 }
 QPushButton#NavButton:hover { color: #FFFFFF; }
 QPushButton#NavButton:checked { color: #FFFFFF; border-bottom: 3px solid #4C8DFF; }
 
 /* page furniture */
 QLabel#PageTitle { font-family: "Palatino Linotype"; font-size: 22pt; font-weight: 700; color: #EDE6D6; }
-QLabel#PageSubtitle { color: #8F99AA; font-size: 10pt; }
+QLabel#PageSubtitle { color: #C2CAD6; font-size: 12pt; }
 QFrame#Card { background: #0E1524; border: 1px solid #1E2A40; border-radius: 6px; }
-QLabel#CardTitle { font-family: "Bahnschrift"; font-size: 11pt; font-weight: 700; color: #D9B45A; background: transparent; }
-QLabel#Muted { color: #8A93A3; background: transparent; }
+QLabel#CardTitle { font-family: "Bahnschrift"; font-size: 14pt; font-weight: 700; color: #D9B45A; background: transparent; }
+QLabel#Muted { color: #C2CAD6; background: transparent; }
 QLabel#Big { font-family: "Bahnschrift"; font-size: 16pt; font-weight: 700; color: #FFFFFF; background: transparent; }
 QLabel#StatValue { font-family: "Bahnschrift"; font-size: 18pt; font-weight: 700; color: #FFFFFF; background: transparent; }
-QLabel#StatLabel { color: #8A93A3; font-size: 8pt; background: transparent; }
+QLabel#StatLabel { color: #C2CAD6; font-size: 10pt; background: transparent; }
+/* the Play page: the account's name, and the lines that say how the game and the connection are doing */
+QLabel#Huge { font-family: "Bahnschrift"; font-size: 24pt; font-weight: 700; color: #FFFFFF; background: transparent; }
+QLabel#Status { font-family: "Bahnschrift"; font-size: 16pt; font-weight: 600; color: #FFFFFF; background: transparent; }
 QLabel#Warning { color: #F0B35A; background: transparent; }
 /* what a player must see and act on (a lobby whose players cannot play each other, a join turned away): large white
    on dark orange, framed in gold */
 QLabel#Alert { font-family: "Bahnschrift"; font-size: 13pt; font-weight: 700; color: #FFFFFF; background: #6B2A0C;
                border: 2px solid #F0B35A; border-radius: 4px; padding: 8px 12px; }
 QFrame#Card QLabel#Alert { background: #6B2A0C; }
-QLabel#Rank { font-family: "Bahnschrift"; font-size: 11pt; font-weight: 700; color: #E2B85A; background: transparent; }
+QLabel#Rank { font-family: "Bahnschrift"; font-size: 16pt; font-weight: 700; color: #E2B85A; background: transparent; }
 QFrame#Card QLabel, QFrame#Card QCheckBox { background: transparent; }
 QFrame#Card QStackedWidget, QFrame#Card QStackedWidget > QWidget { background: transparent; }
 
@@ -100,7 +103,17 @@ QPushButton#Primary:disabled { color: #6F7C94; background: #111A2C; border-color
 QPushButton#Primary[searching="true"] {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2A3448, stop:1 #151C2A); border-color: #5D6982;
 }
-QPushButton#Primary[compact="true"] { font-size: 11pt; padding: 6px 14px; }  /* beside plain buttons in a row */
+QPushButton#Primary[compact="true"] { font-size: 14pt; padding: 9px 18px; }  /* beside plain buttons in a row */
+QPushButton[big="true"] { font-family: "Bahnschrift"; font-size: 14pt; font-weight: 600; padding: 9px 18px; }
+/* PLAY: the one big button, read from across a room */
+QPushButton#Play {
+    font-family: "Bahnschrift"; font-size: 36pt; font-weight: 700; color: #FFFFFF;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2E63B8, stop:1 #142F63);
+    border: 3px solid #F0C75A; border-radius: 8px; padding: 14px 40px;
+}
+QPushButton#Play:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3873CF, stop:1 #193A78); }
+QPushButton#Play:disabled { color: #8D99AE; background: #111A2C; border-color: #3A4560; }
+QPushButton#Play:focus { border: 4px solid #FFE7A3; }
 /* a choice read from across a room (the preferred side): large white text, the one chosen bright blue in gold */
 QPushButton#SideChoice {
     font-family: "Bahnschrift"; font-size: 18pt; font-weight: 700; color: #FFFFFF;
@@ -156,11 +169,8 @@ QScrollBar::handle:horizontal { background: #26324A; border-radius: 4px; min-wid
 
 /* footer */
 QWidget#Footer { background: #05080E; border-top: 1px solid #1C263A; }
-QWidget#Footer QLabel { color: #8A93A3; font-size: 9pt; background: transparent; }
+QWidget#Footer QLabel { color: #C2CAD6; font-size: 12pt; background: transparent; }
 QLabel#Dot { font-size: 12pt; }
-
-/* match found */
-QLabel#MatchFound { font-family: "Palatino Linotype"; font-size: 28pt; font-weight: 700; color: #E2B85A; }
 
 /* the focus a controller (or Tab) moves: gold, over hover and checked, two pixels wide so it stands apart from the
    gold titles and the blue of what is chosen */

@@ -4,10 +4,11 @@ The launcher (`launcher/`, Qt 6 Widgets, C++20) and the lobby/matchmaking server
 library only) of SCV Online, Soulcalibur V (Xbox 360) on Windows. Both are ported from MK3D Online
 (`mk3d-rollback`, 1.0.10) and keep every one of its features but the jukebox: accounts and TLS pinning, Ranked and
 Casual queues with MATCH FOUND, series and rematches, ranked sets and rank badges, lobbies with King of the Hill,
-Respect Points and spectators, single player, practice and offline versus, the leaderboard, Build game, Controls,
-Settings, the Support page, the updater, crash, desync and F3 reports and the controller in the launcher. The wire
-formats and the launcher <-> game contract are in [PROTOCOL.md](PROTOCOL.md); this page is about building, running,
-testing and hosting.
+Respect Points and spectators, the leaderboard, the updater, crash, desync and F3 reports. From SCV 0.1.8 the player
+does all of that in the game's own menus (PROTOCOL.md 3.8), and the launcher is small: Play (the account and PLAY),
+Build game, Settings and Support, with everything online running in the background for the game. The wire formats and
+the launcher <-> game contract are in [PROTOCOL.md](PROTOCOL.md); this page is about building, running, testing and
+hosting.
 
 ```
 server/                  Python 3.11+ package, asyncio + standard library only
@@ -23,14 +24,16 @@ launcher/                Qt 6 Widgets, C++20, CMake + Ninja + MSVC
   data/sc5.json          the game, its modes and roster (compiled into the exe)
   data/logo, data/ranks  SCV Online's emblem, icons and the 16 rank badges (tools/make_art.py draws them)
   data/sounds/           match-found.wav, the MATCH FOUND chime (MK3D Online's, synthesized)
-  src/                   MainWindow, pages, ServerClient (TLS), UdpRendezvous, TunnelBridge, GameProcess,
-                         MatchController, FeedLink (spectators), ReportSender, Controls, X360 (disc, packages, XEX),
-                         GamepadNav, Updater
-  tools/fake_game.py     the stand-in for sc5.exe: speaks PROTOCOL.md section 3 without the game
+  src/                   MainWindow and its pages (PlayPage, ToolPages: Build game and Settings, KeyboardBox,
+                         SupportPage), MenuBridge (the game's online menus: ui.json and ask.txt), TestDriver (the test
+                         switches), ServerClient (TLS), UdpRendezvous, TunnelBridge, GameProcess, MatchController,
+                         FeedLink (spectators), ReportSender, Controls, X360 (disc, packages, XEX), GamepadNav, Updater
+  tools/fake_game.py     the stand-in for sc5.exe: speaks PROTOCOL.md section 3 without the game (and plays the
+                         player in its menus from a script of asks)
   tools/make_art.py      draws the emblem, icons and rank badges (Pillow)
   tools/aqt_split_layout.py  aqtinstall shim for Qt 6.11+, to install Qt into external\qt (MK3D Online's)
   build.cmd              configure + build + windeployqt into build\launcher
-tools/online-e2e.ps1     one PC: the server, two launchers (and a spectator), their games: queue, ranked, lobby
+tools/online-e2e.ps1     one PC: the server, two launchers (and a spectator), their games: queue, ranked, lobby, asks
 tools/koth-e2e.ps1       one PC: a King of the Hill lobby with three launchers, then the leaderboard
 ```
 
@@ -154,68 +157,33 @@ beside the exe (a player package's server) supplies any setting the settings fil
 | `build_script` (Build game's last step) | `<folder>\build-game.cmd` | `games\sc5\build-game.cmd` |
 
 Below the game folder: `disc\` (the extracted disc, `default.xexp` beside `default.xex`), `update\` (`patch.cpk`),
-`dlc\` (the player's own DLC), `user\` (single player's saves) and `cache\` (shaders). The repository is found by
-walking up from the exe to a folder with `tools\py\x360.py` and `launcher\CMakeLists.txt` (`tools/repo_root`
-overrides it); a package is a `games\` folder beside the exe. Every game the launcher starts gets a session folder
-`sessions\sc5-<yyyyMMdd-hhmmss>-<instance>` (the newest 30 kept) with `cmd.txt`, `status.txt`, `game.log`, the
-netplay logs, F3 captures and, for an online game, its fresh save `user\`.
+`dlc\` (the player's own DLC), `user\` (the player's saves, which the game PLAY starts plays on, online too) and
+`cache\` (shaders). The repository is found by walking up from the exe to a folder with `tools\py\x360.py` and
+`launcher\CMakeLists.txt` (`tools/repo_root` overrides it); a package is a `games\` folder beside the exe. Every game
+the launcher starts gets a session folder `sessions\sc5-<yyyyMMdd-hhmmss>-<instance>` (the newest 30 kept) with
+`cmd.txt`, `status.txt`, `ui.json`, `ask.txt.taken`, `game.log`, the netplay logs and F3 captures.
 
 ### The pages
 
-1. **Header and sign in.** The emblem, *SCV ONLINE*, the game (Soulcalibur V, Xbox 360, World: there is one, so no
-   game selector) and the account button: create an account or sign in; "remember me" keeps a 30-day login token. A
-   launcher that never signed in on this PC opens the window by itself, on *create account*, when it first connects.
-2. **Ranked / Casual** (Casual is `casual` in the protocol): the mode (Versus), the character or *Pick my character
-   on the game's own select screen* (`[online] pick_in_game`, on by default: the start line says `-` and the player
-   picks with their own controller), region and max ping (Ranked: *Strict*), *Practice while you wait* (the search
-   starts the game's training, `SC5_TRAINING=1`; a match found closes it and starts the match's game), *Search again
-   when a set or series ends*, FIND MATCH / CANCEL SEARCH (START on a controller). The Matchmaking card shows who
-   plays and searches right now (the server's `online` counts). A match found has 20 s to be accepted: the MATCH
-   FOUND window stays on top of the game, plays a chime (Settings) and shows the opponent's connection (Wi-Fi or
-   wired, the ping); ranked shows your rank and keeps the opponent hidden until both accept. Then the launcher
-   punches the opponent on the game port (UPnP, hole punching, else the server's relay, else the tunnel over its TLS
-   connection), measures the ping, writes the start line, reports the result the game writes and parks the game.
-   After a match the game waits at its result screen, still connected to the other's (a queue match reached
-   straight), and the series card shows the score against that opponent: Casual offers REMATCH (the same characters
-   on the same stage, as the game's own Rematch, when both choose it), CHARACTER SELECT (both pick again; either
-   one's choice of it takes both there) and LEAVE for 60 s after every match, in the card and in the *Rematch?* window
-   that comes over the game (a controller works it); a ranked set (first to 3) asks for its next match by itself, only
-   the last match's loser picks again, and *Leave set* asks first when leaving would lose it. The next match starts
-   from the result screen (`MatchController::Phase::AtResult`, the game's `rematch`: both REMATCH is the game's own
-   Rematch, anything else goes back through Character Select; no new punch, no restart); a series over, a relayed match or an older opponent's launcher park the game as before.
-   *Your record* shows the wins and losses (and in Ranked the Elo, the rank's badge, the next rank and the whole
-   ladder in its tooltip).
-3. **Lobby**: create (name, mode, password, 1, 2 or 3 rounds to win, 3 as on the console, *King of the Hill*),
-   join from the list or by its 5-letter code, pick a character (or *Pick in the game*), chat, *Ready*: both players
-   ready start the match after
-   the server's 3-2-1 countdown. After a match played straight between the two (no relay), both games stay at their
-   result screens and the match's loser (player 1 after a draw) chooses REMATCH or CHARACTER SELECT in the game with
-   their own controller, on a panel over the Results screen that both players see; the next match then starts from
-   there by itself (PROTOCOL.md 1.10, `in_place`). Nobody choosing in a minute takes both back to the lobby, to ready
-   again. *Watch* makes you a spectator: each lobby match plays in your game from both
-   players' feeds (`FeedLink`, PROTOCOL.md 1.10.1 and 3.6). **King of the Hill**: the winner stays on, the next in
-   line plays the king, everyone else watches and rates the winner from 1 to 10 after each match: Respect Points,
-   on the leaderboard. **Online Practice** (`sparring`): two friends by the code, no timer, health refills, nobody is
-   knocked out, BACK goes back to character select, nothing recorded. *Leave* closes the game the lobby started.
-   The list keeps itself current (every 4 s while the page shows, the selection kept, the player's own lobby marked
-   *YOUR LOBBY* in gold). A player is in one lobby at most: joining or creating another one moves them there (the
-   server leaves the old one for them once the new one lets them in; the game stays), a search running is cancelled
-   first, and a join turned away says why in large type over the list (an older server's `busy` is answered with a
-   leave and the join again). Each member's launcher version comes with the lobby: a player of another version is
-   named in large type before anyone readies (*... has SCV Online 0.1.3 and you have 0.1.4: your games cannot play
-   each other. ... must update*), and Ready stays off against them; another build of the same version is said too.
-   The launcher owns the games it started: a lobby's Ready or match closes a single-player, practice or versus game
-   it started (said in the banner), starting single player while ready un-readies, and a game that is not back at its
-   hold point 2 minutes after its park (a desync it never left) is closed and started again by itself, at once when a
-   lobby or a match on its way wants it.
-4. **Single player**: everything on the disc is unlocked in all three (the game's `unlocks.cpp`, every mode; paid
-   DLC from the player's own packages). PLAY starts the game plainly (its own menus); PRACTICE goes to training's
-   select screen (`SC5_TRAINING=1`); VERSUS to the two-player select screen (`SC5_VERSUS=1`), player 2 on the
-   controller chosen below. *Close the game* closes it. A queue search can run
-   alongside (standby): the match found freezes single player and thaws it afterwards. In a source build the
-   **Local test** box starts two instances on this PC (UDP 7001/7002) with matching start lines, no server needed.
-5. **Leaderboard**: top 100 by Elo, or by Respect Points (on a server with King of the Hill), with each rank's badge.
-6. **Build game** (`BuildPage`, `X360.cpp`, PROTOCOL.md 3.7): (1) the disc image (`.iso`, XGD2/XGD3 or XISO),
+From SCV 0.1.8 the player does everything online inside the game's own menus (PROTOCOL.md 3.8): Ranked, Casual,
+lobbies, Online Practice, watching, the leaderboard and the preferred side are the game's, beside its single player,
+Creation and Training. The launcher is small: it builds the game, starts it, signs the player in, and keeps doing all
+the online work in the background for the game. Its look is large, plain, high-contrast text (12 pt at the least, the
+Play page's lines 16 pt and PLAY itself 36 pt) and few things on a page.
+
+1. **Play** (`PlayPage`, the start page): the account (SIGN IN and CREATE ACCOUNT, or the signed-in name with the rank's
+   badge, its title and Elo, and the record: ranked sets and casual matches won and lost; *Sign out*; CONNECT AGAIN
+   when the server cannot be reached), one big **PLAY** button, and three lines in plain words: how the game is doing
+   (not running, starting, running, in an online match), how the connection is doing (signed in, players online and in
+   matches, or offline and why), and what is going on online (the search and its time, the match, the series' score,
+   the lobby). PLAY starts the player's own game (`MatchController::startPlayerGame`): `SC5_NET=1` and `SC5_MENUS=1`
+   on the player's own save (`<game folder>\user`) with a session folder of its own (PROTOCOL.md 3.1 and 3.8); with the
+   game running the button reads SHOW THE GAME and brings its window to the front. When the game cannot start (not
+   built yet, the wrong title update, a release that changed it) a large notice over the page says why, with an OPEN
+   BUILD GAME button. An update the server offers shows here as a card with its button (below, *Updates*). A launcher
+   that never signed in on this PC opens the account window by itself the first time it is connected, on *create
+   account*; "remember me" keeps a 30-day login token.
+2. **Build game** (`BuildPage`, `X360.cpp`, PROTOCOL.md 3.7): (1) the disc image (`.iso`, XGD2/XGD3 or XISO),
    (2) title update 3 (`TU_174Q21T_0000008000000.00000000000O2`, the game's last update, docs/TARGET.md), (3)
    optionally the player's own DLC packages, then *CHECK AND BUILD*. The launcher reads the disc's file system and
    the Xbox Live packages itself (no Python): the disc's `default.xex` must be the World release's (SHA-1
@@ -237,43 +205,65 @@ netplay logs, F3 captures and, for an online game, its fresh save `user\`.
    the game folder's `build-game.cmd` (a player package's, sc5/player/README.md: codegen and clang from the package,
    nothing installed) and shows what it prints; without that script (a source build's `game\`) it says the step is
    not ready.
-7. **Controls**: **Preferred side** (first, in large white text: three big buttons *Off*, *Left*, *Right*, the one
-   chosen bright blue in a gold frame, `SideChoice` in `Style.cpp`; *Off* the default): the side the player wants to
-   start every fight on, whichever player they are, as in Tekken 8. Kept as `display/preferred_side`, passed as
-   `SC5_PREFERRED_SIDE` and `preferred_side` in `display.txt` (PROTOCOL.md 3.1), so a running game follows a change at
-   once. When the player would start on the other side, their game shows the fight mirrored and swaps their left and
-   right in the fight; only their own screen changes (GAME.md, "A player's preferred side"). **In a fight**: what each of the Xbox 360 controller's A, B, X, Y, bumpers, triggers and stick clicks
-   presses in a fight, in every mode, online and offline: any combination of the game's own A (horizontal attack), B
-   (vertical attack), K (kick) and G (guard), all 16, where the game's own Control Settings offer 13 and none on the
-   stick clicks; *Default fight buttons* puts the console's Type A back. Online the other player's game sees the
-   presses as set here (PROTOCOL.md 3.1, `[fight]`). Then which keys press each button of the Xbox 360 controller (two
-   at most; click one and press the new key, Esc cancels, *No key* clears it) and what each button of a PC controller
-   presses, named by where it sits (the bottom face button is Xbox A, PlayStation cross, Switch B). Every button is
-   named by what it does in a fight: "Horizontal attack (X)", "A+G (LB)". Saved at each change to `controls.toml`
-   (`SC5_CONTROLS`, PROTOCOL.md 3.1); a running game reads it again within a second.
-8. **Settings**: **Server** (address `host:port` and the fingerprint the server's host gives out, *Connect*; with an
+3. **Settings**: **Server** (address `host:port` and the fingerprint the server's host gives out, *Connect*; with an
    empty fingerprint the launcher shows the presented one and asks whether to trust it), **Online** (region, max
    ping, input delay (*Auto (from the ping)*, the default since 0.1.4: the server picks the match's delay from the
    ping measured at its start, 1 frame under 67 ms and a frame more every 33 ms above, 6 at most, the same in both
    games; or 0-4 frames, played when larger than the other player's), the game UDP port (7001), strict ranked, the match
-   found chime, UPnP, *Hide my IP address from opponents* and *Even when the ping through the server is high*),
+   found chime (heard over the game when it shows MATCH FOUND), UPnP, *Hide my IP address from opponents* and *Even
+   when the ping through the server is high*),
    **Display**: the window (windowed, borderless, fullscreen), its resolution, the internal resolution (1280x720 as
    on the console, 2x, 3x or 4x), anti-aliasing (off, FXAA, stronger FXAA), texture filtering (the game's own or 2x
    to 16x anisotropic), v-sync (on; on with a G-SYNC or FreeSync monitor; off), brightness and frame data in
    practice (a frame meter as Street Fighter 6's over Training and Online Practice, F7 in the game hides it;
    GAME.md). Each changes only how a frame looks, never what the game computes, so two players may set them
    differently in one match; they reach the game as `SC5_*` variables and `display.txt`, which a running game follows
-   (PROTOCOL.md 3.1). **Sound**: master, music, effects and voices, percent of the game's own. **Game folder**:
-   folder, executable and build script. **Tools and development** (a source build): Python, the repository, the local
-   test's ports.
-9. **Support** (`SupportPage`): where to follow ImTheBlindGuy: YouTube (`youtube.com/@lmTheBIindGuy`) and Twitch
+   (PROTOCOL.md 3.1). **Keyboard** (`KeyboardBox`, for a player without a controller): which keys press each button
+   of the Xbox 360 controller, two at most (click one and press the new key, Esc cancels, *No key* clears it), and
+   whether the keyboard plays at all, saved at each change to `controls.toml` (`SC5_CONTROLS`), which a running game
+   reads again within a second. **Game folder**: folder, executable and build script. **Tools and development** (a
+   source build): Python, the repository, the local test's ports. The mouse wheel scrolls the page; a list or number
+   box changes with it only once it was clicked.
+4. **Support** (`SupportPage`): where to follow ImTheBlindGuy: YouTube (`youtube.com/@lmTheBIindGuy`) and Twitch
    (`twitch.tv/imtheblindguy`), each with a button that opens it in the browser.
+
+**What went with 0.1.8.** The Ranked, Casual, Lobby, Single player, Leaderboard and Controls pages, the MATCH FOUND,
+rematch and Create lobby windows, and the second game a search or a lobby used to start (hidden, on a fresh save),
+practice while a search waits and single player set aside for a match (standby): there is one game now, the player's,
+and its menus do all of that. The Settings page's sound levels went too (the game's own Sound options set them; the
+launcher passes no `SC5_VOLUME_` variable, so the game plays at its own levels), and so did the Controls page's *In a
+fight* button combinations (the game's own Options set what the buttons do; the launcher takes an older version's
+`[fight]` out of `controls.toml`) and its PC controller section (its `[buttons]` stay in the file as they were).
+The preferred side is chosen in the game (its ask `side`; the launcher keeps it as `display/preferred_side` and passes
+it on as before). A settings file of 0.1.7 or older works as it is: the keys nothing reads any more (`display/volume_*`,
+`online/practice_while_waiting`, `online/search_again`, `online/pick_in_game`, `online/koth`, the queue pages'
+characters under `ui/`) are taken out at the first start (`cfg::dropRemovedSettings`, logged), and a start page of
+before (`ui/page=ranked`, say) opens Play.
+
+**The game's online menus** (`MenuBridge`, PROTOCOL.md 3.8). While the player's game runs, the launcher writes
+`ui.json` into its session folder whenever anything in it changes (within 50 ms) and once a second: the account, the
+server's counts and notice, the preferred side, the search (`queue`: searching with its time and the raised ping
+limit, MATCH FOUND with the seconds left to accept, accepted, connecting, starting), the series against the present
+opponent (a ranked set's score to 3, a casual series', a lobby's wins), the open lobbies, the lobby the player is in
+with its members and one sentence of what happens next (who must get ready, the countdown, who cannot play whom by
+their versions, a private lobby's password for its host), the leaderboard, one message (a match's result, a set won,
+an ask refused and why) and the update offered. It takes `ask.txt` every 100 ms and does what each line asks through
+the code the pages' buttons called before: `MatchController::findMatch`, `cancelSearch`, `accept`, `decline` and
+`seriesReady`, and the lobby, ready, leave and leaderboard messages to the server (with a search running cancelled
+first, an older server's `busy` answered with a leave and the join again, and the version check before Ready). Every
+ask is safe in any state: one that does not fit is left undone with a message saying why. A match found plays the
+chime and brings the game's window to the front; the match starts in the same game with `start` and ends with `park`
+(3.3), a series' next match from the result screen with `rematch`, and a lobby's matches to watch play in it too.
+When something online needs the game and it is not running (a lobby match that comes, a search asked for without it),
+the launcher says so and starts nothing. When the game closes or crashes, the launcher leaves the search, the set or
+series and the lobby the player was in, and reports a match it was in as left. The launcher never closes the game by
+itself: a game that does not come back to its online menu after a match is parked again and the player told to close
+it and press PLAY if it stays stuck. Closing the launcher asks first while the game runs, and closes the game with it.
 
 **The controller in the launcher** (`GamepadNav`, SDL3): only while a launcher window is in front, since the game
 reads the controllers in the background too. The d-pad or left stick moves the focus (gold) to the nearest control,
-A clicks, B is Esc in a dialog (not in MATCH FOUND or the rematch prompt), LB / RB step the pages, START presses FIND
-MATCH on a queue page and Ready on the Lobby page. While a match is connecting, played, reported or watched the
-controller does nothing in the launcher. `SC5_PAD_ANY_WINDOW=1` takes any active launcher window as in front (tests
+A clicks, B is Esc in a dialog, LB / RB step the pages, START presses PLAY on the Play page. While a match is
+connecting, played, reported or watched the controller does nothing in the launcher. `SC5_PAD_ANY_WINDOW=1` takes any active launcher window as in front (tests
 on Qt's offscreen platform with an SDL virtual gamepad).
 
 **Crash reports**: a game that ends with an exception's exit code, or whose log ends with the game's crash line, is
@@ -289,12 +279,13 @@ and `exit_code`, from the last lines of its log.
 
 **Updates** (`Updater`): a player package says which build it is (its `VERSION.txt` stamp, `hello`'s `build`),
 so a test build that carries a release's number is offered that release when the update file names the release's
-build (PROTOCOL.md 1.3); the offer's window stays over the game. The server names the latest release
-(`welcome.update`, an `update` push, the
-`client_outdated` reply). A player package offers it in a window (UPDATE NOW, LATER, the notes and the release
-page); UPDATE NOW downloads the zip into `update\` beside the launcher, checks its size and SHA-256 against the
+build (PROTOCOL.md 1.3). The server names the latest release (`welcome.update`, an `update` push, the
+`client_outdated` reply). The Play page shows it as a card with its button, and `ui.json`'s `update` tells the game,
+which says so in its menus; while the game runs nothing comes over it, and the offer's window (UPDATE NOW, LATER, the
+notes and the release page) opens by itself once the game is closed, or at once from the card. UPDATE NOW downloads the
+zip into `update\` beside the launcher, checks its size and SHA-256 against the
 server's (whose certificate is pinned; the download host is not trusted), unpacks it, checks its `VERSION.txt`
-(`SC5-Online <version>, ...`) and swaps the release's files in once nothing uses the game (each old file renamed to
+(`SC5-Online <version>, ...`) and swaps the release's files in once the game is closed (each old file renamed to
 `<name>.sc5-old` and deleted at the next start); then the new launcher starts with `--updated <old version>`, and
 when the release changed the game (`games\sc5\built.txt`, which `build-game.cmd` copies from `project\VERSION`,
 names another release) it builds the game again on Build game before anything starts it (`GameProcess::needsRebuild`,
@@ -313,27 +304,34 @@ seed, so both sides agree (Online Practice: `sparring_over`). In a lobby match i
 start line's `feed` (READY, inputs, checks, the frame it left at, under the `SC5R` header); started to watch
 (`watch=1`) it reads both players' feed and reports `in_match` and the result from it. Its `game.log` starts with
 every `SC5_` variable it was given. `SC5_FAKE_RESULT=desync` makes it report a desync with a log like a real game's.
+`SC5_FAKE_ASKS=<script>` makes it the player in the game's online menus too: it reads `ui.json` and writes `ask.txt`
+lines as the script says (`wait queue.state=found`, `ask accept`, `ask lobby_join code={lobbies.list[name=X].code}`;
+the stand-in's docstring has the rest), and its `game.log` says `asks script: done` or where it failed.
 
 ### Command line (development and automation)
+
+The switches that play a part (`--queue`, `--lobby`, `--auto-accept`, `--rematches` and the rest) stand in for the
+player in the game's menus: the launcher starts its game first, as PLAY does, and once the game is up and the account
+signed in they go through the same asks the game's menus send (`TestDriver`, `MenuBridge::ask`). The one thing the
+game's menus do not ask for is a casual rematch: the game's result screen chooses it (PROTOCOL.md 3.3, *The loser's
+choice*); `--rematches` stands in for that.
 
 | option | effect |
 |---|---|
 | `--config <ini>` | use another settings file (two launchers on one PC need two) |
 | `--server host:port`, `--fingerprint <hex>` | override and store the server settings |
 | `--user NAME [--register]` | sign in (or create) with the password from `SC5_DEV_PASSWORD` (`--password-env` picks another variable) |
-| `--queue casual\|ranked --mode versus --character Siegfried` | search right after signing in |
-| `--auto-accept N` | accept a found match after N seconds |
-| `--cancel-search N` | with `--queue`: cancel the search N seconds after it starts, as CANCEL SEARCH does |
-| `--rematches N`, `--rematch-choice rematch,select`, `--leave-series` | with `--queue casual`: choose a rematch after each match, N times, then leave or let it run out |
-| `--solo` | with `--queue`: start single player first and search alongside it (standby); with `--lobby join`: single player open while readying (the lobby's match closes it) |
-| `--lobby-own-first` | with `--lobby join`: a lobby of one's own first, then the named one joined as a click does (the server moves the player; an older server's busy gets a leave and the join again) |
-| `--practice on\|off`, `--search-again on\|off` | the queue pages' boxes, saved |
-| `--lobby host\|join\|watch --lobby-name NAME [--lobby-code-file F] [--lobby-matches N]` | host a lobby and ready, join it and ready, or watch it as a spectator; the code through a file (Online Practice lobbies are never listed) |
-| `--koth`, `--rate N` | a King of the Hill lobby; rate each match watched, 1 to 10 |
-| `--leave-lobby`, `--leave-lobby-in-match S` | leave the lobby after its matches, or S seconds into the first |
-| `--snap-dir <folder>` | save pictures of the window as the lobby changes, of the Create lobby window and of the leaderboard in both orders; with `--page`, a picture of that page |
-| `--page ranked\|casual\|lobby\|single\|leaderboard\|build\|controls\|settings\|support` | start page |
-| `--local-test` | start the two-instance loopback test |
+| `--play` | start the game once the window is up, as PLAY does |
+| `--queue casual\|ranked [--character Siegfried]` | start the game and ask for that search once signed in (the character: a roster id the search goes with; picked in the game without it) |
+| `--auto-accept N` | answer a match found with `accept` after N seconds |
+| `--cancel-search N` | with `--queue`: `cancel` N seconds after the search starts |
+| `--rematches N`, `--rematch-choice rematch,select`, `--leave-series` | with `--queue casual`: choose a rematch after each match, N times, then `leave` or let it run out |
+| `--lobby-own-first` | with `--lobby join`: a lobby of one's own first, then the named one joined (the server moves the player; an older server's busy gets a leave and the join again) |
+| `--lobby host\|join\|watch --lobby-name NAME [--lobby-code-file F] [--lobby-matches N] [--mode sparring]` | `lobby_create` and ready, find it in `lobbies` (or by the code in F) with `lobby_join` and ready, or join it with `watch=1` |
+| `--koth`, `--rate N` | a King of the Hill lobby; rate each match watched, 1 to 10 (straight to the server: the game's menus have no rating) |
+| `--leave-lobby`, `--leave-lobby-in-match S` | `lobby_leave` after its matches, or S seconds into the first |
+| `--page play\|build\|settings\|support [--snap-dir <folder>]` | start page; with `--snap-dir`, a picture of it |
+| `--local-test` | start the two-instance loopback test (two games of their own, no server) |
 | `--extract <image>` | open Build game and check and extract that image (the title update and DLC from the settings, `games/sc5/update_package` and `games/sc5/dlc`), then compile; what it did goes to `sc5-launcher.log` (`build sc5: ...`) |
 | `--auto-update`, `--updated <version>` | install an offered update without asking (tests); started by an update |
 | `--upnp-probe` | find the router and its public address, open nothing |
@@ -341,8 +339,8 @@ every `SC5_` variable it was given. `SC5_FAKE_RESULT=desync` makes it report a d
 ### End-to-end tests on one PC
 
 `tools\online-e2e.ps1` runs this checkout's server on a throwaway database and certificate, two launchers on Qt's
-offscreen platform (no window on the screen) and the stand-in games they start, and prints every status line, what
-the launchers did and the database's records:
+offscreen platform (no window on the screen) and the stand-in games they start (one each, as PLAY), and prints every
+status line, what the launchers did and the database's records. Its settings files turn UPnP off.
 
 ```
 powershell -File tools\online-e2e.ps1 -Queue casual -Rematches 1      # match found, accept, match, result, rematch
@@ -350,19 +348,35 @@ powershell -File tools\online-e2e.ps1 -Queue ranked                   # a ranked
 powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Watch  # a lobby, two matches, a spectator
 powershell -File tools\online-e2e.ps1 -Queue lobby -Mode sparring     # Online Practice
 powershell -File tools\online-e2e.ps1 -Queue ranked -Draw -Matches 2  # drawn matches: nobody's point in the set
-powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -OwnLobbyFirst -SoloB  # B moves from its own lobby, its single player closed
-powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Desync -Stuck  # desync reports paired, stuck games replaced
+powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -OwnLobbyFirst  # B moves from its own lobby
 powershell -File tools\online-e2e.ps1 -Queue casual -DelayB 3        # input delays: Auto (default) or a number
+powershell -File tools\online-e2e.ps1 -Queue asks                    # the stand-in games drive it by asks alone
 powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps                 # King of the Hill, Respect Points, leaderboard
 ```
+
+`-Queue asks` starts the launchers with `--play` only: each stand-in game runs a script of asks (`SC5_FAKE_ASKS`)
+against its launcher's `ui.json`, as a player in the game's menus would: asks that do not fit (accept with no match,
+a second search, Ready outside a lobby) and their messages, a casual match found, accepted and played, the series
+left, the leaderboard, then a lobby A creates and B finds in the list and joins, both ready, its match, and both
+leaving. It passes once both scripts say `asks script: done`.
 
 The stand-in's results name the fighters as the real game does, by its own character ids with the costume after a
 dot (`p1_char=3.0`), so a ranked set's winner keeps theirs in the next start line. `-Exe` runs another game (the real
 `sc5.exe` speaks section 3 for versus since 2026-11-17: its `tools\linktest.py` drives two of them through the same
-files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them. The work folders
-(`build\online-e2e`, `build\koth-e2e`) stay for a look and are replaced by the next run.
+files), `-Visible` shows the launchers' windows, `-Snaps` saves pictures of them. `-Port` picks other ports (the
+work folder is then `build\online-e2e-<port>`). The work folders (`build\online-e2e`, `build\koth-e2e`) stay for a
+look and are replaced by the next run. `-Stuck` (games that never take `park`) no longer gets its games replaced: the
+launcher never closes the player's game, so it parks it again and tells the player.
 
 ## Known limitations
+
+- The game's online menus (3.8) have no asks yet for a lobby's chat, for changing places in a lobby (a player stepping
+  aside to watch, a spectator taking a free place, King of the Hill's line), or for rating a King of the Hill win:
+  the launcher's pages that had them are gone, so those wait for asks of their own. A spectator joins to watch
+  (`lobby_join watch=1`) and a King of the Hill lobby still plays, its line and its king as before.
+- A casual series' next match is chosen at the game's result screen (3.3, *The loser's choice*); until the game
+  offers that choice after a queue match, a casual series ends when its 60 s run out (`--rematches` stands in for it in
+  the tests).
 
 - The game speaks all of section 3 (2026-11-17): versus, Online Practice (`sparring`), practice and watching (the
   spectator feed), the display and sound settings (`SC5_DISPLAY_FILE`) and `controls.toml` (docs\GAME.md, "The

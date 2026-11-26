@@ -1,8 +1,8 @@
 #pragma once
 // The controls file the game reads (docs/PROTOCOL.md 3.1, SC5_CONTROLS): which keys press each button of the Xbox 360
 // controller (the keyboard plays as player 1 while the game's window is in front), and what each button of a PC
-// controller presses. The Controls page edits it; a game that is running reads it again within a second, and the
-// launcher hands its path to every game it starts.
+// controller presses. Settings, Keyboard edits its keys (KeyboardBox); a game that is running reads it again within a
+// second, and the launcher hands its path to every game it starts.
 
 #include <QList>
 #include <QString>

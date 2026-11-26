@@ -327,7 +327,7 @@ Map load() {
 
 bool save(const Map& m, QString* error) {
     QString text = QStringLiteral(
-        "# SCV Online controls. The launcher's Controls page writes this file; a game that is running reads it again\n"
+        "# SCV Online controls. The launcher writes this file (Settings, Keyboard); a game that is running reads it again\n"
         "# within a second of a change. The buttons are the Xbox 360 controller's: up down left right (the d-pad),\n"
         "# a b x y, lb rb (bumpers), lt rt (triggers), start back, ls rs (stick clicks).\n"
         "\n"
