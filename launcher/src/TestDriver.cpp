@@ -42,7 +42,8 @@ TestDriver::TestDriver(const LaunchOptions& opts, ServerClient* server, MatchCon
             return;
         // the game's own result screen offers the choice (SCV 0.1.8: its loser's REMATCH, CHARACTER SELECT or LEAVE,
         // the stand-in's SC5_FAKE_CHOICE): nothing to stand in for
-        if (controller_->choiceOnResultScreen()) return;
+        // (or made it already: the launcher readies from there)
+        if (controller_->choiceOnResultScreen() || controller_->phase() == MatchController::Phase::AtResult) return;
         if (rematchesChosen_ >= opts_.rematches) {
             if (opts_.leaveSeries) {
                 say(QStringLiteral("leaving the series"));
@@ -60,6 +61,15 @@ TestDriver::TestDriver(const LaunchOptions& opts, ServerClient* server, MatchCon
     // --lobby: the next match's ready waits for the game to be done with the last one
     connect(controller_, &MatchController::phaseChanged, this, [this](MatchController::Phase p) {
         if (p == MatchController::Phase::Idle && !opts_.lobby.isEmpty() && !lastLobby_.isEmpty()) onLobby(lastLobby_);
+        // --drop-at-result: the server connection drops while the game waits at its first result screen (the loser's
+        // choice still to come, or made while it is off), as a network would; it comes back by itself
+        if (p == MatchController::Phase::AtResult && opts_.dropAtResult > 0 && !dropped_) {
+            dropped_ = true;
+            QTimer::singleShot(opts_.dropAtResult * 1000, this, [this] {
+                say(QStringLiteral("dropping the server connection at the result screen"));
+                server_->dropForTest();
+            });
+        }
     });
     if (active() || opts_.play) QTimer::singleShot(500, this, &TestDriver::startGame);
 }
@@ -78,7 +88,7 @@ QString TestDriver::enc(const QString& text) {
 }
 
 void TestDriver::login() {
-    if (opts_.user.isEmpty() || server_->isLoggedIn() || loginId_ >= 0) return;
+    if (opts_.user.isEmpty() || server_->isLoggedIn() || loginId_ >= 0 || dropped_) return;
     const QString pw = QProcessEnvironment::systemEnvironment().value(opts_.passwordEnv);
     if (pw.isEmpty()) {
         say(QStringLiteral("%1 is not set; not signing in").arg(opts_.passwordEnv));

@@ -96,7 +96,22 @@ MatchController::MatchController(ServerClient* server, QObject* parent)
             log(tr("Sent the stored result of match %1").arg(str(pendingResult_, "match")));
             pendingResult_ = {};
         }
+        // back after a dropped connection while the game waits at its result screen: the server sends the series'
+        // state again at once (then the loser's choice, made meanwhile or still to come, goes on as usual); a lobby's
+        // place was given up and taken again, the other player's game parked meanwhile: this one parks too
+        seriesSeen_ = false;
+        if (phase_ != Phase::AtResult) return;
+        if (!str(found_, "lobby").isEmpty()) {
+            log(tr("Back on the server after a dropped connection: the lobby's next match is off, the game parks"));
+            finishMatch();
+            emit notice(tr("Your connection to the server dropped after the match. Get ready again in the lobby for "
+                           "the next one."));
+            return;
+        }
+        reloginTimer_.start(4000);  // checkChoiceAfterLogin
     });
+    reloginTimer_.setSingleShot(true);
+    connect(&reloginTimer_, &QTimer::timeout, this, &MatchController::checkChoiceAfterLogin);
     connect(server_, &ServerClient::stateChanged, this, [this](ServerClient::State s) {
         if (s != ServerClient::State::Offline) return;
         if (phase_ == Phase::Searching || phase_ == Phase::Found || phase_ == Phase::Connecting) {
@@ -635,8 +650,9 @@ void MatchController::setPhase(Phase p, const QString& text) {
     phase_ = p;
     phaseText_ = text;
     if (p != Phase::Searching) keepaliveTimer_.stop();
+    // (at the result screen too: the loser's choice and the next match from there go on through it)
     if (tunnel_ && p != Phase::Found && p != Phase::Connecting && p != Phase::Starting && p != Phase::Playing &&
-        p != Phase::Reporting && p != Phase::Finishing)
+        p != Phase::Reporting && p != Phase::Finishing && p != Phase::AtResult)
         closeTunnel();  // no match of this player's any more
     log(text);
     emit phaseChanged(p, text);
@@ -719,12 +735,71 @@ void MatchController::sendSeriesReady() {
     if (!wantNext_ || (phase_ != Phase::Idle && !inPlace) || series_.isEmpty() ||
         str(series_, "state") != QLatin1String("between") || !server_->isLoggedIn())
         return;
+    // a game away from its online menus (the player went to Training, say) is never started into a match: ready once
+    // it is back there, if the series still waits by then
+    if (gameAway()) return;
     wantNext_ = false;
+    // what it readied with, for the same series' same wait: sent again as it was after a dropped connection
+    readyChoice_ = nextChoice_;
+    readySeries_ = str(series_, "series");
+    readyPlayed_ = series_.value(QStringLiteral("played")).toInt();
     server_->send({{QStringLiteral("type"), QStringLiteral("series_ready")},
                    {QStringLiteral("series"), str(series_, "series")},
                    {QStringLiteral("ready"), true},
                    {QStringLiteral("choice"), nextChoice_},
                    {QStringLiteral("in_place"), inPlace}});
+}
+
+bool MatchController::gameAway() const { return game_ && game_->isRunning() && game_->menus() && game_->isAway(); }
+
+// The player's own game left its online menus (status `away`: single player, Creation, Training ...). Nothing is
+// started in it from there: a search stops, a match found or on its way is declined at once (the other player is
+// released in seconds, back to searching when it came from the queue), and a match whose start the game has not taken
+// yet is reported as left (the game never took it: nothing is parked in it). A lobby's Ready is taken back by MenuBridge.
+void MatchController::onGameAway() {
+    if (!game_ || !game_->menus()) return;
+    switch (phase_) {
+    case Phase::Searching:
+        log(tr("The game left its online menu: the search stops"));
+        cancelSearch();
+        emit notice(tr("You left the online menu, so the search stopped."));
+        break;
+    case Phase::Found:
+    case Phase::Connecting:
+        log(tr("The game left its online menu: the match found is declined"));
+        decline();
+        emit notice(tr("You left the online menu, so the match was called off."));
+        break;
+    case Phase::Starting:
+        if (pendingStart_.isEmpty() || inPlace_) break;  // the game took the start: it is in the match, not away
+        log(tr("The game left its online menu before it took the match's start: the match is left"));
+        pendingStart_.clear();
+        reportResult({{QStringLiteral("outcome"), QStringLiteral("left")},
+                      {QStringLiteral("exit"), QStringLiteral("left the online menu")}});
+        parkTimer_.stop();  // nothing to park: the game never took the start
+        go_ = {};
+        found_ = {};
+        closeFeed();
+        setPhase(Phase::Idle, tr("Match left: the game was away from its online menu"));
+        emit notice(tr("You left the online menu before the match started, so it was called off."));
+        break;
+    default:
+        break;
+    }
+}
+
+// Logged in again after a dropped connection, the game at its result screen with the loser's choice made or to come:
+// the server sent the series' state again by now if the series is still there (the choice then goes on, onServerMessage).
+// When it did not, the series is gone: the game leaves its result screen, and the player is told.
+void MatchController::checkChoiceAfterLogin() {
+    if (phase_ != Phase::AtResult || !lobbyChoice_ || seriesSeen_ || !str(found_, "lobby").isEmpty()) return;
+    const QString opp = opponentName();
+    log(tr("Back on the server: the series against %1 is over, the game leaves its result screen").arg(opp));
+    series_ = {};
+    emit seriesChanged(series_);
+    finishMatch();
+    emit notice(tr("Your connection to the server dropped, and the series against %1 ended meanwhile. Your game goes "
+                   "back to its online menu.").arg(opp));
 }
 
 int MatchController::searchSeconds() const {
@@ -1047,6 +1122,15 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         // punch below needs the game port, which the game lets go of at once.
         const bool atResult = phase_ == Phase::AtResult;
         atResultTimer_.stop();
+        if (!atResult && gameAway()) {
+            // the player's game is away from its online menus: it is never started into a match from there
+            log(tr("A match came while the game is away from its online menu: declined"));
+            found_ = msg;
+            phase_ = Phase::Found;
+            decline();
+            emit notice(tr("A match came while you were away from the online menu, so it was called off."));
+            return;
+        }
         inPlace_ = atResult && msg.value(QStringLiteral("in_place")).toBool() && game_ && game_->isRunning();
         if (atResult && !inPlace_ && game_ && game_->isRunning()) parkGame();
         found_ = msg;
@@ -1055,7 +1139,10 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         replacedForPort_ = false;
         leaveQuit_ = false;
         lobbyChoice_ = false;
-        pendingChoice_.clear();
+        awaitChoice_ = false;
+        pendingChoice_.clear();  // a choice of the last match's is done with
+        pendingChooser_ = resultChooser_ = 0;
+        reloginTimer_.stop();
         if (inPlace_) {
             setPhase(Phase::Starting, tr("Next match against %1, from the result screen...").arg(opponentName()));
             emit matchFound(msg);
@@ -1226,24 +1313,34 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         const bool wasReady = str(series_, "state") == QLatin1String("between") &&
                               (series_.value(QStringLiteral("you_ready")).toBool() || wantNext_);
         series_ = msg;
+        seriesSeen_ = true;
+        const QString id = str(msg, "series");
         // The next match of a set or series is the loser's choice on the game's result screen (SCV 0.1.8: `chose`,
-        // onGameStatus). Where the game offers none (a match through the relay or the tunnel, one that did not count,
-        // a game no longer at its result screen) the series goes on by itself the usual way: CHARACTER SELECT, the
-        // last winner keeping their fighter and the loser picking again
-        if (state == QLatin1String("between") && !msg.value(QStringLiteral("you_ready")).toBool() && !awaitChoice_ &&
-            !wantNext_) {
-            wantNext_ = true;
-            nextChoice_ = QStringLiteral("select");
-        }
-        // the loser chose LEAVE before the series' "between" came (sent now)
-        if (state == QLatin1String("between") && leaveSeries_) {
-            leaveSeries_ = false;
-            wantNext_ = false;
-            seriesReady(false);
+        // onGameStatus). Where the game offers none (one that did not count, a game no longer at its result screen, a
+        // relayed match with a server that cannot keep its route) the series goes on by itself the usual way:
+        // CHARACTER SELECT, the last winner keeping their fighter and the loser picking again. Readied for this wait
+        // already (the server forgot it with a dropped connection): the same choice again
+        if (state == QLatin1String("between") && !msg.value(QStringLiteral("you_ready")).toBool() && !wantNext_) {
+            const bool readied = readySeries_ == id && readyPlayed_ == msg.value(QStringLiteral("played")).toInt() &&
+                                 !readyChoice_.isEmpty();
+            if (readied) {
+                wantNext_ = true;
+                nextChoice_ = readyChoice_;
+                log(tr("Ready again for the next match (%1), as before the connection dropped").arg(readyChoice_));
+            } else if (!awaitChoice_) {
+                wantNext_ = true;
+                nextChoice_ = QStringLiteral("select");
+            }
         }
         if (phase_ == Phase::AtResult) {
-            if (state == QLatin1String("between")) atResultTimer_.stop();
-            else if (state == QLatin1String("over")) finishMatch();  // no next match: the game leaves its result screen
+            if (state == QLatin1String("between")) {
+                atResultTimer_.stop();
+                // the loser's choice came before this "between" (or while this launcher was off the server, LEAVE
+                // included): it goes on now
+                if (lobbyChoice_ && !pendingChoice_.isEmpty()) readyInPlace(pendingChoice_);
+            } else if (state == QLatin1String("over")) {
+                finishMatch();  // no next match: the game leaves its result screen
+            }
         }
         if (state == QLatin1String("over")) {
             wantNext_ = false;
@@ -1256,6 +1353,26 @@ void MatchController::onServerMessage(const QJsonObject& msg) {
         maybeBackToSolo();
         maybeSearchAfterSeries();
         maybePracticeAfterSeries();
+    } else if (type == QLatin1String("lobby")) {
+        // A lobby's match over, its games at their result screens for the loser's choice: the other player left the
+        // lobby (or dropped, or stepped aside to watch) meanwhile, so no next match comes from there. The game leaves
+        // its result screen at once, rather than when the choice's time runs out
+        const QJsonObject lb = msg.value(QStringLiteral("lobby")).toObject();
+        const QString opp = str(found_.value(QStringLiteral("opponent")).toObject(), "name");
+        if (phase_ == Phase::AtResult && !str(found_, "lobby").isEmpty() && str(lb, "id") == str(found_, "lobby") &&
+            !opp.isEmpty()) {
+            bool there = false;
+            for (const auto& v : lb.value(QStringLiteral("members")).toArray()) {
+                const QJsonObject m = v.toObject();
+                there = there || (str(m, "name") == opp && !m.value(QStringLiteral("spectator")).toBool());
+            }
+            if (!there) {
+                log(tr("%1 left the lobby while the next match was being chosen: the game leaves its result screen")
+                        .arg(opp));
+                finishMatch();
+                emit notice(tr("%1 left the lobby, so there is no next match. Your game goes back to the lobby.").arg(opp));
+            }
+        }
     } else if (type == QLatin1String("result_ack")) {
         log(tr("Result of %1 acknowledged by the server").arg(match));
     } else if (type == QLatin1String("spectate")) {
@@ -1430,7 +1547,7 @@ void MatchController::endWatch(const QString& text) {
     watch_ = {};
     pendingStart_.clear();
     finishText_ = text;
-    if (started && game_ && game_->isRunning() && !game_->isReady()) {
+    if (started && game_ && game_->isRunning() && !game_->isReady() && !game_->isAway()) {
         parkGame();
         finishTimeout_.start(45000);
         setPhase(Phase::Finishing, text);
@@ -1598,8 +1715,11 @@ void MatchController::onGameStatus(const QString& line) {
             reportRefusedPick(line.mid(at + 13));
         }
     }
-    if (st == QLatin1String("ready")) {
-        if (showWhenReady_) {  // standby: started for an accepted match, its window is up now
+    if (st == QLatin1String("ready") || st == QLatin1String("away")) {
+        // back at its online menus after a park, or gone on from there to something of the player's (Training, say):
+        // not stuck, and done with the last match
+        stuckTimer_.stop();
+        if (showWhenReady_ && st == QLatin1String("ready")) {  // standby: started for an accepted match, its window is up now
             showWhenReady_ = false;
             emit gameShown();
         }
@@ -1610,9 +1730,23 @@ void MatchController::onGameStatus(const QString& line) {
             setPhase(Phase::Idle, finishText_.isEmpty() ? tr("Match over") : finishText_);
         } else if (phase_ == Phase::AtResult) {  // the game left its result screen by itself: the next match the usual way
             atResultTimer_.stop();
+            const bool waited = awaitChoice_;
+            lobbyChoice_ = awaitChoice_ = false;  // no choice comes from there any more
+            pendingChoice_.clear();
+            // a series waiting for that choice goes on the usual way, as where the game offers none
+            if (waited && str(series_, "state") == QLatin1String("between") &&
+                !series_.value(QStringLiteral("you_ready")).toBool() && !wantNext_) {
+                wantNext_ = true;
+                nextChoice_ = QStringLiteral("select");
+            }
             setPhase(Phase::Idle, tr("Match over"));
         }
-        tryStart();
+        if (st == QLatin1String("ready")) {
+            tryStart();
+            sendSeriesReady();  // a series' next match waited for the game to be back at its online menus
+        } else {
+            onGameAway();
+        }
     } else if (st == QLatin1String("in_match")) {
         if (phase_ == Phase::Starting && forThisMatch) {
             startTimeout_.stop();
@@ -1801,8 +1935,8 @@ void MatchController::afterResult(const QJsonObject& result) {
     // choose=1) and both games say what they chose (status `chose`): both launchers ready in place with it
     const bool choice = resultChoice();
     if ((status == QLatin1String("agreed") || status == QLatin1String("draw")) &&
-        (str(found_, "lobby").isEmpty() || choice) && straightRoute() && game_ && game_->isRunning() &&
-        !game_->isReady() && watch_.isEmpty()) {
+        (str(found_, "lobby").isEmpty() || choice) && routeKept() && game_ && game_->isRunning() &&
+        !game_->isReady() && !game_->isAway() && watch_.isEmpty()) {
         parkTimer_.stop();
         startTimeout_.stop();
         pendingStart_.clear();
@@ -1810,6 +1944,10 @@ void MatchController::afterResult(const QJsonObject& result) {
         inPlace_ = false;
         lobbyChoice_ = choice;
         awaitChoice_ = choice;
+        // whose choice it is, as the server's result says (the loser; player 1 after a draw): only that player's
+        // launcher leaves a set or series on LEAVE, whatever the game's line says
+        const int winner = result.value(QStringLiteral("winner")).toInt();
+        resultChooser_ = status == QLatin1String("draw") ? 1 : winner == 1 ? 2 : winner == 2 ? 1 : 0;
         // the series' "between" comes right after the result; the loser has 40 s to choose (then the game says LEAVE)
         atResultTimer_.start(choice ? kChoiceMs + 15000 : 8000);
         setPhase(Phase::AtResult, choice ? tr("Match over: the loser chooses REMATCH, CHARACTER SELECT or LEAVE in the game")
@@ -1825,36 +1963,63 @@ bool MatchController::straightRoute() const {
     return (lastVia_ == QLatin1String("lan") || lastVia_ == QLatin1String("public")) && !tunnel_;
 }
 
+// the two games keep the last punch's route after the match, for the loser's choice and the next match from the result
+// screens: straight between them, or (a server with relay_choice, SCV 0.1.8) through the server's relay or the tunnel,
+// whose routes the server keeps for it; an older server ends a relayed match's routes a minute after its result
+bool MatchController::routeKept() const {
+    if (straightRoute()) return true;
+    const bool relayed = lastVia_ == QLatin1String("relay") || lastVia_ == QLatin1String("tunnel");
+    return relayed && server_->serverHas(QStringLiteral("relay_choice"));
+}
+
 // the match ends at the result screens with its loser's choice of the next one (match_found's result_choice: a versus
 // lobby but King of the Hill, and from SCV 0.1.8 every versus queue match and its series' next ones), its games
-// reached straight
+// reached straight or through the relay (routeKept)
 bool MatchController::resultChoice() const {
-    return found_.value(QStringLiteral("result_choice")).toBool() && straightRoute();
+    return found_.value(QStringLiteral("result_choice")).toBool() && routeKept();
 }
 
 // The game says what the match's loser chose on its result screen (`chose choice=rematch|select|leave chooser=N`):
 // REMATCH or CHARACTER SELECT, this launcher readies for the next match from there (a lobby's, or the series' or set's)
 // as the other's does with the same choice; LEAVE parks both games: a lobby's players stay in their lobby, a series
 // ends, left by the loser (whose launcher alone says so: a ranked set left after a match counted is theirs lost)
+// Off the server when the choice comes (a dropped connection): it waits in pendingChoice_, and goes on once the server
+// has sent the series' state again (onServerMessage), or the game leaves its result screen when the series is gone
+// (checkChoiceAfterLogin).
 void MatchController::readyInPlace(QString choice) {  // by value: it is often pendingChoice_, cleared below
     if (phase_ != Phase::AtResult || !lobbyChoice_ || choice.isEmpty() || !server_->isLoggedIn()) return;
-    const int chooser = pendingChooser_;
+    const bool lobby = !str(found_, "lobby").isEmpty();
+    // a series' choice waits for its "between", heard since the last login (it comes with the result, and again after
+    // a login): kept in pendingChoice_, which goes with the match (finishMatch, match_found), never to another series
+    if (!lobby && (!seriesSeen_ || str(series_, "state") != QLatin1String("between"))) {
+        pendingChoice_ = choice;
+        return;
+    }
+    const int side = go_.value(QStringLiteral("side")).toInt();
+    // whose choice it was: the server's result says (the loser), the game's line only when the result had none
+    const int chooser = resultChooser_ ? resultChooser_ : pendingChooser_;
+    if (resultChooser_ && pendingChooser_ && pendingChooser_ != resultChooser_)
+        log(tr("The game says player %1 chose, the result says player %2: the result's is taken")
+                .arg(pendingChooser_).arg(resultChooser_));
     pendingChoice_.clear();
     lobbyChoice_ = false;
     awaitChoice_ = false;
-    const bool lobby = !str(found_, "lobby").isEmpty();
     if (choice == QLatin1String("leave")) {
-        const bool mine = chooser == go_.value(QStringLiteral("side")).toInt();
+        const bool mine = chooser == side;
+        const bool ranked = series_.value(QStringLiteral("ranked")).toBool();
         log(mine ? tr("You chose LEAVE on the result screen") : tr("%1 chose LEAVE on the result screen").arg(opponentName()));
-        if (!lobby && mine) {
-            if (!series_.isEmpty() && str(series_, "state") == QLatin1String("between")) {
-                wantNext_ = false;
-                seriesReady(false);
-            } else {
-                leaveSeries_ = true;  // sent with the series' "between"
-            }
-        }
         finishMatch();
+        if (lobby) return;
+        if (mine) {
+            wantNext_ = false;
+            seriesReady(false);  // the loser leaves: a ranked set counted already is theirs lost
+        } else if (ranked) {
+            // the winner never loses a set by the loser's going (their launcher gone, their time run out, the two games
+            // not agreeing who chose): ready for the next match the usual way, once the game is back at its menus, so
+            // that the loser alone is the one who is not
+            wantNext_ = true;
+            nextChoice_ = QStringLiteral("select");
+        }
         return;
     }
     if (!lobby) {
@@ -1887,11 +2052,14 @@ void MatchController::finishMatch() {
     lobbyChoice_ = false;
     awaitChoice_ = false;
     pendingChoice_.clear();
+    pendingChooser_ = resultChooser_ = 0;
+    reloginTimer_.stop();
     go_ = {};
     found_ = {};
     pendingStart_.clear();
     finishText_.clear();
-    if (game_ && game_->isRunning() && !game_->isReady()) {
+    // (a game away from its online menus is in no match: a park would take the player out of what they went to)
+    if (game_ && game_->isRunning() && !game_->isReady() && !game_->isAway()) {
         // the game parks once its ending has played (it holds the game port until then): ready again, then idle
         parkGame();
         finishTimeout_.start(45000);

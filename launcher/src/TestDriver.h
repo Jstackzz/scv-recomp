@@ -45,6 +45,7 @@ struct LaunchOptions {
     bool upnpProbe = false;  // find the router and its public address, open nothing
     QString updatedFrom;     // --updated: the version this launcher just replaced (Updater)
     bool autoUpdate = false; // development: an update offered installs at once, without asking
+    int dropAtResult = 0;    // seconds after the game's first wait at its result screen: the server connection drops
 };
 
 class TestDriver : public QObject {
@@ -80,4 +81,5 @@ private:
     QTimer* poll_ = nullptr;
     QJsonObject lastLobby_;
     QString ratedMatch_;
+    bool dropped_ = false;  // --drop-at-result done: the login token signs in again, not the password
 };

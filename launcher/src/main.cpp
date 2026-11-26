@@ -113,10 +113,15 @@ int main(int argc, char* argv[]) {
         QStringLiteral("version"));
     const QCommandLineOption autoUpdateOpt(QStringLiteral("auto-update"),
                                            QStringLiteral("Development: install an update offered at once, without asking."));
+    const QCommandLineOption dropAtResultOpt(
+        QStringLiteral("drop-at-result"),
+        QStringLiteral("Development: this many seconds after the game first waits at its result screen, the server "
+                       "connection drops as a network would (it comes back by itself)."),
+        QStringLiteral("seconds"));
     for (const auto* o : {&configOpt, &serverOpt, &fpOpt, &userOpt, &pwEnvOpt, &regOpt, &playOpt, &queueOpt, &gameOpt, &modeOpt,
                           &charOpt, &pageOpt, &acceptOpt, &cancelOpt, &localTestOpt, &extractOpt, &lobbyOpt, &lobbyNameOpt, &lobbyCodeFileOpt,
                           &lobbyMatchesOpt, &leaveLobbyOpt, &leaveLobbyInMatchOpt, &kothOpt, &rateOpt, &snapDirOpt, &upnpProbeOpt, &rematchesOpt, &rematchChoiceOpt,
-                          &leaveSeriesOpt, &lobbyOwnFirstOpt, &updatedOpt, &autoUpdateOpt})
+                          &leaveSeriesOpt, &lobbyOwnFirstOpt, &updatedOpt, &autoUpdateOpt, &dropAtResultOpt})
         cli.addOption(*o);
     cli.process(app);
 
@@ -183,6 +188,7 @@ int main(int argc, char* argv[]) {
     opts.upnpProbe = cli.isSet(upnpProbeOpt);
     opts.updatedFrom = cli.value(updatedOpt);
     opts.autoUpdate = cli.isSet(autoUpdateOpt);
+    opts.dropAtResult = cli.isSet(dropAtResultOpt) ? std::max(1, cli.value(dropAtResultOpt).toInt()) : 0;
 
     MainWindow window(opts);
     window.show();

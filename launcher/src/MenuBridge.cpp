@@ -123,6 +123,20 @@ MenuBridge::MenuBridge(ServerClient* server, MatchController* controller, QObjec
 
     connect(controller_, &MatchController::phaseChanged, this, &MenuBridge::markDirty);
     connect(controller_, &MatchController::gameStatusChanged, this, &MenuBridge::markDirty);
+    // the player's game away from its online menus (status `away`) is never started into a lobby's match: its Ready is
+    // taken back (the player readies again in the lobby's room once back)
+    connect(controller_, &MatchController::gameStatusChanged, this, [this] {
+        GameProcess* g = controller_->game();
+        const bool away = g && g->menus() && g->isRunning() && g->isAway();
+        if (away && !gameAway_ && !lobby_.isEmpty() && me().value(QStringLiteral("ready")).toBool() &&
+            !me().value(QStringLiteral("spectator")).toBool() && s(lobby_, "state") != QLatin1String("in_match") &&
+            server_->isLoggedIn()) {
+            applog::write(QStringLiteral("bridge: the game left its online menu: no longer ready in the lobby"));
+            server_->send({{QStringLiteral("type"), QStringLiteral("lobby_ready")}, {QStringLiteral("ready"), false}});
+            showMessage(tr("You left the online menu, so you are no longer ready in the lobby."));
+        }
+        gameAway_ = away;
+    });
     connect(controller_, &MatchController::matchFound, this, [this](const QJsonObject& found) {
         // a series' next match or a lobby's needs no accept: it is connecting from the start
         accepted_ = !found.value(QStringLiteral("accept_required")).toBool();
@@ -363,7 +377,7 @@ QJsonObject MenuBridge::seriesJson() const {
     // a lobby's matches against the other player in it
     const QString opp = lobbyOpponent();
     if (!lobby_.isEmpty() && !me().value(QStringLiteral("spectator")).toBool() && !opp.isEmpty()) {
-        const int mine = lobbyWins_.value(server_->accountName()), theirs = lobbyWins_.value(opp);
+        const int mine = lobbyWinsOf(server_->accountName()), theirs = lobbyWinsOf(opp);
         const bool choosing = controller_->phase() == MatchController::Phase::AtResult &&
                               !s(controller_->currentFound(), "lobby").isEmpty();
         out = {{QStringLiteral("kind"), QStringLiteral("lobby")},
@@ -377,6 +391,16 @@ QJsonObject MenuBridge::seriesJson() const {
                                                  : tr("You %1, %2 %3.").arg(mine).arg(opp).arg(theirs)}};
     }
     return out;
+}
+
+// a member's match wins in this lobby: the server's count (SCV 0.1.8, the lobby state's `wins`, the same as the start
+// line's set_p1 and set_p2 for the game's result screen), else the ones this launcher saw
+int MenuBridge::lobbyWinsOf(const QString& name) const {
+    for (const auto& v : lobby_.value(QStringLiteral("members")).toArray()) {
+        const QJsonObject m = v.toObject();
+        if (s(m, "name") == name && m.contains(QStringLiteral("wins"))) return m.value(QStringLiteral("wins")).toInt();
+    }
+    return lobbyWins_.value(name);
 }
 
 QJsonObject MenuBridge::me() const {
@@ -427,7 +451,7 @@ QJsonObject MenuBridge::lobbyJson() const {
             {QStringLiteral("ready"), m.value(QStringLiteral("ready")).toBool()},
             {QStringLiteral("role"), m.value(QStringLiteral("spectator")).toBool() ? QStringLiteral("spectator")
                                                                                   : QStringLiteral("player")},
-            {QStringLiteral("wins"), lobbyWins_.value(s(m, "name"))}});
+            {QStringLiteral("wins"), lobbyWinsOf(s(m, "name"))}});
     }
     const bool myMatch = controller_->inMatch() && !s(controller_->currentFound(), "lobby").isEmpty();
     return {{QStringLiteral("code"), s(lobby_, "id")},
@@ -796,6 +820,10 @@ void MenuBridge::onServerMessage(const QJsonObject& msg) {
             switching_ = false;
             seriesOver_ = {};
         }
+        // the server gives its host a private lobby's password with every state (SCV 0.1.8): back after a dropped
+        // connection, and known to a member who became host; nobody else gets it
+        if (lb.contains(QStringLiteral("password")) && s(lb, "host") == server_->accountName())
+            lobbyPassword_ = s(lb, "password");
         lobby_ = lb;
         const bool watching = me().value(QStringLiteral("spectator")).toBool();
         watchingHere_ = watching;
@@ -821,7 +849,17 @@ void MenuBridge::onServerMessage(const QJsonObject& msg) {
     } else if (type == QLatin1String("error")) {
         const QString re = s(msg, "re"), code = s(msg, "code"), text = s(msg, "message");
         const bool joining = re == QLatin1String("lobby_join") || re == QLatin1String("lobby_create");
-        if (code == QLatin1String("not_in_lobby")) {
+        if (code == QLatin1String("too_many_tries")) {
+            // wrong passwords for that lobby, five of them: it lets this player try again in a few minutes
+            switching_ = false;
+            pendingPassword_.clear();
+            showMessage(tr("Too many wrong passwords. Try again in a few minutes."), true);
+        } else if (code == QLatin1String("no_such_series") && re == QLatin1String("series_ready")) {
+            // the set or series ended just before this launcher's ready reached the server (the other player left it):
+            // its end says what happened, nothing to add
+            applog::write(QStringLiteral("bridge: series_ready came after the series' end"));
+            return;
+        } else if (code == QLatin1String("not_in_lobby")) {
             if (!lobby_.isEmpty()) {
                 controller_->stopWatching();
                 leftLobby();
