@@ -61,6 +61,7 @@ set(SC5_SOURCES
     src/sc5/ui_link.cpp
     src/sc5/online_menu.cpp
     src/sc5/online_draw.cpp
+    src/sc5/ownsave.cpp
 )
 
 # The player package's ready-made sc5.exe: everything but the game's code, which each player's PC compiles from their

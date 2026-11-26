@@ -179,6 +179,12 @@ private:
     // (AtResult) for the series' next match; any other parks (finishMatch)
     void afterResult(const QJsonObject& result);
     QString rematchLine(const QJsonObject& go) const;  // the next match from the result screen (in place)
+    static QString seriesKeys(const QJsonObject& go);  // series=, set=, set_p1=, set_p2=, keep= for both lines
+ public:
+    // the game's result screen offers the match's loser the next match (REMATCH, CHARACTER SELECT, LEAVE), and its
+    // `chose` is still to come: the series waits for it
+    bool choiceOnResultScreen() const { return awaitChoice_; }
+ private:
     bool straightRoute() const;  // the last punch went straight between the two games
     bool resultChoice() const;   // the lobby's match ends with its loser's choice on the result screen (choose=1)
     void readyInPlace(QString choice);  // the game said what the loser chose: ready for the next match there
@@ -263,7 +269,10 @@ private:
     QString lastVia_;         // how the last punch reached the other game: lan, public (straight), relay, tunnel
     bool inPlace_ = false;    // the match found starts from the last one's result screen (no punch: rematchLine)
     bool lobbyChoice_ = false;  // AtResult: a lobby match's games wait for its loser's choice (status `chose`)
-    QString pendingChoice_;     // the game's `chose` (rematch, select), taken once at the result screen
+    QString pendingChoice_;     // the game's `chose` (rematch, select, leave), taken once at the result screen
+    int pendingChooser_ = 0;    // and who chose (the match's loser: 1 or 2)
+    bool awaitChoice_ = false;  // at the result screen, the loser's choice still to come (the series waits for it)
+    bool leaveSeries_ = false;  // this player chose LEAVE before the series' "between" came: sent with it
     QTimer atResultTimer_;    // AtResult: no series to wait for after all (a match that started none): parked then
     QElapsedTimer searchClock_;
     QJsonObject pingWiden_;  // the server's rule for raising the max ping ({} when it is not raised)

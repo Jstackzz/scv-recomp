@@ -42,7 +42,9 @@ param(
     [string]$CharB = 'Mitsurugi',
     [switch]$PickInGame,         # both players pick on the game's own select screen (the start line says p1=- p2=-)
     [int]$Matches = 1,           # lobby: matches to play there one after the other
-    [int]$Rematches = 0,         # casual: rematches both choose after the first match
+    [int]$Rematches = 0,         # casual: rematches the loser chooses after the first match (then LEAVE)
+    [string]$Choices = '',       # the loser's choices on the stand-in's result screens in turn (SC5_FAKE_CHOICE:
+                                 # rematch, select, leave); default: casual -Rematches x rematch then leave, ranked select
     [int]$AcceptB = 3,           # seconds before B accepts a match found
     [int]$MatchSeconds = 6,      # how long the stand-in's matches last (SC5_FAKE_SECONDS)
     [switch]$Watch,              # lobby: C watches it (a spectator)
@@ -140,9 +142,14 @@ if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pa
 $server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $(if ($ServerRoot) { $ServerRoot } else { $root }) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2
-$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'SC5_FAKE_REFUSED', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
+$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'SC5_FAKE_REFUSED', 'SC5_FAKE_CHOICE', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
 $env:SC5_DEV_PASSWORD = 'e2e-password-123'  # throwaway accounts on a throwaway server
 $env:SC5_FAKE_SECONDS = "$MatchSeconds"
+# the loser's choice on the game's result screen (SCV 0.1.8): a casual series' rematches, then LEAVE; a ranked set's
+# matches through CHARACTER SELECT, the winner keeping their fighter
+if (-not $Choices -and $Queue -eq 'casual') { $Choices = ((@('rematch') * $Rematches) + @('leave')) -join ',' }
+if (-not $Choices -and $Queue -eq 'ranked') { $Choices = 'select' }
+if ($Choices) { $env:SC5_FAKE_CHOICE = $Choices }
 if ($Draw) { $env:SC5_FAKE_RESULT = 'draw' }
 if ($Desync) { $env:SC5_FAKE_RESULT = 'desync' }
 if ($Stuck) { $env:SC5_FAKE_STUCK = '1' }

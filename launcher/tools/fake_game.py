@@ -17,9 +17,11 @@ It reads SC5_STATUS and SC5_CMD from the environment, like the real game.
     start mode=practice   in_match match=practice until park
     park                  back to ready
     rematch [seed=N]      another match with the same peer
-    choose=1 (start or rematch line): after its result the game writes `chose choice=rematch match=<id>` (the loser's
-                          choice on the result screen, SC5_FAKE_CHOICE=select for the other) after
-                          SC5_FAKE_CHOOSE_SECONDS (default 2), as both of a lobby match's games do
+    choose=1 (start or rematch line): after its result the game writes `chose choice=rematch chooser=<the loser>
+                          match=<id>` (the loser's choice on the result screen; SC5_FAKE_CHOICE=select or leave for
+                          the others, or a list split by commas, one per result in turn) after SC5_FAKE_CHOOSE_SECONDS
+                          (default 2), as both games of a ranked set's, a casual series' or a lobby's match do; none
+                          after a match that won a ranked set (set=, set_p1=, set_p2=)
     quit                  exit
 
 The player's own game (SC5_MENUS=1, docs/PROTOCOL.md 3.8) is the same stand-in: started by PLAY, it goes booting ->
@@ -405,6 +407,7 @@ class FakeGame:
         self.seen_ready: set[int] = set()
         self.seen_left: set[int] = set()
         self.choose_at = 0.0  # choose=1: when the loser's choice on the result screen is said
+        self.chooser = 1      # and who says it (the match's loser, player 1 after a draw)
         self.state_word = ""  # the first word of the last status line, and how many results and matches it wrote
         self.results = 0
         self.matches = 0
@@ -533,8 +536,16 @@ class FakeGame:
             self.game_log(*desync_log(self.start, self.match, self.side))
             self.status(f"desync frame=600 match={self.match}")
         else:
-            self.status(self.result_line())
-            if self.start.get("choose") == "1":
+            line = self.result_line()
+            self.status(line)
+            # the loser's choice on the result screen (player 1 after a draw), but after a match that won a ranked set
+            # (set=, set_p1, set_p2: each side's wins before it), as the game's result screen does
+            winner = int(line.split()[1].partition("=")[2])
+            need = int(self.start.get("set", "0") or 0)
+            before = int(self.start.get(f"set_p{winner}", "0") or 0) if winner else 0
+            set_won = need > 0 and winner and before + 1 >= need
+            if self.start.get("choose") == "1" and not set_won:
+                self.chooser = 2 if winner == 1 else 1
                 self.choose_at = time.monotonic() + float(os.environ.get("SC5_FAKE_CHOOSE_SECONDS", "2"))
 
     def refused_keys(self) -> str:
@@ -600,7 +611,10 @@ class FakeGame:
             self.pump_network(now)  # keep answering the peer until park
             if self.choose_at and now >= self.choose_at:
                 self.choose_at = 0.0
-                self.status(f"chose choice={os.environ.get('SC5_FAKE_CHOICE', 'rematch')} match={self.match}")
+                # SC5_FAKE_CHOICE: rematch (default), select or leave, or several split by commas, one per result in turn
+                choices = [c for c in os.environ.get("SC5_FAKE_CHOICE", "rematch").split(",") if c] or ["rematch"]
+                choice = choices[min(self.results, len(choices)) - 1]
+                self.status(f"chose choice={choice} chooser={self.chooser} match={self.match}")
 
     def run(self) -> int:
         env = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items()) if k.startswith("SC5_"))

@@ -9,7 +9,8 @@ line both games write, with the time.
                                 [--park-after S] [--back-at FRAME] [--watch] [--dlc2 DIR] [--env NAME=VALUE]
                                 [--seconds 600] [--keep] [--heap-shift2 MB] [--fight1 SCRIPT] [--fight2 SCRIPT]
                                 [--seed N] [--port-base 7001] [--exe SC5.EXE] [--args1 ".."] [--args2 ".."] [--runs DIR]
-                                [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select]
+                                [--env1 NAME=VALUE] [--env2 NAME=VALUE] [--choose rematch,select,leave]
+                                [--series casual] [--set 3] [--save1 USERDIR] [--save2 USERDIR]
                                 [--menus] [--shots DIR]
 
 --fight1/--fight2: other fight scripts (tools/py/netlog2script.py makes them from a match's net log, so a desync between
@@ -18,10 +19,15 @@ elsewhere; --exe a copy of the game, so a build can go on meanwhile; --args1/--a
 --env1/--env2 its own variables (two PCs' display settings side by side: --env2 SC5_RENDER_SCALE=2, as the launcher
 passes them, docs/PROTOCOL.md 3.1); --port-base and --runs let two tests run at once (tools/heapsweep.sh).
 
---choose: a lobby's matches (choose=1): after each result the match's loser chooses the next one on the game's result
-screen (SC5_TEST_RESULT_CHOICE stands in for them, one choice per result in turn), both games say it (`chose`), and the
+--choose: matches whose loser chooses the next one on the game's result screen (choose=1; SC5_TEST_RESULT_CHOICE stands
+in for them, rematch, select, leave or wait, one per result in turn), both games say it (`chose ... chooser=N`), and the
 next match goes on from there as the launchers would start it (rematch: the result line's fighters and stage=keep;
-select: both pick again, --pick1/--pick2 then pick for the players).
+select: the winner keeps their fighter, keep=N, and the loser picks again, --pick1/--pick2 for them; leave, or a
+ranked set won: both parked). --series ranked|casual|lobby and --set N give the lines the series' keys and score.
+
+--save1/--save2: that game plays with its own copy of a save (a user folder, as the launcher's one game has the
+player's own, docs/PROTOCOL.md 3.8) instead of an empty one; afterwards each copy's changed bytes are listed.
+--fight1/--fight2 none: no fight script, the player's own controller (SC5_TEST_DEVICE_Pn) plays.
 
 --menus: the launcher's one game for everything (docs/PROTOCOL.md 3.8): SC5_MENUS=1, each game with a copy of the
 repository's save (game/user) instead of an empty one, and a ui.json kept fresh in each session folder (a player signed
@@ -89,6 +95,44 @@ def write_ui(session, i):
           "lobbies": {"at": 0, "list": []}, "lobby": None, "leaderboard": {"at": 0, "rows": []},
           "message": {"id": 0, "kind": "info", "text": ""}, "update": {"version": "", "text": ""}}
     write_atomic(os.path.join(session, "ui.json"), json.dumps(ui))
+def save_files(user):
+    """Every file of a user folder (but the DLC content and the shader cache) with its bytes."""
+    out = {}
+    for dirpath, dirs, files in os.walk(user):
+        dirs[:] = [d for d in dirs if d not in ("0000000000000000", "cache")]
+        for f in files:
+            p = os.path.join(dirpath, f)
+            with open(p, "rb") as fh:
+                out[os.path.relpath(p, user)] = fh.read()
+    return out
+
+
+def save_changes(before, after):
+    """What a game changed in its own save: per file, gone, new, or the byte ranges that differ (runs closer than 64
+    bytes joined)."""
+    lines = []
+    for name in sorted(set(before) | set(after)):
+        b, n = before.get(name), after.get(name)
+        if b == n:
+            continue
+        if b is None or n is None:
+            lines.append(f"{name}: {'new' if b is None else 'gone'}")
+            continue
+        ranges, start, last = [], None, None
+        for k in range(min(len(b), len(n))):
+            if b[k] != n[k]:
+                if start is not None and k - last > 64:
+                    ranges.append((start, last))
+                    start = None
+                if start is None:
+                    start = k
+                last = k
+        if start is not None:
+            ranges.append((start, last))
+        size = "" if len(b) == len(n) else f" (size {len(b)} -> {len(n)})"
+        shown = ", ".join(f"0x{s:X}-0x{e:X}" for s, e in ranges[:24]) + (" ..." if len(ranges) > 24 else "")
+        lines.append(f"{name}: {len(ranges)} ranges differ{size}: {shown}")
+    return lines
 
 
 def read_status(path):
@@ -192,6 +236,10 @@ def main():
     ap.add_argument("--choose", default="", help="the loser's choices on the result screens in turn: rematch,select")
     ap.add_argument("--menus", action="store_true", help="the game's own online menus (SC5_MENUS=1, the player's save)")
     ap.add_argument("--shots", default="", help="pictures of both games at ready, before the start and after the park")
+    ap.add_argument("--series", default="", help="the start and rematch lines' series=ranked|casual|lobby (--choose)")
+    ap.add_argument("--set", type=int, default=0, help="a ranked set to this many wins (--series ranked)")
+    ap.add_argument("--save1", default="", help="game 1 plays with its own save: a copy of this user folder")
+    ap.add_argument("--save2", default="", help="game 2's own save, the same way")
     a = ap.parse_args()
 
     relay = FeedRelay() if a.watch else None
@@ -199,6 +247,7 @@ def main():
     os.makedirs(runs, exist_ok=True)
     exe = a.exe or EXE
     games, sessions = [], []
+    saves_before = {}
     count = 3 if a.watch else 2
     t0 = time.time()
     for i in range(1, count + 1):
@@ -208,6 +257,12 @@ def main():
             os.makedirs(s)
             shutil.copytree(os.path.join(ROOT, "game", "user"), os.path.join(s, "user"),
                             ignore=shutil.ignore_patterns("cache"))
+        elif own:
+            # the player's own save, as the launcher's one game has it (docs/PROTOCOL.md 3.8): a copy of the folder
+            # (its DLC content left out: the game links that in again from its dlc folder), and what each file held
+            shutil.copytree(own, os.path.join(s, "user"),
+                            ignore=shutil.ignore_patterns("0000000000000000", "cache"))
+            saves_before[i] = save_files(os.path.join(s, "user"))
         else:
             os.makedirs(os.path.join(s, "user"))
         # the shader cache: a copy of the test saves' (an empty one makes the first fights stutter)
@@ -231,7 +286,8 @@ def main():
             script = (a.fight1 or FIGHT_P1) if i == 1 else (a.fight2 or FIGHT_P2)
             if i == 1 and a.back_at:
                 script += f",{a.back_at}:BACK,{a.back_at + 6}:-"
-            env[f"SC5_FIGHT_INPUT_P{i}"] = script
+            if script != "none":  # none: that player's own controller (SC5_TEST_DEVICE_Pn, say)
+                env[f"SC5_FIGHT_INPUT_P{i}"] = script
         for kv in a.env + (a.env1 if i == 1 else a.env2 if i == 2 else []):
             k, _, v = kv.partition("=")
             env[k] = v.replace("{i}", str(i))
@@ -264,6 +320,15 @@ def main():
     if choices:
         rematches = len(choices)
     choose = " choose=1" if choices else ""
+    wins = [0, 0]  # the series' score so far (--set, --series)
+    counted = ""   # the match whose result is in the score
+    match_now = f"local-{int(t0)}"
+
+    def series_keys():
+        if not a.series:
+            return ""
+        out = f" series={a.series} set_p1={wins[0]} set_p2={wins[1]}"
+        return out + (f" set={a.set}" if a.set else "")
     again_done = False
     in_match_at = 0
     match = f"local-{int(t0)}"
@@ -307,7 +372,8 @@ def main():
                 for i in (0, 1):
                     line = (f"start game=sc5 mode={a.mode} side={i + 1} local_port={a.port_base + i} "
                             f"remote=127.0.0.1:{a.port_base + 1 - i} delay={a.delay} seed={a.seed} p1={a.p1} p2={a.p2} "
-                            f"rounds={a.rounds} ranked=0 match={match}{choose}")
+                            f"rounds={a.rounds} ranked={1 if a.series == 'ranked' else 0} match={match}{choose}"
+                            + (series_keys() if choices else ""))
                     if relay:
                         line += f" feed=127.0.0.1:{relay.players}"
                     write_atomic(os.path.join(sessions[i], "cmd.txt"), line)
@@ -326,30 +392,62 @@ def main():
                     print(f"{time.time() - t0:7.1f}s park sent in the match", flush=True)
                     stage = "park"
             elif stage == "match" and choices and all(x.startswith(DONE + ("chose",)) for x in st):
-                # the loser's choice on the result screens: both games say it, then the launchers' next match
-                if rematched < rematches and all(x.startswith("chose") for x in st[:2]):
-                    said = {x.split()[1] for x in st[:2]}
+                # the loser's choice on the result screens: both games say it (and who chose), then the launchers'
+                # next match: REMATCH the same fighters on the same stage, CHARACTER SELECT the winner keeping theirs
+                # (player 2 after a draw) while the loser picks again, LEAVE (or a ranked set won) both games parked
+                if any(x.startswith(("error", "desync", "disconnected")) for x in st[:2]):
+                    for s in sessions:
+                        write_atomic(os.path.join(s, "cmd.txt"), "park")
+                    print(f"{time.time() - t0:7.1f}s no result to choose after: park sent", flush=True)
+                    stage = "park"
+                    continue
+                fighters = dict(kv.split("=", 1) for kv in last_result.split()[1:] if "=" in kv)
+                if last_result and counted != match_now:
+                    counted = match_now
+                    winner = int(fighters.get("winner", "0"))
+                    if winner:
+                        wins[winner - 1] += 1
+                    print(f"{time.time() - t0:7.1f}s series {wins[0]} - {wins[1]}", flush=True)
+                set_over = a.set and max(wins) >= a.set
+                if set_over and all(x.startswith("result") for x in st[:2]):
+                    time.sleep(13)  # the result screen says who won the set
+                    for s in sessions:
+                        write_atomic(os.path.join(s, "cmd.txt"), "park")
+                    print(f"{time.time() - t0:7.1f}s the set is won {wins[0]} - {wins[1]}: park sent", flush=True)
+                    stage = "park"
+                    continue
+                if all(x.startswith("chose") for x in st[:2]):
+                    said = {" ".join(x.split()[1:3]) for x in st[:2]}
                     if len(said) != 1:
                         print(f"the games chose apart: {st[:2]}", flush=True)
                         break
+                    keys = dict(kv.split("=", 1) for kv in said.pop().split())
+                    what = keys.get("choice")
+                    if what == "leave" or rematched >= rematches:
+                        for s in sessions:
+                            write_atomic(os.path.join(s, "cmd.txt"), "park")
+                        print(f"{time.time() - t0:7.1f}s {what} chosen by player {keys.get('chooser')}: park sent",
+                              flush=True)
+                        stage = "park"
+                        continue
                     rematched += 1
-                    what = said.pop().partition("=")[2]
-                    fighters = dict(kv.split("=", 1) for kv in last_result.split()[1:] if "=" in kv)
-                    picks = (f"p1={fighters.get('p1_char', '-')} p2={fighters.get('p2_char', '-')} stage=keep"
-                             if what == "rematch" else "p1=- p2=-")
+                    match_now = f"{match}-{rematched + 1}"
+                    c1, c2 = fighters.get("p1_char", "-"), fighters.get("p2_char", "-")
+                    if what == "rematch":
+                        picks = f"p1={c1} p2={c2} stage=keep"
+                    else:
+                        keeper = 2 if keys.get("chooser") == "1" else 1
+                        picks = f"p1={c1} p2=- keep=1" if keeper == 1 else f"p1=- p2={c2} keep=2"
                     for k, s in enumerate(sessions[:2]):
                         if k and a.rematch_stagger:
                             time.sleep(a.rematch_stagger)
                         write_atomic(os.path.join(s, "cmd.txt"),
-                                     f"rematch seed={776 + rematched} match={match}-{rematched + 1} {picks} choose=1")
-                    print(f"{time.time() - t0:7.1f}s {what} chosen: rematch {rematched} sent ({picks})", flush=True)
+                                     f"rematch seed={776 + rematched} match={match_now} {picks} choose=1"
+                                     + series_keys())
+                    print(f"{time.time() - t0:7.1f}s {what} chosen by player {keys.get('chooser')}: rematch "
+                          f"{rematched} sent ({picks})", flush=True)
                     time.sleep(1)
                     continue
-                if rematched >= rematches and all(x.startswith(("result", "chose")) for x in st[:2]):
-                    for s in sessions:
-                        write_atomic(os.path.join(s, "cmd.txt"), "park")
-                    print(f"{time.time() - t0:7.1f}s park sent", flush=True)
-                    stage = "park"
             elif stage == "match" and all(x.startswith(DONE) for x in st):
                 if rematched < rematches and all(x.startswith("result") for x in st[:2]):
                     rematched += 1
@@ -398,6 +496,11 @@ def main():
             for f in os.listdir(s):
                 if (f.startswith("net-") and f.endswith(".log")) or f.startswith("stats-"):
                     shutil.copy(os.path.join(s, f), os.path.join(runs, f"{a.name}_{i + 1}_{f}"))
+            if i + 1 in saves_before:
+                changes = save_changes(saves_before[i + 1], save_files(os.path.join(s, "user")))
+                print(f"game {i + 1}'s own save: " + ("unchanged" if not changes else "changed"), flush=True)
+                for line in changes:
+                    print(f"  {line}", flush=True)
             if not a.keep:
                 shutil.rmtree(s, ignore_errors=True)
     if relay:

@@ -2,6 +2,7 @@
 
 #include "sc5/unlocks.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 
@@ -15,8 +16,11 @@ namespace {
 
 constexpr uint32_t kIds = 0x1D02;  // the table's entries (sub_8246B318 answers 0 from there on)
 bool g_enabled = true;
+std::atomic<bool> g_online{false};
 
 }  // namespace
+
+void SetOnline(bool on) { g_online = on; }
 
 void Init() {
   const char* v = std::getenv("SC5_UNLOCK_ALL");
@@ -31,7 +35,7 @@ bool Enabled() { return g_enabled; }
 // entries (4) go to the game's own answer. The table itself is not changed: the save keeps what was earned, and the
 // game's own unlocks (sub_8246B3D8 reads the table directly) still record into it.
 bool Released(const uint8_t* base, uint32_t table, uint32_t id, uint32_t& state_out) {
-  if (!g_enabled || !table || id >= kIds) return false;
+  if ((!g_enabled && !g_online) || !table || id >= kIds) return false;
   const uint32_t at = table + (id >> 1);
   if (at >= 0xE0000000u) return false;  // the guest heap; physical memory maps elsewhere
   const uint8_t byte = base[at];

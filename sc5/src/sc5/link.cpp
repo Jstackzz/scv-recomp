@@ -45,6 +45,7 @@
 #include "sc5/game.h"
 #include "sc5/net/netplay.h"
 #include "sc5/online_menu.h"
+#include "sc5/ownsave.h"
 #include "sc5/select.h"
 #include "sc5/sparring.h"
 #include "sc5/versus.h"
@@ -164,6 +165,19 @@ bool ParsePick(const std::string& v, int& slot, int& costume, uint32_t& created)
   return slot >= 0;
 }
 
+// The keys of the run of matches a start or rematch line's match belongs to (docs\PROTOCOL.md 3.3): keep=1|2, the side
+// whose fighter the last match's winner keeps (shown so at the select screen); series=ranked|casual|lobby; set=N, the
+// matches that win a ranked set, and set_p1, set_p2, each side's wins before this match. Keys a line leaves out keep
+// what the plan had (a rematch line's), but keep, which is each match's own.
+void SeriesKeys(const Command& c, autopilot::Plan& plan) {
+  const std::string keep = Key(c, "keep");
+  plan.keep = keep == "1" ? 0 : keep == "2" ? 1 : -1;
+  if (c.keys.count("series")) plan.series = Key(c, "series");
+  if (c.keys.count("set")) plan.set_need = std::max(0, std::atoi(Key(c, "set").c_str()));
+  if (c.keys.count("set_p1")) plan.set_wins[0] = std::max(0, std::atoi(Key(c, "set_p1").c_str()));
+  if (c.keys.count("set_p2")) plan.set_wins[1] = std::max(0, std::atoi(Key(c, "set_p2").c_str()));
+}
+
 // a start that came before the game was at its hold point: taken once it is
 Command g_waiting_start;
 bool g_start_waits = false;
@@ -203,6 +217,7 @@ void Start(const Command& c) {
   plan.wins = std::max(1, (rounds + 1) / 2);
   plan.side = Key(c, "side", "1") == "2" ? 1 : 0;
   plan.choose = Key(c, "choose") == "1" && plan.mode == autopilot::Mode::Versus;
+  SeriesKeys(c, plan);
   g_mode = mode;
   if (plan.mode == autopilot::Mode::Practice) {
     // offline practice from the hold point: Training, the start line's fighters (the player's and the dummy)
@@ -252,6 +267,7 @@ void Start(const Command& c) {
   g_plan = plan;
   g_in_match = true;
   g_reported = false;
+  ownsave::BeginOnline();  // the player's own save kept aside until the game is back here (ownsave.h)
   autopilot::Begin(plan);
   REXLOG_INFO("sc5 link: start {} as player {}, match {}, seed {}, best of {}, the other at {}", mode, plan.side + 1,
               g_match, seed, rounds, st.peer);
@@ -304,6 +320,7 @@ void StartWatch(const Command& c) {
   g_plan = plan;
   g_in_match = true;
   g_reported = false;
+  ownsave::BeginOnline();
   autopilot::Begin(plan);
   REXLOG_INFO("sc5 link: watch {}, match {}, seed {}, the feed at {}", mode, g_match, seed, feed);
   WriteStatus("starting match=" + g_match);
@@ -362,6 +379,7 @@ void Rematch(const Command& c) {
   }
   const bool same_stage = Key(c, "stage") == "keep";
   if (c.keys.count("choose")) plan.choose = Key(c, "choose") == "1" && plan.mode == autopilot::Mode::Versus;
+  SeriesKeys(c, plan);
   g_plan = plan;
   g_reported = false;
   autopilot::Rematch(plan, named, same_stage);
@@ -373,6 +391,8 @@ void Rematch(const Command& c) {
 void OnFrame(PPCContext& ctx, uint8_t* base) {
   autopilot::OnFrame(ctx, base);
   online::OnFrame(ctx, base);
+  // an online session is over once the game is back at its hold point: the player's own save as it was before it
+  if (ownsave::Online() && !g_in_match && autopilot::AtHoldPoint()) ownsave::EndOnline();
   if (frame::Count() % 6 == 0) {
     std::string line;
     if (ClaimCommand(line)) {
@@ -393,10 +413,12 @@ void OnFrame(PPCContext& ctx, uint8_t* base) {
   }
   if (g_start_waits && autopilot::AtHoldPoint()) Start(g_waiting_start);
   if (g_error_shown) return;  // an error line stands until the next command
-  // the match's loser chose the next match on the result screen (choose=1): said once the result was
+  // the match's loser chose the next match on the result screen (choose=1): said once the result was, with who chose
   if (g_in_match && g_reported && g_plan.choose) {
     std::string choice;
-    if (autopilot::ResultChosen(choice)) WriteStatus("chose choice=" + choice + " match=" + g_match);
+    int chooser = 0;
+    if (autopilot::ResultChosen(choice, chooser))
+      WriteStatus(fmt::format("chose choice={} chooser={} match={}", choice, chooser + 1, g_match));
     return;
   }
   if (!g_in_match) {

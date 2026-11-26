@@ -13,5 +13,8 @@ namespace sc5::unlocks {
 // reads the environment (once, at startup)
 void Init();
 bool Enabled();
+// An online session (ownsave.h): everything on the disc is open whatever SC5_UNLOCK_ALL says, so that both games list
+// and load the same characters, stages and parts whatever each player's save has earned
+void SetOnline(bool on);
 
 }  // namespace sc5::unlocks

@@ -24,9 +24,19 @@ struct Plan {
   int wins = 2;                // rounds a player must win
   bool hand_over = false;      // a plain game: the player takes the select screen over (the autopilot stops there)
   bool two_players = false;    // VS Battle's "Player VS Player" (offline versus: the second pad picks player 2)
-  // the match's loser chooses the next one on the result screen's menu (a lobby's match: the start line's choose=1):
-  // REMATCH or CHARACTER SELECT with their own controller, player 1 after a draw; the other game follows
+  // the match's loser chooses the next one on the result screen (the start line's choose=1: every versus match of a
+  // ranked set, a casual series or a lobby whose two games reach each other straight): REMATCH, CHARACTER SELECT or
+  // LEAVE with their own controller, player 1 after a draw; the other game follows
   bool choose = false;
+  // the side whose fighter the last match's winner keeps (the start or rematch line's keep=1|2; -1 none): picked by the
+  // autopilot on both PCs while the other side's player picks again, and shown so over the select screen
+  int keep = -1;
+  // the run of matches this one belongs to (the start line's series=ranked|casual|lobby, "" none), and for a ranked
+  // set the matches that win it (set=3) and each side's wins before this match (set_p1, set_p2; a casual series' too):
+  // the result screen says the score, and a match that wins the set offers no next one
+  std::string series;
+  int set_need = 0;
+  int set_wins[2] = {0, 0};
 };
 
 // launcher: the game is the launcher's (SC5_NET=1); else nothing happens
@@ -70,20 +80,39 @@ std::string LostWhy();
 // the game's id with the costume after a dot ("21.1"). True once per match.
 bool MatchOver(int& winner, int& p1_rounds, int& p2_rounds, std::string& p1_char, std::string& p2_char);
 
-// The match's loser's choice on the result screen (Plan::choose): "rematch" or "select" once made (theirs on this PC,
-// or followed from the other game's), true from then until the next match
-bool ResultChosen(std::string& choice);
-// What the overlay over the result screen shows while the match's loser chooses the next match (Plan::choose): the
+// The match's loser's choice on the result screen (Plan::choose): "rematch", "select" or "leave" once made (theirs on
+// this PC, or followed from the other game's; "leave" too when their time ran out), and the chooser (0 player 1, 1
+// player 2); true from then until the next match
+bool ResultChosen(std::string& choice, int& chooser);
+// What the overlay over the result screen shows after a match whose loser chooses the next one (Plan::choose): the
 // chooser (0 player 1, 1 player 2), whether that is this PC's player, where their cursor is (0 REMATCH, 1 CHARACTER
-// SELECT) and whether they chose. Any thread.
+// SELECT, 2 LEAVE), whether they chose, the seconds left to choose; the series' score after this match (this PC's
+// player's first) and, a ranked set won with it, its winner (set_over: no choice then). Any thread.
 struct ResultChoiceView {
   bool shown = false;
   int chooser = 0;
   bool mine = false;
   int cursor = 0;
   bool chosen = false;
+  int seconds_left = 0;
+  int winner = 0;             // the match's: 1 or 2, 0 a draw
+  std::string series;         // "ranked", "casual", "lobby" or ""
+  int score[2] = {0, 0};      // each side's wins in the series after this match
+  int set_need = 0;
+  bool set_over = false;      // this match won the ranked set for `winner`
+  std::string kept;           // the fighter the winner keeps through CHARACTER SELECT (its name)
 };
 ResultChoiceView ResultChoiceNow();
+// What the overlay over the select screen shows when the last match's winner keeps their fighter (Plan::keep): the
+// keeper (0 or 1), whether that is this PC's player, the fighter's name. Any thread.
+struct KeepView {
+  bool shown = false;
+  int keeper = 0;
+  bool mine = false;
+  bool picked = false;  // the keeper's side is picked on the screen already
+  std::string fighter;
+};
+KeepView KeepNow();
 // What the overlay over the select screen shows online (result_overlay.cpp): this PC's player's own created characters
 // that this game leaves out (creation.h, HeldOut), each its name and slot and why in plain words, during the select
 // screen's first 20 s and whenever the player's cursor is on the Creation slot or on a fighter one of them customizes

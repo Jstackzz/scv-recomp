@@ -40,6 +40,9 @@ TestDriver::TestDriver(const LaunchOptions& opts, ServerClient* server, MatchCon
         if (opts_.queue.isEmpty() || series.value(QStringLiteral("ranked")).toBool() ||
             s(series, "state") != QLatin1String("between") || series.value(QStringLiteral("you_ready")).toBool())
             return;
+        // the game's own result screen offers the choice (SCV 0.1.8: its loser's REMATCH, CHARACTER SELECT or LEAVE,
+        // the stand-in's SC5_FAKE_CHOICE): nothing to stand in for
+        if (controller_->choiceOnResultScreen()) return;
         if (rematchesChosen_ >= opts_.rematches) {
             if (opts_.leaveSeries) {
                 say(QStringLiteral("leaving the series"));
