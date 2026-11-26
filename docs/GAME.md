@@ -1226,13 +1226,23 @@ Scripted test inputs (`SC5_INPUT_Pn`, `SC5_FIGHT_INPUT_Pn`, linktest's `--fight1
 never come this way; `SC5_TEST_DEVICE_Pn` (testinput.h) plays a script as the PC's own controller, which does.
 
 **The sound**: the front and surround channels' left and right swapped in what the game hands the system
-(display.cpp's hook of XAudioSubmitRenderDriverFrame) while the fight is mirrored.
+(display.cpp's hook of XAudioSubmitRenderDriverFrame) while the fight is mirrored. The game does place its sounds:
+`SC5_TEST_AUDIO_RMS=1` (which now logs the front left and right too) gave the fight's seconds up to 3 dB apart one
+way or the other, where the menus' music keeps within 1 dB.
 
 **Checked** (2026-11-25, two games linked with tools\linktest.py, game 2 preferring the left so mirrored, game 1 not;
 pictures of both at the same moments): the intro, the round's call, the fight, a KO's "PERFECT", the KO's replay, the
 winner's pose with its "YOU WIN" and the result screen were mirrored in game 2 with every text and the HUD as in game
-1. Game 2's own controller (`SC5_TEST_DEVICE_P1`) holding RIGHT and the stick left reached both games' net logs as
-LEFT and the stick right.
+1; in Online Practice the frame meter's damage panel had player 2's values on the left in game 2. Game 2's own
+controller (`SC5_TEST_DEVICE_P1`) holding RIGHT and the stick left reached both games' net logs as LEFT and the stick
+right. Sync: tools\synctest.sh with `SC5_PREFERRED_SIDE=right` (player 1 mirrored offline) gave the same battle events
+on the same fight frames as without, plain and with every frame run again, and the same counts (1,800 checks, 549 in
+the game's snapshot, 0 in the fight); linktest with game 2 mirrored, 40 ms each way, a first to 2 and its rematch: 0
+checks apart, the same results; both games mirrored (player 1 preferring the right, player 2 the left), 40 ms, a
+desync forced at frame 400 (`SC5_TEST_DESYNC_AT=400:1`) in the match and its rematch: each round played again and
+both matches ended alike; tools\pairsweep.sh pairs 0 to 2 with game 2 mirrored (60 ms, jitter, loss): 0 checks apart.
+In that sweep, pair 1's game 2 once stopped in round 2 with six games on the PC (four of them another worker's);
+the same pair again played its five rounds to the end in sync.
 
 ## Sound levels (sound.cpp)
 
