@@ -53,6 +53,12 @@ param(
     [switch]$Stuck,              # the games never take park after a match (SC5_FAKE_STUCK=1): the launchers replace them
     [switch]$Refused,            # each game holds a created character back at its select screen (SC5_FAKE_REFUSED): PICK_REFUSED
     [switch]$OwnLobbyFirst,      # lobby: B is in a lobby of its own when it joins A's (the server moves it)
+    [switch]$Relay,              # every match through the server's relay (--relay-only), as with "Hide my IP address":
+                                 # the loser's choice and the next match from the result screens all the same
+    [int]$ChooseSeconds = 0,     # seconds from the stand-in's result to its loser's choice (SC5_FAKE_CHOOSE_SECONDS,
+                                 # default 2; the real game's is 12 s and the loser's own time, 40 s at most)
+    [int]$DropAtResult = 0,      # B's server connection drops this many seconds after its first result screen (it
+                                 # comes back by itself): the choice made meanwhile goes on, and so does the series
 
     [string]$DelayA = '',        # [online] input_delay of A and B: auto (default) or 0-4
     [string]$DelayB = '',
@@ -138,13 +144,18 @@ background=true
 $serverArgs = @('-m', 'server', '--host', '127.0.0.1', '--port', "$Port", '--udp-port', "$($Port + 1)",
                 '--db', "`"$work\server\e2e.sqlite`"", '--cert', "`"$work\server\server-cert.pem`"",
                 '--key', "`"$work\server\server-key.pem`"")
-if ($Queue -eq 'ranked') { $serverArgs += '--allow-same-ip' }  # ranked never pairs one public IP otherwise
+if ($Queue -eq 'ranked' -or $Queue -eq 'asks') { $serverArgs += '--allow-same-ip' }  # ranked never pairs one public IP otherwise (asks: a real game's script may search ranked)
+if ($Relay) { $serverArgs += '--relay-only' }
 $server = Start-Process -FilePath $py -ArgumentList $serverArgs -WorkingDirectory $(if ($ServerRoot) { $ServerRoot } else { $root }) -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput "$work\server\out.txt" -RedirectStandardError "$work\server\err.txt"
 Start-Sleep -Seconds 2
-$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'SC5_FAKE_REFUSED', 'SC5_FAKE_CHOICE', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
+$vars = @('SC5_DEV_PASSWORD', 'SC5_FAKE_SECONDS', 'SC5_FAKE_RESULT', 'SC5_FAKE_STUCK', 'SC5_FAKE_REFUSED', 'SC5_FAKE_CHOICE',
+          'SC5_FAKE_CHOOSE_SECONDS', 'QT_QPA_PLATFORM', 'QT_QPA_FONTDIR')
 $env:SC5_DEV_PASSWORD = 'e2e-password-123'  # throwaway accounts on a throwaway server
 $env:SC5_FAKE_SECONDS = "$MatchSeconds"
+if ($ChooseSeconds -gt 0) { $env:SC5_FAKE_CHOOSE_SECONDS = "$ChooseSeconds" }
+$dropB = @()
+if ($DropAtResult -gt 0) { $dropB = @('--drop-at-result', "$DropAtResult") }
 # the loser's choice on the game's result screen (SCV 0.1.8): a casual series' rematches, then LEAVE; a ranked set's
 # matches through CHARACTER SELECT, the winner keeping their fighter
 if (-not $Choices -and $Queue -eq 'casual') { $Choices = ((@('rematch') * $Rematches) + @('leave')) -join ',' }
@@ -243,12 +254,12 @@ say done
     $extraB = @()
     if ($OwnLobbyFirst) { $extraB += '--lobby-own-first' }
 
-    $lb = Start-Launcher 'b' (@('--lobby', 'join', '--character', $CharB) + $lobby + $extraB)
+    $lb = Start-Launcher 'b' (@('--lobby', 'join', '--character', $CharB) + $lobby + $extraB + $dropB)
 } else {
     $search = @('--queue', $Queue, '--mode', $Mode, '--rematches', "$Rematches")
     $la = Start-Launcher 'a' ($search + @('--character', $CharA, '--auto-accept', '2'))
     Start-Sleep -Seconds 2
-    $lb = Start-Launcher 'b' ($search + @('--character', $CharB, '--auto-accept', "$AcceptB"))
+    $lb = Start-Launcher 'b' ($search + @('--character', $CharB, '--auto-accept', "$AcceptB") + $dropB)
 }
 $lc = $null
 if ($Watch) {
@@ -309,7 +320,7 @@ $who = @('a', 'b') + $(if ($Watch) { @('c') } else { @() })
 "--- what the launchers did (search, match found, accept, match, result, rematch, set, lobby, watch)"
 foreach ($s in $who) {
     Get-Content "$work\$s\sc5-launcher.log" -ErrorAction SilentlyContinue |
-        Select-String -Pattern 'cli:|bridge:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error|lobby|notice' |
+        Select-String -Pattern 'cli:|bridge:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error|lobby|notice|dropping|logged in' |
         Select-Object -Last 40 | ForEach-Object { "[$s] $($_.Line)" }
 }
 "--- the games' start lines and the variables they were given"
@@ -347,4 +358,23 @@ for t in ('ratings', 'stats', 'records', 'elo'):
 print('matches', c.execute('SELECT id, mode, ranked, status, winner, p1_rounds, p2_rounds FROM matches ORDER BY created').fetchall())
 "@ "$work\server\e2e.sqlite"
 "still running from this run: $(@(Get-Process -Id (@($ls | ForEach-Object { $_.Id }) + $games + $server.Id) -ErrorAction SilentlyContinue).Count)"
-if ($finished) { "PASS: $Queue $Mode$(if ($Watch) { ', watched' })$(if ($Draw) { ', draws' })" } else { "FAIL: not finished within $Seconds s" }
+# the result screens: the loser's choices the games made, and the next matches that started from there
+$serverAll = @(Get-Content "$work\server\err.txt", "$work\server\out.txt" -ErrorAction SilentlyContinue)
+$inPlace = @($serverAll | Select-String -Pattern 'at the result screens').Count
+$relayed = @($serverAll | Select-String -Pattern 'relayed through this server').Count
+$chosen = @(Get-ChildItem -Path "$work\a\sessions" -Filter game.log -Recurse -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'link: status chose').Count
+"result screens: $chosen choices in A's game, $inPlace next matches from there$(if ($Relay) { ", $relayed matches relayed" })"
+$why = "not finished within $Seconds s"
+if ($finished -and $Relay -and $Matches -gt 1 -and $Mode -ne 'sparring' -and ($inPlace -lt 1 -or $relayed -lt 1 -or $chosen -lt 1)) {
+    $finished = $false
+    $why = 'through the relay, no next match came from the result screens'
+}
+if ($finished -and $DropAtResult -gt 0) {
+    $bLog = @(Get-Content "$work\b\sc5-launcher.log" -ErrorAction SilentlyContinue)
+    $dropped = @($bLog | Select-String -Pattern 'dropping the connection').Count
+    $logins = @($bLog | Select-String -Pattern 'server: logged in as').Count
+    "B dropped its connection $dropped time(s) and signed in $logins time(s)"
+    if ($dropped -lt 1 -or $logins -lt 2) { $finished = $false; $why = 'B never dropped and came back at the result screen' }
+}
+if ($finished) { "PASS: $Queue $Mode$(if ($Watch) { ', watched' })$(if ($Draw) { ', draws' })$(if ($Relay) { ', relayed' })$(if ($DropAtResult) { ', a drop at the result screen' })" } else { "FAIL: $why" }

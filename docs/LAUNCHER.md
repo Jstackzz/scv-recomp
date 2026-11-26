@@ -79,7 +79,7 @@ python -m pip install --user pytest pytest-asyncio
 python -m pytest server/tests
 ```
 
-The suite (147 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
+The suite (162 tests) starts a real TLS server on ephemeral ports with a throwaway certificate and database and covers
 accounts, pinning, rate limiting, queue pairing, accept/decline/timeouts, the UDP rendezvous, relay and tunnel,
 results, series and ranked sets, ranks, lobbies, Online Practice, spectators, King of the Hill, reports, UPnP and
 updates.
@@ -258,7 +258,16 @@ When something online needs the game and it is not running (a lobby match that c
 the launcher says so and starts nothing. When the game closes or crashes, the launcher leaves the search, the set or
 series and the lobby the player was in, and reports a match it was in as left. The launcher never closes the game by
 itself: a game that does not come back to its online menu after a match is parked again and the player told to close
-it and press PLAY if it stays stuck. Closing the launcher asks first while the game runs, and closes the game with it.
+it and press PLAY if it stays stuck (a game that says `away`, gone on to Training or single player, is not stuck and
+is never parked). A game that is `away` is never started into a match: the launcher stops a search, declines a match
+found or on its way, reports a match whose start the game has not taken as left, takes back a lobby's Ready and
+readies a series' next match only once the game is back at its online menus, each with a message (PROTOCOL.md 3.8).
+At the result screen the loser's choice survives a dropped connection (it goes on once the launcher is signed in again
+and the server has sent the series again, or the game leaves its result screen with a message when the series ended
+meanwhile; a lobby's game parks, to ready again in the lobby), a ready the server forgot with a drop is sent again with
+the same choice, and a lobby whose other player leaves while the choice is pending parks the game at once. Closing the
+launcher asks first while the game runs, and closes the game with it; what it sent last (leaving the set, the lobby)
+goes out before the connection closes.
 
 **The controller in the launcher** (`GamepadNav`, SDL3): only while a launcher window is in front, since the game
 reads the controllers in the background too. The d-pad or left stick moves the focus (gold) to the nearest control,
@@ -336,6 +345,7 @@ it only where the game offers no choice (the stand-in's is `SC5_FAKE_CHOICE`).
 | `--local-test` | start the two-instance loopback test (two games of their own, no server) |
 | `--extract <image>` | open Build game and check and extract that image (the title update and DLC from the settings, `games/sc5/update_package` and `games/sc5/dlc`), then compile; what it did goes to `sc5-launcher.log` (`build sc5: ...`) |
 | `--auto-update`, `--updated <version>` | install an offered update without asking (tests); started by an update |
+| `--drop-at-result S` | S seconds after the game first waits at its result screen, the server connection drops as a network would (it comes back by itself with the login's token) |
 | `--upnp-probe` | find the router and its public address, open nothing |
 
 ### End-to-end tests on one PC
@@ -354,12 +364,19 @@ powershell -File tools\online-e2e.ps1 -Queue ranked -Draw -Matches 2  # drawn ma
 powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -OwnLobbyFirst  # B moves from its own lobby
 powershell -File tools\online-e2e.ps1 -Queue casual -DelayB 3        # input delays: Auto (default) or a number
 powershell -File tools\online-e2e.ps1 -Queue asks                    # the stand-in games drive it by asks alone
+powershell -File tools\online-e2e.ps1 -Queue casual -Rematches 2 -Relay  # every match through the relay: the choice too
+powershell -File tools\online-e2e.ps1 -Queue ranked -DropAtResult 1 -ChooseSeconds 6  # B drops at the result screen
 powershell -File tools\koth-e2e.ps1 -Matches 3 -Snaps                 # King of the Hill, Respect Points, leaderboard
 ```
 
 The stand-in games' losers choose on their result screens as the real game's do (`-Choices`, the stand-in's
 `SC5_FAKE_CHOICE`, one per result in turn): by default a casual series' `-Rematches` rematches and then LEAVE, a ranked
 set's CHARACTER SELECT (its winner keeping their fighter, `keep=` in the next line) until it is won, a lobby's REMATCH.
+`-ChooseSeconds` is how long after its result the stand-in's loser chooses (`SC5_FAKE_CHOOSE_SECONDS`, 2 by default).
+`-Relay` runs the server with `--relay-only` (every match through the relay, as with *Hide my IP address*) and passes
+only when the next matches came from the result screens all the same. `-DropAtResult S` drops B's server connection
+S seconds into its first result screen (`--drop-at-result`): the choice made while it is off goes on once it is back,
+and the run passes only when B dropped, signed in again and the series played on.
 
 `-Queue asks` starts the launchers with `--play` only: each stand-in game runs a script of asks (`SC5_FAKE_ASKS`)
 against its launcher's `ui.json`, as a player in the game's menus would: asks that do not fit (accept with no match,
@@ -381,9 +398,10 @@ launcher never closes the player's game, so it parks it again and tells the play
   aside to watch, a spectator taking a free place, King of the Hill's line), or for rating a King of the Hill win:
   the launcher's pages that had them are gone, so those wait for asks of their own. A spectator joins to watch
   (`lobby_join watch=1`) and a King of the Hill lobby still plays, its line and its king as before.
-- A series' next match is chosen at the game's result screen (3.3, *The loser's choice*) only when the two games
-  reached each other straight; through the relay or the tunnel the launchers go on by themselves with CHARACTER SELECT
-  (the winner keeping their fighter), and a player leaves such a series from the game's online menu (`leave`).
+- A series' next match is chosen at the game's result screen (3.3, *The loser's choice*) whether the two games reached
+  each other straight or through the relay or the tunnel (SCV 0.1.8, a server with `relay_choice`); with an older
+  server a relayed match's launchers go on by themselves with CHARACTER SELECT (the winner keeping their fighter), and
+  a player leaves such a series from the game's online menu (`leave`).
 
 - The game speaks all of section 3 (2026-11-17): versus, Online Practice (`sparring`), practice and watching (the
   spectator feed), the display and sound settings (`SC5_DISPLAY_FILE`) and `controls.toml` (docs\GAME.md, "The
@@ -396,8 +414,6 @@ launcher never closes the player's game, so it parks it again and tells the play
   laid-out package; `tools\package.ps1`), not in a source build, where `sc5\build.cmd` does. Before the first build
   a package says `sc5.exe` is missing, as if an antivirus had taken it.
 - Dampierre (downloadable) is picked in the game only, by players who both have him.
-- A relayed or tunnelled match's next match is still a `park` and a new `start`, not a rematch from the result
-  screen.
 - A spectator's view ends (the watching game says `disconnected` some 20 s later and parks) when the players' games
   went out of step and played the round again (docs\GAME.md, "The round again"): the spectators' feed ends there.
 - A KO that only a wrong guess had and a rollback took back leaves its call on the screen ("PERFECT", "K.O.") over the
