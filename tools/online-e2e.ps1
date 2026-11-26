@@ -9,7 +9,12 @@
   -Rematches rematches. -Queue ranked: a ranked set (first to 3), played on by itself until one player wins it, the Elo
   and the rank titles. -Queue lobby: A hosts a lobby, B joins it, both ready and -Matches matches play; -Watch adds a
   third launcher, C, that watches the lobby as a spectator (its game plays each match from the players' feeds).
-  -Mode sparring with -Queue lobby: Online Practice.
+  -Mode sparring with -Queue lobby: Online Practice. -Queue asks: no test switches play the players' part; each
+  launcher only starts its game (--play, as PLAY), and the stand-in games drive everything from a script of asks
+  (SC5_FAKE_ASKS, docs/PROTOCOL.md 3.8), reading the launchers' ui.json: a casual match, refused asks, leaving the
+  series, then a lobby that A creates and B joins from the list, its match, the leaderboard, leaving the lobby.
+
+  Each launcher starts one game for everything, as PLAY does (SCV 0.1.8): every match of the run plays in it.
 
   -Exe runs a real sc5.exe instead of the stand-in, with -Game naming the game folder whose disc, update and dlc it
   plays: they are linked into the run's own game folder (junctions, removed each on its own before anything deletes
@@ -24,10 +29,11 @@
   powershell -File tools\online-e2e.ps1 -Queue ranked
   powershell -File tools\online-e2e.ps1 -Queue lobby -Matches 2 -Watch
   powershell -File tools\online-e2e.ps1 -Queue ranked -Draw -Matches 2
+  powershell -File tools\online-e2e.ps1 -Queue asks -Port 9077
 #>
 param(
     [int]$Seconds = 180,
-    [string]$Queue = 'casual',   # casual, ranked or lobby
+    [string]$Queue = 'casual',   # casual, ranked, lobby or asks (the stand-in games drive it by asks alone)
     [string]$Mode = 'versus',    # versus, sparring (Online Practice: -Queue lobby)
     [string]$Exe = '',           # the game: default launcher\tools\fake_game.py (the stand-in)
     [string]$Game = '',          # with a real -Exe: the game folder whose disc, update and dlc it plays (linked, not copied)
@@ -45,7 +51,7 @@ param(
     [switch]$Stuck,              # the games never take park after a match (SC5_FAKE_STUCK=1): the launchers replace them
     [switch]$Refused,            # each game holds a created character back at its select screen (SC5_FAKE_REFUSED): PICK_REFUSED
     [switch]$OwnLobbyFirst,      # lobby: B is in a lobby of its own when it joins A's (the server moves it)
-    [switch]$SoloB,              # lobby: B has single player open when the lobby's match comes (the launcher closes it)
+
     [string]$DelayA = '',        # [online] input_delay of A and B: auto (default) or 0-4
     [string]$DelayB = '',
     [string]$ServerRoot = '',    # run the server from another checkout's folder (an older release's server/)
@@ -108,6 +114,7 @@ practice_while_waiting=false
 search_again=false
 hide_ip=false
 match_sound=false
+upnp=false
 
 [account]
 remember=false
@@ -159,14 +166,76 @@ function Start-Launcher($who, $extra) {
     Start-Process -FilePath $Launcher -PassThru -ArgumentList (@('--config', "`"$work\$who\sc5-launcher.ini`"", '--user',
                                                                  $users[$who], '--register') + $extra)
 }
-if ($Queue -eq 'lobby') {
+if ($Queue -eq 'asks') {
+    # the players' part in their games' menus: casual first, then a lobby (the second match)
+    $lobbyName = "e2eL$stamp"
+    $scriptA = @"
+wait account.state=signed_in timeout=60
+ask side value=left
+wait side=left
+ask queue kind=casual
+wait queue.state!=idle
+ask queue kind=casual
+wait message.text~=searching already
+wait queue.state=found timeout=60
+ask accept
+wait game.results>=1 timeout=90
+wait series.state=choosing timeout=30
+ask leave
+wait series.state=over timeout=30
+wait game.status=ready timeout=60
+ask leaderboard
+wait leaderboard.at>=1 timeout=30
+ask lobby_ready value=1
+wait message.text~=not in a lobby
+ask lobby_create name=$lobbyName mode=versus koth=0 private=0
+wait lobby.code!= timeout=30
+wait lobby.members#>=2 timeout=90
+ask lobby_ready value=1
+wait lobby.ready=true timeout=30
+wait game.results>=2 timeout=120
+wait series.kind=lobby
+ask lobby_leave
+wait lobby=null timeout=30
+say done
+"@
+    $scriptB = @"
+wait account.state=signed_in timeout=60
+ask accept
+wait message.text~=no match is waiting
+ask queue kind=casual
+wait queue.state=found timeout=60
+ask accept
+wait game.results>=1 timeout=90
+wait series.state=over timeout=60
+wait game.status=ready timeout=60
+ask lobbies
+wait lobbies.list[name=$lobbyName].code!= timeout=60
+ask lobby_join code={lobbies.list[name=$lobbyName].code}
+wait lobby.members#>=2 timeout=30
+ask lobby_ready value=1
+wait game.results>=2 timeout=120
+ask lobby_leave
+wait lobby=null timeout=30
+say done
+"@
+    Set-Content -Path "$work\a\asks.txt" -Value $scriptA -Encoding ascii
+    Set-Content -Path "$work\b\asks.txt" -Value $scriptB -Encoding ascii
+    $env:SC5_FAKE_ASKS = "$work\a\asks.txt"
+    $la = Start-Launcher 'a' @('--play')
+    Start-Sleep -Seconds 2
+    $env:SC5_FAKE_ASKS = "$work\b\asks.txt"
+    $lb = Start-Launcher 'b' @('--play')
+    Remove-Item env:SC5_FAKE_ASKS
+    $Matches = 2
+} elseif ($Queue -eq 'lobby') {
     $lobby = @('--lobby-name', "e2e$stamp", '--lobby-matches', "$Matches", '--lobby-code-file', "`"$work\lobby-code.txt`"",
                '--mode', $Mode)
     $la = Start-Launcher 'a' (@('--lobby', 'host', '--character', $CharA) + $lobby)
     Start-Sleep -Seconds 3
     $extraB = @()
     if ($OwnLobbyFirst) { $extraB += '--lobby-own-first' }
-    if ($SoloB) { $extraB += '--solo' }
+
     $lb = Start-Launcher 'b' (@('--lobby', 'join', '--character', $CharB) + $lobby + $extraB)
 } else {
     $search = @('--queue', $Queue, '--mode', $Mode, '--rematches', "$Rematches")
@@ -216,6 +285,15 @@ while (((Get-Date) - $t0).TotalSeconds -lt $Seconds) {
                       Select-String -Pattern 'link: status sparring_over').Count -ge $Matches
     }
     if ($Watch) { $finished = $finished -and $watched -ge $Matches }  # the spectator runs behind
+    if ($Queue -eq 'asks') {
+        # both stand-in games went through their scripts (or one failed: no use waiting)
+        $said = @(Get-ChildItem -Path "$work\a\sessions", "$work\b\sessions" -Filter game.log -Recurse -ErrorAction SilentlyContinue |
+                  Select-String -Pattern 'asks script: (done|FAILED)')
+        # (not -match: it would overwrite $Matches, this script's parameter)
+        $failed = @($said | Where-Object { $_.Line.Contains('FAILED') })
+        if ($failed.Count) { $finished = $false; "asks script failed: $($failed[0].Line)"; break }
+        $finished = @($said | Where-Object { $_.Line.Contains('script: done') }).Count -ge 2
+    }
     if ($finished) { Start-Sleep -Seconds 8; break }
     if (@($ls | Where-Object { $_.HasExited }).Count) { "a launcher exited"; break }
     Start-Sleep -Milliseconds 250
@@ -224,7 +302,7 @@ $who = @('a', 'b') + $(if ($Watch) { @('c') } else { @() })
 "--- what the launchers did (search, match found, accept, match, result, rematch, set, lobby, watch)"
 foreach ($s in $who) {
     Get-Content "$work\$s\sc5-launcher.log" -ErrorAction SilentlyContinue |
-        Select-String -Pattern 'cli:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error|lobby|notice' |
+        Select-String -Pattern 'cli:|bridge:|match: |series|Match found|MATCH FOUND|accept|rematch|Rematch|watch|Watch|error|lobby|notice' |
         Select-Object -Last 40 | ForEach-Object { "[$s] $($_.Line)" }
 }
 "--- the games' start lines and the variables they were given"
@@ -235,7 +313,7 @@ foreach ($s in $who) {
     }
     Get-ChildItem -Path "$work\$s\sessions" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $log = Join-Path $_.FullName 'game.log'
-        if (Test-Path $log) { Select-String -Path $log -Pattern 'link: start' | ForEach-Object { "[$s] $($_.Line)" } }
+        if (Test-Path $log) { Select-String -Path $log -Pattern 'link: start|asks script' | ForEach-Object { "[$s] $($_.Line)" } }
     }
 }
 "--- server log (matches and results)"

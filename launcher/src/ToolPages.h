@@ -101,6 +101,20 @@ private:
     QStringList dlc_;  // the DLC packages picked (saved: games/<id>/dlc)
 };
 
+// The mouse wheel over a list or number box it watches goes to `page` (a scroll area's viewport) unless the box has the
+// focus: scrolling a long page never changes a setting it passes over
+class WheelGuard : public QObject {
+    Q_OBJECT
+public:
+    WheelGuard(QWidget* page, QObject* parent) : QObject(parent), page_(page) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    QWidget* page_;
+};
+
 class SettingsPage : public Page {
     Q_OBJECT
 public:

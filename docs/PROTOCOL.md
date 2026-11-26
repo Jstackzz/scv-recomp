@@ -1230,8 +1230,8 @@ sound variables, `controls.toml`; `tools/linktest.py` runs two games, and a spec
 | `SC5_ADAPTIVE_SYNC` | `0` or `1`: with v-sync, a G-SYNC or FreeSync monitor: the swap chain allows tearing, which such a monitor needs to follow the game; `0`: nothing makes a frame tear while v-sync is on |
 | `SC5_BRIGHTNESS` | `50` to `200`, percent (100: as the game draws it): a gamma curve over the game's own ramp, blacks and whites kept |
 | `SC5_FRAMEDATA` | `0` or `1`: the frame meter in practice (Training and Online Practice): both players' frames as Street Fighter 6's (startup, impact, recovery, stun), each player's startup, impact, recovery, total and advantage, and the damage panel; F7 in the game shows or hides it |
-| `SC5_PREFERRED_SIDE` | `off` (the default), `left` or `right`: the side the player wants to start every fight on, whichever player they are (the Controls page's *Preferred side*, as Tekken 8's). The game shows the fight mirrored when its player would otherwise start on the other side, with the player's own left and right and the sound's swapped with it; nothing it computes or sends changes (below) |
-| `SC5_VOLUME_MASTER`, `SC5_VOLUME_MUSIC`, `SC5_VOLUME_EFFECTS`, `SC5_VOLUME_VOICES` | `0` to `150`, percent of the game's own level (voices include the announcer) |
+| `SC5_PREFERRED_SIDE` | `off` (the default), `left` or `right`: the side the player wants to start every fight on, whichever player they are (as Tekken 8's; chosen in the game's own menus from SCV 0.1.8, the ask `side`, 3.8; the Controls page's *Preferred side* before). The game shows the fight mirrored when its player would otherwise start on the other side, with the player's own left and right and the sound's swapped with it; nothing it computes or sends changes (below) |
+| `SC5_VOLUME_MASTER`, `SC5_VOLUME_MUSIC`, `SC5_VOLUME_EFFECTS`, `SC5_VOLUME_VOICES` | `0` to `150`, percent of the game's own level (voices include the announcer). The launcher sends none of them from SCV 0.1.8 (nor `display.txt`'s `volume_` lines): the game's own Sound options set the levels, and the game plays at 100 % without them |
 | `SC5_DISPLAY_FILE` | the launcher's `display.txt` (beside its settings file): the display and sound settings again, as `key=value` lines (`mode`, `resolution`, `render_scale`, `anti_aliasing`, `anisotropic`, `vsync`, `adaptive_sync`, `brightness`, `frame_data`, `preferred_side`, `volume_master`, `volume_music`, `volume_effects`, `volume_voices`), replaced whole (3.2) at every change; see below |
 | `SC5_CONTROLS` | the launcher's `controls.toml`: what keys and controller buttons press (below) |
 | `SC5_TRAINING` | `1`, a plain game for practice (the PRACTICE button, or practice while a search waits): the autopilot goes to training's character select with every character unlocked and hands it to the player (port 0 picks both; only player 1 takes part) |
@@ -1277,7 +1277,10 @@ keyboard in the fight before the netplay sends them (so both games, and the spec
 meant); a spectator's game never mirrors; offline it is for the one player on a controller (the other the CPU's), and
 off with two players on one PC. Both players may choose the same side.
 
-**`controls.toml`** (the Controls page writes it; a running game reads it again within a second of a change):
+**`controls.toml`** (the launcher writes it: Settings, *Keyboard*, from SCV 0.1.8, where the Controls page set all of
+it before; a running game reads it again within a second of a change). From 0.1.8 the launcher writes no `[fight]`
+(the game's own Options set what the buttons do) and takes out what an older launcher wrote there; `[buttons]` and
+`[ports]` it keeps as they are:
 
 ```toml
 keyboard = true                  # the keyboard plays as player 1 while the game's window is in front
@@ -1622,7 +1625,7 @@ there; lists may be empty.
   "lobbies": { "at": 0, "list": [ { "code": "", "name": "", "host": "", "players": 0, "max": 0,
                "mode": "versus" | "sparring", "koth": false, "locked": false, "region": "" } ] },
   "lobby":   null | { "code": "", "name": "", "host": "", "mode": "versus", "koth": false, "ready": false,
-               "state": "waiting" | "match", "text": "",
+               "state": "waiting" | "match", "text": "", "locked": false, "password": "",
                "members": [ { "name": "", "ready": false, "role": "player" | "spectator", "wins": 0 } ] },
   "leaderboard": { "at": 0, "rows": [ { "place": 0, "name": "", "rank": "", "elo": 0, "wins": 0, "losses": 0 } ] },
   "message": { "id": 0, "kind": "info" | "error", "text": "" },
@@ -1650,11 +1653,25 @@ as 3.2: `ask n=<count> <verb> [key=value ...]`; a text value is percent-encoded 
 | `leave` | leave the series or set after a match (the other player is told, 1.9.1) |
 | `side value=off\|left\|right` | the player's preferred side (docs/GAME.md, "A player's preferred side"); the launcher keeps it and hands it back in `ui.json` and to the game |
 | `lobbies` | refresh the list of open lobbies (1.10) |
-| `lobby_create name=<text> mode=versus\|sparring koth=0\|1 private=0\|1` | open a lobby and join it |
-| `lobby_join code=<code> [watch=1]` | join a lobby, as a player or to watch |
+| `lobby_create name=<text> mode=versus\|sparring koth=0\|1 private=0\|1 [password=<text>] [rounds=1\|3\|5]` | open a lobby and join it |
+| `lobby_join code=<code> [watch=1] [password=<text>]` | join a lobby, as a player or to watch |
 | `lobby_ready value=0\|1` | ready or not for the lobby's next match |
 | `lobby_leave` | leave the lobby |
 | `leaderboard` | fetch the leaderboard (1.11) |
+
+Added in the launcher's branch (SCV 0.1.8, additive; a game that leaves them out gets what the table says without
+them): `lobby_create`'s `password` and `rounds` (the rounds to play, best of 1, 3 or 5: default 5, first to 3 as on the
+console); `private=1` without a `password` gives the lobby a 4-digit password the launcher makes up, which `lobby`
+shows to its host only (`lobby.password`, `""` for everyone else; `lobby.text` says it too), and a friend joins with
+`lobby_join`'s `password` (a lobby whose `locked` is true needs one: `lobbies.list[].locked`, `lobby.locked`).
+
+How the launcher takes the asks (launcher/src/MenuBridge.cpp): it looks for `ask.txt` every 100 ms and, before it does
+what a line asks, reads `status.txt` again, so a status the game wrote first (a match's `result`, then `lobby_leave`)
+is acted on first. An ask that does not fit the state (`queue` while searching or in a lobby, `accept` with no match
+found, `lobby_ready` outside a lobby or as a spectator, `leave` with no set or series, an unknown verb) is left undone,
+and `message` says why (`kind` `error`); so is one the server turns away (its error's words). The game needs no answer
+to an ask beyond what `ui.json` shows next. When the game closes (or crashes), the launcher leaves the search, the set
+or series and the lobby the player was in, and reports a match it was in as left (1.9).
 
 A match itself starts as before: the launcher writes `start ...` to `cmd.txt` (3.3) once the two players are
 connected; the game leaves its online menu, the fight is set up and played, `result` goes to `status.txt`, and

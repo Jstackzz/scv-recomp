@@ -164,9 +164,34 @@ QString buildArgs(const QString& gameId) { return get(QStringLiteral("games/%1/b
 QString region() { return get(QStringLiteral("online/region"), QStringLiteral("eu")).toString(); }
 int maxPing() { return get(QStringLiteral("online/max_ping"), 150).toInt(); }
 bool strict() { return get(QStringLiteral("online/strict"), false).toBool(); }
-bool pickInGame() { return get(QStringLiteral("online/pick_in_game"), true).toBool(); }
-bool practiceWhileWaiting() { return get(QStringLiteral("online/practice_while_waiting"), true).toBool(); }
-bool searchAgain() { return get(QStringLiteral("online/search_again"), true).toBool(); }
+bool practiceWhileWaiting() { return false; }
+bool searchAgain() { return false; }
+QStringList dropRemovedSettings() {
+    // the sound levels (Settings, SOUND), the queue pages' boxes and choices, the lobby window's last King of the Hill
+    // box: all of them now the game's own menus' business
+    QStringList keys = {QStringLiteral("online/practice_while_waiting"), QStringLiteral("online/search_again"),
+                        QStringLiteral("online/pick_in_game"), QStringLiteral("online/koth")};
+    for (const char* level : {"master", "music", "effects", "voices"})
+        keys << QStringLiteral("display/volume_") + QLatin1String(level);
+    QStringList removed;
+    for (const QString& key : std::as_const(keys))
+        if (g_settings->contains(key)) {
+            g_settings->remove(key);
+            removed << key;
+        }
+    // the character each queue page and lobby mode last had (ui/ranked/sc5/character, ui/sc5/versus/character)
+    for (const QString& group : {QStringLiteral("ui/ranked"), QStringLiteral("ui/casual"), QStringLiteral("ui/sc5")}) {
+        g_settings->beginGroup(group);
+        const bool any = !g_settings->allKeys().isEmpty();
+        g_settings->endGroup();
+        if (any) {
+            g_settings->remove(group);
+            removed << group;
+        }
+    }
+    if (!removed.isEmpty()) g_settings->sync();
+    return removed;
+}
 bool matchSound() { return get(QStringLiteral("online/match_sound"), true).toBool(); }
 int inputDelay() {
     const QVariant v = get(QStringLiteral("online/input_delay"));
@@ -217,11 +242,6 @@ QString preferredSide() {
     const QString v = get(QStringLiteral("display/preferred_side"), QStringLiteral("off")).toString();
     return v == QLatin1String("left") || v == QLatin1String("right") ? v : QStringLiteral("off");
 }
-QStringList volumeNames() {
-    return {QStringLiteral("master"), QStringLiteral("music"), QStringLiteral("effects"), QStringLiteral("voices")};
-}
-int volume(const QString& name) { return qBound(0, get(QStringLiteral("display/volume_") + name, 100).toInt(), 150); }
-
 // key=value lines, the keys as the game's SC5_ variables name them, in lower case (docs/PROTOCOL.md 3.1)
 void writeDisplayFile() {
     const QString text = QStringLiteral("mode=%1\nresolution=%2\nrender_scale=%3\nanti_aliasing=%4\nanisotropic=%5\n"
@@ -235,9 +255,7 @@ void writeDisplayFile() {
                              .arg(brightness())
                              .arg(frameData() ? 1 : 0) +
                          QStringLiteral("preferred_side=%1\n").arg(preferredSide());
-    QString volumes;
-    for (const QString& name : volumeNames()) volumes += QStringLiteral("volume_%1=%2\n").arg(name).arg(volume(name));
-    winutil::writeFileAtomic(paths::displayFile(), (text + volumes).toLatin1());
+    winutil::writeFileAtomic(paths::displayFile(), text.toLatin1());
 }
 bool udpLoopback() { return get(QStringLiteral("dev/udp_loopback"), false).toBool(); }
 bool udpBlocked() { return get(QStringLiteral("dev/udp_blocked"), false).toBool(); }

@@ -204,11 +204,14 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
         const QString netLog = gameId_.toUpper() + QStringLiteral("_NET_LOG");
         if (!env.contains(netLog))
             env.insert(netLog, QDir::toNativeSeparators(QDir(sessionDir_).filePath(QStringLiteral("net-{match}.log"))));
-        // the player's own created characters (Creation, in the offline game): the online game takes them from the
-        // offline save, which it only reads (docs/PROTOCOL.md 3.1)
+        // the player's own created characters (Creation, in the offline game): an online game on a fresh save takes
+        // them from the offline save, which it only reads (docs/PROTOCOL.md 3.1). The player's own game (3.8) plays on
+        // that save itself and has them already
         const QString save = cfg::gameSaveFile(gameId_);
-        if (!save.isEmpty() && !env.contains(QStringLiteral("SC5_CREATION_SAVE")))
+        if (!menus_ && !save.isEmpty() && !env.contains(QStringLiteral("SC5_CREATION_SAVE")))
             env.insert(QStringLiteral("SC5_CREATION_SAVE"), QDir::toNativeSeparators(save));
+        // the player's own game: everything in it, its online menus too (docs/PROTOCOL.md 3.8)
+        if (menus_) env.insert(QStringLiteral("SC5_MENUS"), QStringLiteral("1"));
     }
     env.insert(QStringLiteral("SC5_GAME"), gameId_);
     env.insert(QStringLiteral("SC5_SESSION_DIR"), QDir::toNativeSeparators(sessionDir_));
@@ -220,7 +223,9 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
     env.insert(QStringLiteral("SC5_GAME_DIR"), QDir::toNativeSeparators(cfg::gameDataDir(gameId_)));
     env.insert(QStringLiteral("SC5_UPDATE_DIR"), QDir::toNativeSeparators(cfg::gameUpdateDir(gameId_)));
     env.insert(QStringLiteral("SC5_DLC_DIR"), QDir::toNativeSeparators(cfg::gameDlcDir(gameId_)));
-    const QString userDir = netMode ? QDir(sessionDir_).filePath(QStringLiteral("user")) : cfg::gameUserDir(gameId_);
+    // the player's own game (menus_, 3.8) plays on the player's own save, single player and online alike
+    const QString userDir = netMode && !menus_ ? QDir(sessionDir_).filePath(QStringLiteral("user"))
+                                               : cfg::gameUserDir(gameId_);
     QDir().mkpath(userDir);
     env.insert(QStringLiteral("SC5_USER_DIR"), QDir::toNativeSeparators(userDir));
     env.insert(QStringLiteral("SC5_CACHE_DIR"), QDir::toNativeSeparators(cfg::gameCacheDir(gameId_)));
@@ -240,8 +245,7 @@ bool GameProcess::start(const QString& exe, QString* error, bool netMode) {
     // the side the player wants to start on (Controls, PREFERRED SIDE): the game mirrors its own picture, controls
     // and sound, never what it computes
     env.insert(QStringLiteral("SC5_PREFERRED_SIDE"), cfg::preferredSide());
-    for (const QString& level : cfg::volumeNames())  // the sound levels (Settings, SOUND)
-        env.insert(QStringLiteral("SC5_VOLUME_") + level.toUpper(), QString::number(cfg::volume(level)));
+    // (no SC5_VOLUME_ variables since 0.1.8: the game's own Sound options set its levels)
     // the same settings again whenever the player changes them, for the game that runs on (it keeps watching the file)
     cfg::writeDisplayFile();
     env.insert(QStringLiteral("SC5_DISPLAY_FILE"), QDir::toNativeSeparators(paths::displayFile()));
