@@ -36,6 +36,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
 
+#include "sc5/creation.h"
 #include "sc5/frame.h"
 #include "sc5/game.h"
 
@@ -179,6 +180,9 @@ void Install(const fs::path& dlc_dir, const fs::path& saves) {
 
 uint8_t ReadByte(uint32_t a) { return ReadU8(a); }
 
+uint32_t ManagerState() { return game::ReadU32(kDlcManager + 8); }
+bool ManagerReady() { return ManagerState() >= 7 && ManagerState() <= 11; }
+
 bool ModelFileInstalled(uint32_t model) {
   if (model >> 24 != 0x7F) return true;
   const uint32_t state = game::ReadU32(kDlcManager + 8);
@@ -199,23 +203,31 @@ bool ModelFileInstalled(uint32_t model) {
 // levels 0 and 1 (sub_823616A8 with r4 = 0); when that load fails (sub_82361750) it starts again with r4 = 1, the
 // record's levels 2 and 3 in their place (sub_82221C00 sets the entry's +0x34D8 and lists that level's models),
 // which Creation fills with the plain body, and the fight shows them (the fighter's byte +0x2246A, which the fight's
-// setup sub_82148400 passes on). Logged: online both games must show the same levels, which the check makes sure of
-// (creation.cpp: a downloadable model whose file this PC lacks is refused), so this line in a match's log is a fault.
+// setup sub_82148400 passes on). Online both games must show the same levels: the pick chooses them alike in both
+// (creation_check.h, Decide), and a record the match shows in its plain body (creation::ShowsPlain, by its checksum,
+// the entry's +13336) is loaded with levels 2 and 3 from the first try in this game too, as the game's own retry does
+// it, whether this PC could load levels 0 and 1 or not. A fallback the match did not choose is logged as a fault.
 REX_EXTERN(__imp__sub_823616A8);
 REX_HOOK_RAW(sub_823616A8) {
-  const uint32_t flag = ctx.r4.u32, holder = ctx.r3.u32 + 0x88;
+  const uint32_t holder = ctx.r3.u32 + 0x88;
+  const uint32_t entry = sc5::game::ReadU32(holder);
+  std::string name;
+  for (uint32_t i = 0; entry && i < 44; i++) {
+    const uint8_t c = sc5::dlc::ReadByte(entry + 13245 + i);
+    if (!c) break;
+    name += char(c);
+  }
+  const bool plain = entry && sc5::creation::ShowsPlain(sc5::game::ReadU32(entry + 13336));
+  if (plain && !ctx.r4.u32) {
+    ctx.r4.u64 = 1;
+    REXLOG_INFO("sc5 dlc: the created character {} shows its plain body in this match (break levels 2 and 3), as in "
+                "the other game", name);
+  }
+  const uint32_t flag = ctx.r4.u32;
   __imp__sub_823616A8(ctx, base);
-  if (flag) {
-    const uint32_t entry = sc5::game::ReadU32(holder);
-    std::string name;
-    for (uint32_t i = 0; entry && i < 44; i++) {
-      const uint8_t c = sc5::dlc::ReadByte(entry + 13245 + i);
-      if (!c) break;
-      name += char(c);
-    }
+  if (flag && !plain)
     REXLOG_WARN("sc5 dlc: the models of the created character {} could not be loaded: the game shows its plain body "
                 "(break levels 2 and 3)", name);
-  }
 }
 
 // The game's file requests (sub_82363FC8 the size of a file, asked before it is read; sub_82364500 the read: r3 the

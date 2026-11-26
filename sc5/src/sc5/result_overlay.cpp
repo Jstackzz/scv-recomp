@@ -117,6 +117,54 @@ class HeldOutDialog final : public rex::ui::ImGuiDialog {
   }
 };
 
+// The costume panel online, its cursor on one of the player's own created characters that the pick holds back, waits
+// on, or shows without its equipment (autopilot.h, HeldOutView: pick_*): which one and why, in the middle of the screen,
+// larger than the list below and in plain words, white on navy with the gold border
+class PickDialog final : public rex::ui::ImGuiDialog {
+ public:
+  explicit PickDialog(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  bool RepaintsContinuously() const override { return false; }
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const autopilot::HeldOutView v = autopilot::HeldOutNow();
+    if (!v.pick_shown || io.DisplaySize.x <= 0 || io.DisplaySize.y <= 0) return;
+    // a 20th of the screen's height (54 px at 1080 lines); the lines wrap at nine tenths of its width
+    const float px = std::clamp(io.DisplaySize.y / 20.0f, 18.0f, 110.0f), scale = px / 10.0f;
+    const float width = io.DisplaySize.x * 0.9f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.42f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, io.DisplaySize.y * 0.8f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(kBack.x, kBack.y, kBack.z, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_Border, kGold);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, std::max(3.0f, scale * 1.5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * scale, 5.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * scale, 2.5f * scale));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    ImGui::PushFont(framemeter::LargeFont(), px);
+    if (ImGui::Begin("##sc5_pick", nullptr, flags)) {
+      const bool waiting = v.pick_held && v.pick_why.rfind("waiting", 0) == 0;
+      ImGui::TextColored(kGold, "%s", waiting      ? "PLEASE WAIT"
+                                      : v.pick_held ? "THIS CHARACTER CANNOT BE PICKED IN THIS MATCH"
+                                                    : "IN THIS MATCH IT FIGHTS WITHOUT ITS EQUIPMENT");
+      ImGui::TextColored(kWhite, "%s", v.pick_name.c_str());
+      ImGui::PushStyleColor(ImGuiCol_Text, kWhite);
+      ImGui::TextWrapped("Why: %s.", v.pick_why.c_str());
+      ImGui::PopStyleColor();
+      ImGui::TextColored(kGold, "%s", waiting      ? "A picks it in a moment"
+                                      : v.pick_held ? "B: choose another one"
+                                                    : "A picks it like this, B chooses another one");
+    }
+    ImGui::End();
+    ImGui::PopFont();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+  }
+};
+
 // A round started again after the two games went out of step (net/netplay.cpp, RoundAgain): said to both players for a
 // few seconds, in the same large bold text, over the top of the fight
 class RoundAgainDialog final : public rex::ui::ImGuiDialog {
@@ -157,6 +205,7 @@ void Install(rex::ui::ImGuiDrawer* drawer) {
   if (!drawer) return;
   new ResultChoiceDialog(drawer);  // a dialog keeps itself (rex/ui/imgui_dialog.h)
   new HeldOutDialog(drawer);
+  new PickDialog(drawer);
   new RoundAgainDialog(drawer);
 }
 

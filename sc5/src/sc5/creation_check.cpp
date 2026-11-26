@@ -93,13 +93,27 @@ std::string PlainWhy(const std::string& why) {
   if (why.empty()) return {};
   if (has("slots 49 and 50")) return "slots 49 and 50 are kept for the other player's character";
   if (has("tables yet")) return "this PC's game has not listed its parts yet";
+  // Decide's: what the other PC lacks
+  if (has("on the other PC") && has("character type"))
+    return "the other player's game does not have this fighter (it comes with a downloadable package)";
+  if (has("the other PC's select screen"))
+    return "the other player's game does not have its fighting style (it comes with a downloadable package)";
+  if (has("this PC's select screen"))
+    return "this PC's game does not have its fighting style (it comes with a downloadable package)";
+  if (has("no file on the other PC"))
+    return "it wears downloadable parts the other player's PC does not have, even without its equipment";
+  if (has("the other PC lacks"))
+    return "the other player's PC does not have some of its downloadable parts: both games show it without its "
+           "equipment";
+  if (has("this PC lacks"))
+    return "this PC does not have some of its downloadable parts: both games show it without its equipment";
+  if (has("no file on this PC"))
+    return "it wears downloadable parts this PC does not have, even without its equipment";
   if (has("bytes, not") || has("version") || has("checksum") || has("chunk"))
     return "its saved data is damaged";
-  if (has("repair pass")) return "the game's own check of saved characters refuses it";
-  if (has("no name")) return "it has no name";
   if (has("name")) return "its name has a character the game cannot keep";
   if (has("colour") || has("trail") || has("effect") || has("value") || has("rate") || has("scale") ||
-      has("breadth") || has("pitch") || has("formant") || has("flanger") || has("DLC flag") || has("validity"))
+      has("breadth") || has("pitch") || has("formant") || has("flanger") || has("validity"))
     return "a setting in it is outside what Creation allows";
   if (has("more than")) return "it wears more pieces than the game can load";
   if (has("sticker")) return "it has a sticker this PC's game does not have";
@@ -109,9 +123,68 @@ std::string PlainWhy(const std::string& why) {
   if (has("weapon")) return "its weapon is not in this PC's game";
   if (has("style")) return "its fighting style is not in this PC's game";
   if (has("character type") || has("own costumes")) return "its fighter is not in this PC's game";
-  if (has("model") || has("parts set") || has("base type") || has("costume"))
-    return "it wears a part this PC's game does not have";
+  if (has("model") || has("base type") || has("costume")) return "it wears a part the game does not have";
   return "it does not pass the online check";
+}
+
+std::vector<uint32_t> MissingFiles(const uint8_t* r, Form form, const std::set<uint32_t>& files) {
+  std::vector<uint32_t> missing;
+  for (uint32_t level = FirstLevel(form); level < FirstLevel(form) + 2; level++)
+    for (uint32_t k = 0; k < kPartsPerLevel; k++) {
+      const uint32_t at = kBreakLevels + level * kBreakLevelSize + k * 8;
+      if (r[at] & 0x80) continue;  // none
+      const uint32_t file = U32(r, at) & kModelFile;
+      if (IsDlcModel(file) && !files.count(file) && std::find(missing.begin(), missing.end(), file) == missing.end())
+        missing.push_back(file);
+    }
+  return missing;
+}
+
+Decision Decide(const uint8_t* r, size_t size, const Known& mine, const Other& other) {
+  Decision d;
+  // this PC: as made, else in its plain body (a downloadable part whose data this PC lost since Creation made it)
+  const std::string why = CheckRecord(r, size, mine, Form::kWhole);
+  Form here = Form::kWhole;
+  if (!why.empty()) {
+    const std::string plain_why = CheckRecord(r, size, mine, Form::kPlain);
+    if (!plain_why.empty()) {
+      // the plain body's reason when the whole one's was a missing file (it says which levels failed last)
+      d.why = why.find("no file") != std::string::npos ? plain_why : why;
+      return d;
+    }
+    here = Form::kPlain;
+  }
+  // the other PC: the fighter (Dampierre comes with his package), then the downloadable files of each form; the rest
+  // of the check is the same there
+  if (!other.characters.count(r[kType])) {
+    d.why = std::format("character type {} is not on the other PC", r[kType]);
+    return d;
+  }
+  if (other.unlisted_styles.count(r[kStyle])) {
+    d.why = std::format("style {} is not listed by the other PC's select screen without its package", r[kStyle]);
+    return d;
+  }
+  const std::vector<uint32_t> whole = MissingFiles(r, Form::kWhole, other.dlc_files);
+  if (here == Form::kWhole && whole.empty()) {
+    d.ok = true;
+    return d;
+  }
+  const std::vector<uint32_t> plain = MissingFiles(r, Form::kPlain, other.dlc_files);
+  if (!plain.empty()) {
+    d.why = std::format("downloadable model file {:08X} (break levels 2 and 3, its plain body) has no file on the other PC",
+                        plain[0]);
+    return d;
+  }
+  d.ok = true;
+  d.form = Form::kPlain;
+  if (here == Form::kPlain) {
+    const std::vector<uint32_t> own = MissingFiles(r, Form::kWhole, mine.dlc_files);
+    d.why = std::format("this PC lacks downloadable model file {:08X}: its plain body", own.empty() ? 0 : own[0]);
+  } else {
+    d.why = std::format("the other PC lacks downloadable model file {:08X}{}: its plain body", whole[0],
+                        whole.size() > 1 ? std::format(" and {} more", whole.size() - 1) : "");
+  }
+  return d;
 }
 
 uint32_t Checksum(const uint8_t* record) {
@@ -159,6 +232,12 @@ std::string KnownText(const Known& k) {
       lines(std::format("{} {} {}", kind == &k.parts_sets ? "sets" : "models", key.first, key.second), v);
     }
   }
+  v.clear();
+  for (uint32_t f : k.dlc_files) v.push_back(std::format("{:08X}", f));
+  lines("dlc", v);
+  v.clear();
+  for (int s : k.unlisted_styles) v.push_back(std::to_string(s));
+  lines("unlisted", v);
   return out;
 }
 
@@ -192,10 +271,10 @@ bool ParseKnown(const std::string& text, Known& out) {
     if (w.empty()) continue;
     const std::string_view kind = w[0];
     uint32_t a = 0, b = 0;
-    if (kind == "characters" || kind == "styles") {
+    if (kind == "characters" || kind == "styles" || kind == "unlisted") {
       for (size_t i = 1; i < w.size(); i++) {
         if (!Num(w[i], 10, a)) return false;
-        (kind == "styles" ? k.styles : k.characters).insert(int(a));
+        (kind == "styles" ? k.styles : kind == "unlisted" ? k.unlisted_styles : k.characters).insert(int(a));
       }
     } else if (kind == "palette" && w.size() == 3) {
       if (!Num(w[1], 10, a) || !Num(w[2], 10, b)) return false;
@@ -205,6 +284,11 @@ bool ParseKnown(const std::string& text, Known& out) {
       for (size_t i = 1; i < w.size(); i++) {
         if (!Pair(w[i], '.', 10, a, b)) return false;
         k.weapons.insert({int(a), int(b)});
+      }
+    } else if (kind == "dlc") {
+      for (size_t i = 1; i < w.size(); i++) {
+        if (!Num(w[i], 16, a)) return false;
+        k.dlc_files.insert(a);
       }
     } else if (kind == "stickers") {
       for (size_t i = 1; i < w.size(); i++) {
@@ -233,24 +317,25 @@ std::string CheckForm(const uint8_t* r, size_t size) {
     return std::format("version {}.{}, not 11.0", U16(r, kMajor), U16(r, kMinor));
   if (Checksum(r) != U32(r, kChecksum)) return "its checksum is wrong";
 
-  // the names (the shown one must be there)
+  // the names: text the game's own text code can take (an empty one is text too; Creation never makes one)
   for (const auto& [at, n, what] : {std::tuple{kFacialName, kFacialNameSize, "facial motion's name"},
                                     std::tuple{kName, kNameSize, "short name"},
                                     std::tuple{kNameRelease, kNameLongSize, "name"},
                                     std::tuple{kNameRaw, kNameLongSize, "name as typed"}}) {
     if (std::string why = Name(r, at, n, what); !why.empty()) return why;
   }
-  if (!r[kNameRelease]) return "it has no name";
   return {};
 }
 
-std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
+std::string CheckRecord(const uint8_t* r, size_t size, const Known& known, Form form) {
   if (std::string why = CheckForm(r, size); !why.empty()) return why;
 
   // who it is: an original character or a fighter this PC's select screen has, with a style Creation offers
   const int type = r[kType], style = r[kStyle];
   if (!known.characters.count(type)) return std::format("character type {} is not on this PC", type);
   if (!known.styles.count(style)) return std::format("style {} is not one Creation offers here", style);
+  if (known.unlisted_styles.count(style))
+    return std::format("style {} is not listed by this PC's select screen without its package", style);
   if (U16(r, kWeapon + kWeaponStyle) != uint32_t(style))
     return std::format("its weapon's style {} is not its style {}", U16(r, kWeapon + kWeaponStyle), style);
   const int base = r[kBaseType];
@@ -260,15 +345,15 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
   if (type != kOriginal && !KnownVoice(r[kVoice]))
     return std::format("a customized fighter with voice {}, which the game does not know", r[kVoice]);
 
-  // what the game's own repair pass keeps to (sub_82222B28): it would change a record outside these. Title update 3
-  // lowered the attack rate's top from 200 to 111 (title update 1's pass, sub_82221D88, kept 80 to 200).
-  if (r[kAttackRate] < kMinAttackRate || r[kAttackRate] > kMaxAttackRate)
-    return std::format("attack rate {}", r[kAttackRate]);
+  // the voice and the body as Creation's sliders make them, which title updates 1 and 3 hold alike (their repair
+  // passes, sub_82221D88 and sub_82222B28, clamp to the same limits but for the attack rate, which is not held here:
+  // dna::kAttackRate). Creation never makes a record outside them; garbage body sizes (huge, NaN) hang both games.
+  // The DLC parts flag (15) is not held either: title update 3 no longer reads it (docs\GAME.md, "Downloadable parts in a
+  // fight").
   if (int8_t(r[kPitch]) < -50 || int8_t(r[kPitch]) > 50) return std::format("voice pitch {}", int8_t(r[kPitch]));
   if (int8_t(r[kFormant]) < -50 || int8_t(r[kFormant]) > 50)
     return std::format("voice formant {}", int8_t(r[kFormant]));
   if (r[kFlanger] > 2) return std::format("voice flanger {}", r[kFlanger]);
-  if (r[kDlcFlag] > 1) return std::format("DLC flag {}", r[kDlcFlag]);
   static constexpr struct {
     uint32_t at;
     float lo, hi;
@@ -282,30 +367,37 @@ std::string CheckRecord(const uint8_t* r, size_t size, const Known& known) {
   for (uint32_t at = kBody + 24; at < kBody + 64; at += 4)
     if (!Within(r, at, 0.0f, 1.0f)) return std::format("a body rate {} (at {}) is out of 0-1", F32(r, at), at);
 
-  // the parts sets it wears and the models they put on it: all from this PC's tables for its character and base type
-  // (an original character: its base type's; a customized fighter: that fighter's own costumes and the fighters' hair)
-  const auto sets = known.parts_sets.find({type, base});
+  // the models it wears: from the tables for its character and base type (an original character: its base type's; a
+  // customized fighter: that fighter's own costumes and the fighters' hair), the same on every PC but for the
+  // downloadable ones, which the two break levels the match shows need the data of (Known::dlc_files). An unknown
+  // model hangs the game at the costume panel (tools\creationfuzz.py, "models"). The record's own list of parts sets
+  // is not held to anything: the game ignores ids it lacks ("partsset", fought in sync).
   const auto models = known.models.find({type, base});
-  if (sets == known.parts_sets.end() || models == known.models.end())
+  if (models == known.models.end())
     return type == kOriginal ? std::format("base type {} has no parts here", base)
                              : std::format("character type {}'s own costumes are not on this PC", type);
-  for (uint32_t i = 0; i < kPartsSetCount; i++) {
-    const uint32_t id = U32(r, kPartsSets + 4 * i);
-    if (id != 0xFFFFFFFF && !sets->second.count(id)) return std::format("parts set {:08X} is not on this PC", id);
-  }
   for (uint32_t level = 0; level < kBreakLevelCount; level++) {
+    const bool shown = level >= FirstLevel(form) && level < FirstLevel(form) + 2;
     for (uint32_t k = 0; k < kPartsPerLevel; k++) {
       const uint32_t at = kBreakLevels + level * kBreakLevelSize + k * 8;
       const uint32_t model = U32(r, at);
       if (r[at] & 0x80) continue;  // none (the game's own test: the first byte negative)
+      if (IsDlcModel(model)) {
+        // a downloadable model: its data, where the fight loads it
+        if (shown && !known.dlc_files.count(model & kModelFile))
+          return std::format("downloadable model file {:08X} (break level {}) has no file on this PC",
+                             model & kModelFile, level);
+        continue;
+      }
       if (!KnownModel(models->second, model)) return std::format("model {:08X} is not on this PC", model);
     }
   }
   // the fight and Creation list the models of break level 0 (2 when the game shows the record's plain body: title
   // update 3's fallback, creation_check.h) in a list of 20 (sub_82221548 from sub_82221828, which the fight's
   // sub_821485E0 and Creation's sub_821D1728 call; a model once however many segments it wears): a 21st would write
-  // over the list's count
+  // over the list's count. The select screen's creation manager lists level 0's for every record (sub_82221978).
   for (const uint32_t level : {0u, 2u}) {
+    if (level == 2 && form != Form::kPlain) continue;
     uint32_t files[kMaxModelFiles];
     uint32_t n = 0;
     for (uint32_t k = 0; k < kPartsPerLevel; k++) {

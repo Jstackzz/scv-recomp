@@ -21,6 +21,7 @@
 //   SC5_NET_LOG=<path>              every frame's inputs and checks
 //   SC5_NET_LAG=<ms>, SC5_NET_JITTER=<ms>, SC5_NET_LOSS=<percent>   a simulated network on what this game sends
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -83,11 +84,11 @@ void SetLocalPick(int side, const Pick& pick, uint32_t pickable);
 Pick RemotePick(int side);
 // the select screen slots the other game can load (0 before it said)
 uint32_t RemotePickable();
-// this game's downloadable parts for created characters, as a fingerprint (creation::DlcFingerprint), sent with the
-// picks; the other game's (0 before it said). A created character with downloadable parts is picked only when the two
-// are the same.
-void SetLocalDlc(uint32_t fingerprint);
-uint32_t RemoteDlc();
+// this game's downloadable model files (creation::DlcFiles: 0x7Fggss00) and the styles its select screen does not list
+// (creation::UnlistedStyles), sent to the other game while connecting; the other game's (false before it said). A
+// player's game weighs its own created character against them before the pick (creation_check.h, Decide).
+void SetLocalDlcFiles(const std::set<uint32_t>& files, const std::set<int>& unlisted_styles);
+bool RemoteDlcFiles(std::set<uint32_t>& files, std::set<int>& unlisted_styles);
 // The stage select before the coming match: the player who picks the stage there (`chooser`, 0 or 1: player 1's
 // game decides, player 2's takes its word) and where they are with it: `phase` -1 nothing yet, 0 choosing (`cursor`:
 // the place, 0 Random, sc5/select.h), 1 picked (`stage`: the place picked, Random drawn from the match's seed)

@@ -11,10 +11,10 @@
 //            run (for keeping the two sides even)
 //   4 CHECK  u32 frame, u32 hash low, u32 hash high   the sender's hash of the fight at the top of that frame
 //   5 BYE    u32 frame                          the sender left the match
-//   6 PICK   u8 side, i8 phase, i8 slot, i8 costume, u32 pickable, u32 dlc
+//   6 PICK   u8 side, i8 phase, i8 slot, i8 costume, u32 pickable
 //            the select screen before the coming match (its number in the header): where the sender's player is with
-//            their pick (Pick), the slots the sender's game can load and its downloadable parts for created
-//            characters (a fingerprint: the same on two PCs with the same parts); repeated while connecting
+//            their pick (Pick; costume -2 a created character as made, -3 in its plain body) and the slots the
+//            sender's game can load; repeated while connecting
 //   7 SETUP  u32 stage, u32 round time, u32 wins, u8 n, n x u32
 //            player 1's battle settings for the coming match and its values of what both games must have alike from
 //            the battle setup on (sc5/versus.cpp); repeated
@@ -53,6 +53,11 @@
 //  21 CALL   u32 call, u32 now
 //            after the check at a round's call failed (CallSync): the match frame the sender's present round call
 //            began at, and the frame the sender stands at; the two make the fight alike at the later of the two
+//  22 DLCFILES u8 n, n x (u8 group, 32 bytes), u8 m, m x u8 style
+//            the downloadable model files the sender's game loads (creation::DlcFiles: 0x7F, the group, the entry):
+//            per package group a bit for each of its 256 entries (bit e % 8 of byte e / 8), and the styles its select
+//            screen does not list (creation_check.h, Known::unlisted_styles); what a player's game weighs its own
+//            created character against before the pick (Decide); every 250 ms while connecting
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -108,7 +113,8 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kMagic = 0x4E354353;  // "SC5N"
 enum : uint8_t { kHello = 1, kReady = 2, kInput = 3, kCheck = 4, kBye = 5, kPick = 6, kSetup = 7, kSums = 8, kFix = 9,
                  kFixOk = 10, kStage = 11, kCreated = 12, kCreatedAck = 13, kChoice = 14, kSkip = 15,
-                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19, kAgain = 20, kCall = 21 };
+                 kReplaySkip = 16, kRematchAt = 17, kDetailSums = 18, kDetailBytes = 19, kAgain = 20, kCall = 21,
+                 kDlcFiles = 22 };
 constexpr int kWindow = 24;                // inputs repeated in every INPUT packet
 constexpr int kMaxWords = 32;
 constexpr auto kPeerTimeout = std::chrono::seconds(10);
@@ -226,7 +232,11 @@ struct Peer {
   // before the coming match: their picks, the slots their game can load, player 1's setup
   Pick picks[2];
   uint32_t pickable = 0;
-  uint32_t dlc = 0;  // their game's downloadable parts for created characters (a fingerprint; 0 before they said)
+  // the downloadable model files their game loads and the styles its select screen leaves out (DLCFILES; dlc_said once
+  // one came)
+  bool dlc_said = false;
+  std::set<uint32_t> dlc_files;
+  std::set<int> unlisted_styles;
   bool has_setup = false;
   Setup setup;
   StagePick stage;            // their stage select (player 1's game's: who picks the stage)
@@ -346,7 +356,10 @@ std::array<uint64_t, kRing> g_ring_count{};  // frame::Count() at that frame's t
 // before the coming match: this game's picks and settings for the other (PICK, SETUP)
 Pick g_local_picks[2];
 uint32_t g_local_pickable = 0;
-uint32_t g_local_dlc = 0;
+// this game's DLCFILES packet's body (empty before creation::DlcFiles was read), and when it went last
+std::vector<uint8_t> g_local_dlc;
+bool g_local_dlc_set = false;
+Clock::time_point g_last_dlc_send{};
 bool g_picks_changed = false;
 StagePick g_local_stage, g_fed_stage;  // this game's stage select for the coming match, and as last fed
 ResultChoice g_local_choice;             // this game's result screen's menu, when its player chooses the next match
@@ -896,7 +909,24 @@ void HandlePacket(const uint8_t* b, int n) {
     pk.slot = int8_t(b[10]);
     pk.costume = int8_t(b[11]);
     p.pickable = u32(12);
-    if (n >= 20) p.dlc = u32(16);
+  } else if (type == kDlcFiles && n >= 9) {
+    // their game's downloadable files: the same for every match, so any match number
+    std::set<uint32_t> files;
+    std::set<int> styles;
+    const int groups = b[8];
+    for (int g = 0; g < groups && 9 + g * 33 + 33 <= n; g++) {
+      const uint8_t* at = b + 9 + g * 33;
+      for (int e = 0; e < 256; e++)
+        if (at[1 + e / 8] >> (e % 8) & 1) files.insert(0x7F000000u | uint32_t(at[0]) << 16 | uint32_t(e) << 8);
+    }
+    const int after = 9 + groups * 33;
+    for (int i = 0; after < n && i < b[after] && after + 1 + i < n; i++) styles.insert(b[after + 1 + i]);
+    if (!p.dlc_said || files != p.dlc_files || styles != p.unlisted_styles)
+      REXLOG_INFO("sc5 net: the other game loads {} downloadable model files; its select screen lists every style "
+                  "but {}", files.size(), styles.size());
+    p.dlc_files = std::move(files);
+    p.unlisted_styles = std::move(styles);
+    p.dlc_said = true;
   } else if (type == kCreated && n >= 13) {
     // their player's created character (only their own side's: a game sends its own player's)
     if (match != coming || b[8] != uint8_t(1 - g_slot)) return;
@@ -1112,9 +1142,15 @@ void SendComing() {
       w.U8(uint8_t(int8_t(g_local_picks[s].slot)));
       w.U8(uint8_t(int8_t(g_local_picks[s].costume)));
       w.U32(g_local_pickable);
-      w.U32(g_local_dlc);
       Send(w);
     }
+  }
+  // this game's downloadable files (every 250 ms: the other game's player waits for them before a created pick)
+  if (g_local_dlc_set && now - g_last_dlc_send > std::chrono::milliseconds(250)) {
+    g_last_dlc_send = now;
+    Writer w = HeaderComing(kDlcFiles);
+    w.Bytes(g_local_dlc.data(), int(g_local_dlc.size()));
+    Send(w);
   }
   if (g_my_setup_set && now - g_last_setup_send > std::chrono::milliseconds(250)) {
     g_last_setup_send = now;
@@ -3070,13 +3106,30 @@ Pick RemotePick(int side) {
   return g_peer.picks[side];
 }
 uint32_t RemotePickable() { return g_peer.pickable; }
-void SetLocalDlc(uint32_t fingerprint) {
-  if (g_local_dlc != fingerprint) {
-    g_local_dlc = fingerprint;
-    g_picks_changed = true;
+void SetLocalDlcFiles(const std::set<uint32_t>& files, const std::set<int>& unlisted_styles) {
+  std::map<uint8_t, std::array<uint8_t, 32>> groups;
+  for (const uint32_t f : files)
+    if (f >> 24 == 0x7F) groups[uint8_t(f >> 16)][(f >> 8 & 0xFF) / 8] |= uint8_t(1 << ((f >> 8) % 8));
+  std::vector<uint8_t> body{uint8_t(std::min<size_t>(groups.size(), 30))};
+  for (const auto& [group, bits] : groups) {
+    if (body.size() + 33 > 1 + 30 * 33) break;
+    body.push_back(group);
+    body.insert(body.end(), bits.begin(), bits.end());
   }
+  body.push_back(uint8_t(std::min<size_t>(unlisted_styles.size(), 16)));
+  for (const int s : unlisted_styles)
+    if (body.size() < 1 + 30 * 33 + 1 + 16) body.push_back(uint8_t(s));
+  if (g_local_dlc_set && body == g_local_dlc) return;
+  g_local_dlc = std::move(body);
+  g_local_dlc_set = true;
+  g_last_dlc_send = {};
 }
-uint32_t RemoteDlc() { return g_peer.dlc; }
+bool RemoteDlcFiles(std::set<uint32_t>& files, std::set<int>& unlisted_styles) {
+  if (!g_peer.dlc_said) return false;
+  files = g_peer.dlc_files;
+  unlisted_styles = g_peer.unlisted_styles;
+  return true;
+}
 
 void SetLocalStage(const StagePick& s) {
   StagePick& l = g_local_stage;

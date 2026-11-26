@@ -2,6 +2,7 @@
 // Created characters online (creation.cpp): the save's 50 creation slots, the player's own characters brought into an
 // online game's fresh save, and the other player's record (checked first) in slot 50.
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -50,19 +51,31 @@ uint32_t ChecksumOf(const Record& r);
 
 // What this PC's game can load for a created character (creation_check.h's Known): read once from the game's own
 // tables at the select screen (the creation context, [select object + 1264]: each base type's parts sets with their
-// models, the weapons of each style), keeping only what the game says is released here (sub_8246B318, unlocks.cpp:
-// downloadable parts only with their package). Main thread (it asks the game); false while the tables are not there.
+// models, the weapons of each style), keeping what the game says is released here (sub_8246B318, unlocks.cpp) and
+// the parts and stickers of the packs whose data is on the disc, package or not; the downloadable models' files
+// (Known::dlc_files) those of this PC's packages whose data is installed. Main thread (it asks the game); false while
+// the tables are not there.
 bool ReadKnown(PPCContext& ctx, uint8_t* base, uint32_t select_object);
 // true once ReadKnown has read the tables and DropRefused has taken out what fails the check: created characters are
 // picked only from then on
 bool KnownRead();
-// a fingerprint of this PC's downloadable parts (the same on two PCs with the same ones; 0 before ReadKnown), and
-// whether a record uses any of them: such a record is picked only when the other PC's fingerprint is the same
-uint32_t DlcFingerprint();
-bool UsesDlc(const Record& r);
+// the downloadable model files this PC's game loads and the styles its select screen does not list (empty before
+// ReadKnown), for the other game's Decide
+std::set<uint32_t> DlcFiles();
+std::set<int> UnlistedStyles();
+// Decide (creation_check.h) for this PC's player's own record against the other PC (its characters and downloadable
+// files, from the netplay)
+Decision DecideOwn(const Record& r, const Other& other);
+// The two break levels each side's created character shows in the coming match, chosen alike in both games (the
+// picking player's game decides, the PICK says so, the other game and a spectator's check and follow it). kPlain makes
+// title update 3's own fallback (break levels 2 and 3) happen in this game for that record, whatever it could load
+// (dlc.cpp's hook on the character model loader asks ShowsPlain, any thread).
+void SetForm(int side, uint32_t checksum, Form form);
+void ClearForms(int only = -1);
+bool ShowsPlain(uint32_t checksum);
 // Once Known is read and the creation manager is there (0: not yet, it waits): the player's own created characters
-// that fail the check out of this game's lists (their slot and the creation manager's entry, which SyncEntries keeps
-// empty), so they cannot be picked. SC5_TEST_CREATION_UNCHECKED keeps them (tests).
+// this game cannot load in either form out of its lists (their slot and the creation manager's entry, which
+// SyncEntries keeps empty), so they cannot be picked. SC5_TEST_CREATION_UNCHECKED keeps them (tests).
 void DropRefused(PPCContext& ctx, uint8_t* base, uint32_t manager);
 
 // The player's own created characters this online game leaves out (OnHoldPoint's ImportOwn and DropRefused): the slot
@@ -74,16 +87,12 @@ struct HeldOut {
 };
 std::vector<HeldOut> HeldOutList();
 
-// Everything a record from another PC must pass before anything loads it (creation_check.h's CheckRecord against this
-// PC's Known): "" when it passes, else why not
-std::string Check(const Record& r);
-// On top of Check, for a record that passed it: the game's own repair pass (sub_82222B28, what a console runs on a
-// save's records, here checking the checksum too) on a copy in a buffer of the SDK's own heap, which nothing of the
-// game reads (not a save slot: the creation manager copies slots as it goes). "" when the pass takes the record as it
-// is; why not when it refuses it or would change any byte. Main thread.
-std::string GameRepairCheck(PPCContext& ctx, uint8_t* base, const Record& r);
-// a player's record from the other PC (checked) into their side's slot (RemoteSlot); false when it does not pass
-bool PlaceRemote(int side, const Record& r);
+// Everything a record must pass before this game loads it for a match that shows `form` (creation_check.h's
+// CheckRecord against this PC's Known): "" when it passes, else why not
+std::string Check(const Record& r, Form form);
+// a player's record from the other PC (checked for `form`) into their side's slot (RemoteSlot); false when it does
+// not pass
+bool PlaceRemote(int side, const Record& r, Form form);
 // both remote slots empty again (a new match), or one side's (its player took the pick back)
 void ClearRemote(int only = -1);
 
