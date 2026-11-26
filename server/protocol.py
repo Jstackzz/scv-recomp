@@ -47,7 +47,9 @@ AUTO_DELAY_MIN, AUTO_DELAY_MAX = 1, 6
 # "koth", King of the Hill lobbies (docs/PROTOCOL.md 1.10.2)
 # "desync_detail" (SCV 0.1.4, the server's alone): desync reports of up to 200 lines in a message of up to 64 KB
 # (docs/PROTOCOL.md 1.13.1); a launcher keeps its report to the 40 lines of 16 KB an older server takes without it
-FEATURES: tuple[str, ...] = ("koth", "desync_detail")
+# "pick_refused" (SCV 0.1.7, the server's alone): it logs a created character the game held back at the select screen,
+# with why (docs/PROTOCOL.md 1.13.3); a launcher sends none to a server without it
+FEATURES: tuple[str, ...] = ("koth", "desync_detail", "pick_refused")
 RATING_MIN, RATING_MAX = 1, 10  # a King of the Hill rating of the winner, a whole number
 
 
